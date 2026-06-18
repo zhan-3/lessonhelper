@@ -26,3 +26,6 @@ nul
 
 # Playwright MCP logs
 .playwright-mcp/
+
+# Playwright screenshots from exploration
+*.png
