@@ -72,7 +72,7 @@
 **确认真实信息:**
 | 项目 | 真实值 |
 |---|---|
-| 用户 | 张浩翔 / 2025211052 |
+| 用户 | 张浩翔 |
 | SPA 框架 | Ant Design Vue（`ant-table`, `ant-btn`, `ant-layout` 等） |
 | API Base | `/dxwl/StuApi/` ✅ |
 | 认证 | CAS SSO，**无验证码**，只需学号+密码 |
