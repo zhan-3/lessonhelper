@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Linter/formatter caches
+.ruff_cache/
+
+# Playwright session state (contains auth tokens)
+storage_state.json
+
+# Generated booking results
+*.xlsx
+
+# User schedule data (personal info)
+*.xls
+
+# Windows redirect artifacts
+nul
+
+# Playwright MCP logs
+.playwright-mcp/
