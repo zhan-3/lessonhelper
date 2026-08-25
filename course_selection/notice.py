@@ -81,6 +81,44 @@ def fetch_notice_text(source_url: str, *, timeout_seconds: int = 10) -> str:
     return parser.text()
 
 
+def fetch_notice_text_in_browser(
+    source_url: str,
+    *,
+    profile_root: Path = Path(".private/course-progress"),
+    browser: str = "chromium",
+    login_timeout_seconds: int = 600,
+) -> str:
+    """Read a notice in the visible, persistent academic browser session."""
+    from playwright.sync_api import sync_playwright
+
+    from course_progress.explorer import _is_login_url, launch_browser_context, resolve_profile_dir
+
+    parsed = urlparse(source_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("通知链接必须是 HTTP 或 HTTPS 地址")
+    if login_timeout_seconds <= 0:
+        raise ValueError("认证等待时间必须大于 0")
+
+    profile_dir = resolve_profile_dir(profile_root.resolve())
+    with sync_playwright() as playwright:
+        context = launch_browser_context(playwright, browser, profile_dir)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(source_url, wait_until="domcontentloaded", timeout=60_000)
+            deadline = datetime.now().timestamp() + login_timeout_seconds
+            while _is_login_url(page.url) and datetime.now().timestamp() < deadline:
+                page.wait_for_timeout(500)
+            if _is_login_url(page.url):
+                raise ValueError("等待统一身份认证超时，请先在浏览器中完成登录")
+            page.wait_for_timeout(500)
+            text = page.locator("body").inner_text(timeout=10_000).strip()
+            if not text:
+                raise ValueError("通知页面没有读取到正文")
+            return text
+        finally:
+            context.close()
+
+
 def _first_line(text: str) -> str:
     return next((line.strip() for line in text.splitlines() if line.strip()), "")
 

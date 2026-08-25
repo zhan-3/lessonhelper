@@ -76,7 +76,19 @@ class SelectionWebTests(unittest.TestCase):
                 data={"timetable": (io.BytesIO(first_payload), "current.xlsx")},
                 content_type="multipart/form-data",
             )
-            self.assertEqual(rejected.status_code, 409)
+            self.assertEqual(rejected.status_code, 302)
+            self.assertIn("确认替换", client.get(rejected.headers["Location"]).get_data(as_text=True))
+
+    def test_imports_chinese_named_xls_without_losing_extension(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            client = create_app(Path(temp_dir)).test_client()
+            response = client.post(
+                "/timetable",
+                data={"timetable": (io.BytesIO(b"not-a-real-xls"), "个人课表.xls")},
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(response.status_code, 302)
+            self.assertIn("课表导入失败", client.get(response.headers["Location"]).get_data(as_text=True))
 
     def test_dashboard_presents_read_only_selection_result(self):
         with tempfile.TemporaryDirectory() as temp_dir:
