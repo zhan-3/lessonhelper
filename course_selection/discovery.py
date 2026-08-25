@@ -17,6 +17,7 @@ from course_progress.collector import resolve_academic_url
 from course_progress.sanitizer import sanitize_text, sanitize_url
 from course_progress.sanitizer import sanitize_request_body
 from course_progress.session import AcademicBrowserSession
+from course_selection.categories import CATEGORY_MENU_KEYWORDS, COURSE_CATEGORIES
 from course_selection.selection_entry import (
     classify_selection_html,
     observation_to_dict,
@@ -37,16 +38,9 @@ TARGET_KEYWORDS = {
         "课表",
     ),
     TARGET_SELECTION: (
+        *CATEGORY_MENU_KEYWORDS,
         "全校任选课",
         "人文社科限选课",
-        "文化素质核心",
-        "创新研修",
-        "创新实验课",
-        "创新实验",
-        "创新创业",
-        "新生研讨",
-        "未来技术学院课程",
-        "外专业课程",
         "限选课",
         "必修课",
         "学生选课",
@@ -56,6 +50,15 @@ TARGET_KEYWORDS = {
         "选课",
     ),
 }
+
+_GENERIC_SELECTION_PRIORITIES = (
+    ("全校任选课", 240),
+    ("人文社科限选课", 235),
+    ("限选课", 220),
+    ("必修课", 215),
+    ("学生选课", 180),
+    ("选课中心", 175),
+)
 
 TARGET_FRAME_MARKERS = {
     TARGET_TIMETABLE: ("/kbcx/querygrkb",),
@@ -201,27 +204,11 @@ def score_discovery_control(
             return 60
         return -1
     if target == TARGET_SELECTION:
-        priorities = (
-            ("文化素质核心", 250),
-            ("全校任选课", 240),
-            ("人文社科限选课", 235),
-            ("创新研修", 232),
-            ("创新实验课", 230),
-            ("创新实验", 230),
-            ("创新创业", 228),
-            ("新生研讨", 226),
-            ("未来技术学院课程", 224),
-            ("外专业课程", 222),
-            ("限选课", 220),
-            ("必修课", 215),
-            ("体育选课", 210),
-            ("英语选课", 205),
-            ("跨专业选课", 200),
-            ("双学位选课", 195),
-            ("学生选课", 180),
-            ("选课中心", 175),
-            ("微专业选课", 120),
-        )
+        priorities = tuple(
+            (alias, definition.navigation_priority)
+            for definition in COURSE_CATEGORIES
+            for alias in definition.menu_aliases
+        ) + _GENERIC_SELECTION_PRIORITIES
         for keyword, score in priorities:
             if keyword.lower() in searchable:
                 return score
@@ -319,6 +306,7 @@ class InterfaceDiscovery:
         target: str,
         output_root: Path,
         allowed_selection_categories: tuple[str, ...] = (),
+        allowed_selection_windows: dict[str, tuple[Any, ...]] | None = None,
         notice_semester: str = "",
         max_response_bytes: int = 5 * 1024 * 1024,
     ):
@@ -330,6 +318,7 @@ class InterfaceDiscovery:
         self.store = CaptureStore(self.output_root)
         self.max_response_bytes = max_response_bytes
         self.allowed_selection_categories = allowed_selection_categories
+        self.allowed_selection_windows = allowed_selection_windows or {}
         self.notice_semester = notice_semester
         self.visited: set[str] = set()
         self.click_log: list[dict[str, str | int]] = []
@@ -627,21 +616,17 @@ class InterfaceDiscovery:
                             html = str(result["body"])
                             if page_number == 1:
                                 expected_pages = min(selection_page_count(html), 50)
-                            response_path = self.output_root / (
-                                f"selection-query-{category}-page-{page_number}.html"
-                            )
-                            response_path.write_text(html, encoding="utf-8")
                             observation = classify_selection_html(
                                 int(result["status"]),
                                 html,
                                 request_url=str(result.get("url") or endpoint),
+                                expected_windows=self.allowed_selection_windows.get(category, ()),
                             )
                             for section in observation.sections:
                                 sections.setdefault(section.identity, section)
                             pages.append(
                                 {
                                     "page": page_number,
-                                    "response_html": response_path.name,
                                     "observation": observation_to_dict(observation),
                                 }
                             )
@@ -887,12 +872,14 @@ class AcademicInterfaceDiscovery:
         wait_seconds: int = 30,
         max_clicks: int = 8,
         allowed_selection_categories: tuple[str, ...] = (),
+        allowed_selection_windows: dict[str, tuple[Any, ...]] | None = None,
         notice_semester: str = "",
     ) -> DiscoveryReport:
         navigator = InterfaceDiscovery(
             target=target,
             output_root=self.output_root,
             allowed_selection_categories=allowed_selection_categories,
+            allowed_selection_windows=allowed_selection_windows,
             notice_semester=notice_semester,
         )
         with AcademicBrowserSession(

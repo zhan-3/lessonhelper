@@ -21,6 +21,7 @@ from .notice import (
     CATEGORY_LABELS,
     load_notice,
     notice_selection_categories,
+    notice_selection_window_map,
     notice_semester_label,
 )
 from .discovery import AcademicInterfaceDiscovery, TARGET_SELECTION, TARGET_TIMETABLE
@@ -42,6 +43,9 @@ from .student_profile import (
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="course-selection")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    workbench = subparsers.add_parser("workbench", help="启动本地只读选课规划工作台")
+    workbench.add_argument("--private-root", type=Path, default=Path(".private/academic-selection"))
+    workbench.add_argument("--port", type=int, default=5000)
     configure = subparsers.add_parser(
         "configure-login", help="使用 Windows DPAPI 加密保存 WebVPN 登录信息"
     )
@@ -107,6 +111,7 @@ def run_discovery(args: argparse.Namespace) -> int:
     if args.login_timeout_seconds <= 0 or args.wait_seconds <= 0 or args.max_clicks <= 0:
         raise SystemExit("等待时间和自动点击次数必须大于 0")
     allowed_categories: tuple[str, ...] = ()
+    allowed_windows = {}
     semester_label = ""
     if args.discovery_target == TARGET_SELECTION:
         if not args.notice.is_file():
@@ -123,6 +128,7 @@ def run_discovery(args: argparse.Namespace) -> int:
                 )
             grade = load_student_profile(args.profile).grade
         allowed_categories = notice_selection_categories(notice, grade=grade)
+        allowed_windows = notice_selection_window_map(notice, grade=grade)
         semester_label = notice_semester_label(notice)
         if not allowed_categories:
             raise SystemExit("选课通知未明确开放课程类别，禁止猜测查询入口")
@@ -145,6 +151,7 @@ def run_discovery(args: argparse.Namespace) -> int:
             wait_seconds=args.wait_seconds,
             max_clicks=args.max_clicks,
             allowed_selection_categories=allowed_categories,
+            allowed_selection_windows=allowed_windows,
             notice_semester=semester_label,
         )
     print(
@@ -233,6 +240,21 @@ def run_explore_entry(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "workbench":
+        from .single_instance import WorkspaceLock
+        from .workbench import create_workbench_app
+        lock = WorkspaceLock(args.private_root.resolve(), args.port)
+        if not lock.acquire():
+            print(f"工作台已在运行：http://127.0.0.1:{args.port}")
+            return 0
+        app = create_workbench_app(args.private_root.resolve())
+        try:
+            app.run(host="127.0.0.1", port=args.port, debug=False)
+        finally:
+            app.extensions["observation_service"].close()
+            app.extensions["workspace_database"].close()
+            lock.release()
+        return 0
     if args.command == "configure-login":
         return run_configure_login(args)
     if args.command == "configure-profile":

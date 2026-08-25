@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .categories import CATEGORY_LABELS, NOTICE_CATEGORY_PATTERNS
+
 
 REQUIRED_FIELDS = ("term", "selection_type", "opens_at", "closes_at")
 SELECTION_KEYWORDS = (
@@ -24,36 +26,6 @@ SELECTION_KEYWORDS = (
     "补修",
     "选课",
 )
-
-NOTICE_CATEGORY_PATTERNS = (
-    ("文化素质核心", "szhx"),
-    ("文化素质", "szhx"),
-    ("素质教育", "szhx"),
-    ("大学外语", "yy"),
-    ("英语", "yy"),
-    ("体育", "ty"),
-    ("创新研修", "cxyx"),
-    ("创新实验", "cxsy"),
-    ("创新创业", "cxcy"),
-    ("新生研讨", "xsyt"),
-    ("未来技术学院", "tsk"),
-    ("外专业课程", "xsxk"),
-    ("跨专业", "xsxk"),
-    ("微专业", "wzy"),
-)
-
-CATEGORY_LABELS = {
-    "szhx": "文化素质核心",
-    "yy": "英语",
-    "ty": "体育",
-    "cxyx": "创新研修",
-    "cxsy": "创新实验",
-    "cxcy": "创新创业",
-    "xsyt": "新生研讨",
-    "tsk": "未来技术学院课程",
-    "xsxk": "外专业课程",
-    "wzy": "微专业选课",
-}
 
 _WINDOW_RE = re.compile(
     r"^(20\d{2})年(\d{1,2})月(\d{1,2})日(\d{1,2}):(\d{2})"
@@ -136,6 +108,32 @@ def notice_selection_categories(
         if found:
             break
     return tuple(found)
+
+
+def notice_selection_windows(
+    notice: SelectionNotice, *, grade: str | None = None
+) -> tuple[SelectionWindow, ...]:
+    """Return only confirmed-notice windows usable for read-only selection queries."""
+    if not notice.windows:
+        return ()
+    return tuple(
+        window
+        for window in notice.windows
+        if window.action == "selection"
+        and window.method == "academic_system"
+        and (not grade or grade in window.grades)
+    )
+
+
+def notice_selection_window_map(
+    notice: SelectionNotice, *, grade: str | None = None
+) -> dict[str, tuple[SelectionWindow, ...]]:
+    """Group confirmed, profile-matched selection windows by canonical category."""
+    grouped: dict[str, list[SelectionWindow]] = {}
+    for window in notice_selection_windows(notice, grade=grade):
+        for code in window.category_codes:
+            grouped.setdefault(code, []).append(window)
+    return {code: tuple(windows) for code, windows in grouped.items()}
 
 
 def notice_semester_label(notice: SelectionNotice) -> str:

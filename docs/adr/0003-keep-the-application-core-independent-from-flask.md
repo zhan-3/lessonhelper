@@ -1,0 +1,3 @@
+# Keep the application core independent from Flask
+
+The local application will retain Flask as its HTTP adapter while keeping academic use cases and persistence independent from the web framework. A single dedicated worker owns the long-lived Playwright academic session, and Flask submits work to it instead of manipulating the browser directly; manual browser interaction is allowed only while the session is waiting for authentication. This preserves the simple local deployment while preventing browser lifecycle, page ownership, and thread-safety concerns from leaking into routes, and leaves the HTTP adapter replaceable if the product later becomes multi-user or remotely hosted.

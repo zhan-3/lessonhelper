@@ -312,14 +312,24 @@ def classify_selection_html(
     *,
     request_url: str = "",
     now: datetime | None = None,
+    expected_windows: tuple[Any, ...] = (),
 ) -> SelectionObservation:
     """Classify an HTML query without treating a future empty round as no courses."""
     sections = extract_course_sections_from_html(html)
     lowered = html.lower()
     window = _selection_window(html)
     current = now or datetime.now()
+    expected_pairs = {
+        (getattr(item, "opens_at", ""), getattr(item, "closes_at", ""))
+        for item in expected_windows
+    }
+    observed_pair = (
+        window[0].strftime("%Y-%m-%d %H:%M"), window[1].strftime("%Y-%m-%d %H:%M")
+    ) if window else None
     if status_code in {401, 403} or "authserver/login" in lowered or "#!/login" in lowered:
         status = STATUS_LOGIN_REQUIRED
+    elif expected_pairs and observed_pair and observed_pair not in expected_pairs:
+        status = STATUS_NO_MATCHING_ROUND
     elif any(marker in html for marker in ("未开放", "尚未开始", "未到选课时间", "不在选课时间")):
         status = STATUS_ROUND_NOT_OPEN
     elif sections:

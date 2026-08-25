@@ -1,0 +1,31 @@
+openapi: 3.0.3
+info: {title: Academic Selection Workbench, version: 0.1.0}
+paths:
+  /api/state:
+    get:
+      responses:
+        '200':
+          description: Local persisted workbench state
+          content: {application/json: {schema: {$ref: '#/components/schemas/WorkbenchState'}}}
+  /api/tasks:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TaskRequest'}}}}
+      responses: {'202': {description: Accepted}}
+components:
+  schemas:
+    TaskRequest:
+      type: object
+      required: [operation]
+      properties:
+        operation: {type: string, enum: [connect, refresh-selection, refresh-timetable]}
+        context: {type: object, additionalProperties: true}
+    WorkbenchState:
+      type: object
+      required: [snapshots, stale, academic_session, csrf_token]
+      properties:
+        profile: {type: object, nullable: true, additionalProperties: true}
+        confirmed_notice: {type: object, nullable: true, additionalProperties: true}
+        snapshots: {type: object, additionalProperties: true}
+        stale: {type: object, additionalProperties: {type: boolean}}
+        academic_session: {type: object, properties: {state: {type: string}}}
+        csrf_token: {type: string}
