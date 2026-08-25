@@ -11,6 +11,7 @@ from course_progress.explorer import (
     _is_login_url,
     _is_safe_navigation,
     _is_safe_portal_fallback,
+    resolve_profile_dir,
 )
 from course_progress.sanitizer import (
     REDACTED,
@@ -116,8 +117,45 @@ class CandidateTests(unittest.TestCase):
 
 class AutoNavigationTests(unittest.TestCase):
     def test_default_entry_uses_undergraduate_login(self):
-        self.assertTrue(DEFAULT_PORTAL_URL.endswith("/loginCAS"))
-        self.assertTrue(_is_login_url(DEFAULT_PORTAL_URL))
+        self.assertTrue(DEFAULT_PORTAL_URL.endswith("/portal/#!/service"))
+        self.assertIn("webvpn.hitwh.edu.cn/https/", DEFAULT_PORTAL_URL)
+
+    def test_profile_prefers_new_shared_profile(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            private_root = Path(temp_dir)
+            shared = private_root / "browser-profile"
+            shared.mkdir()
+            (private_root / "collector-profile").mkdir()
+
+            self.assertEqual(resolve_profile_dir(private_root), shared)
+
+    def test_profile_reuses_legacy_collector_before_explorer(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            private_root = Path(temp_dir)
+            (private_root / "collector-profile").mkdir()
+            (private_root / "explorer-profile").mkdir()
+
+            self.assertEqual(
+                resolve_profile_dir(private_root),
+                private_root / "collector-profile",
+            )
+
+    def test_profile_reuses_legacy_explorer_when_collector_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            private_root = Path(temp_dir)
+            explorer = private_root / "explorer-profile"
+            explorer.mkdir()
+
+            self.assertEqual(resolve_profile_dir(private_root), explorer)
+
+    def test_profile_defaults_to_new_shared_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            private_root = Path(temp_dir)
+
+            self.assertEqual(
+                resolve_profile_dir(private_root),
+                private_root / "browser-profile",
+            )
 
     def test_explore_defaults_to_automatic_navigation_without_enter_prompt(self):
         args = build_parser().parse_args(["explore"])

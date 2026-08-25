@@ -37,8 +37,7 @@ uv run python -m course_progress explore --browser chrome
 
 ```text
 .private/course-progress/
-├── explorer-profile/
-├── collector-profile/
+├── browser-profile/
 └── captures/
     └── <时间戳>/
         ├── index.jsonl
@@ -47,8 +46,8 @@ uv run python -m course_progress explore --browser chrome
         └── sanitized/
 ```
 
-- `explorer-profile/` 保存接口探索器自己的登录状态。
-- `collector-profile/` 保存采集器自己的登录状态；采集命令会优先复用这里的会话。
+- `browser-profile/` 保存探索器和采集器共用的登录状态。
+- 如果目录中仍有旧的 `collector-profile/` 或 `explorer-profile/`，程序会优先复用它们，不会合并两个浏览器目录。
 - `raw/` 可能包含个人课程数据，只能留在本机。
 - `sanitized/` 删除常见 Token、Ticket、学号、姓名和联系方式。
 - `candidates.json` 按培养方案、毕业、课程和学分关键词评分排序。
@@ -72,7 +71,7 @@ uv run python -m course_progress collect
 5. 排除必修、去重并按指南基线计算进度；
 6. 将结果保存到 `.private/course-progress/progress-report.json`。
 
-报告不保存具体成绩、姓名、学号或登录 Cookie。某个学期、分页或登录状态失效时，报告会标记数据不完整，不会把失败误算成零学分。
+报告不保存具体成绩、姓名、学号或登录 Cookie。采集过程中每完成一个分页，会把不含具体成绩的课程完成事实保存到 `collection-checkpoint.json`；登录失效时会等待人工重新认证，并从当前分页继续。某个学期、分页或登录状态最终失效时，报告会标记数据不完整，不会把失败误算成零学分。
 
 可选参数：
 
@@ -94,4 +93,4 @@ uv run python -m course_progress explore --login-timeout-seconds 600
 
 ## 隐私说明
 
-探索器不会要求或保存明文账号密码。首次登录始终由用户在可视浏览器中完成。不要分享 `explorer-profile/`、`collector-profile/`、`raw/` 或任何未检查的网络捕获文件。
+探索器不会要求或保存明文账号密码。首次登录始终由用户在可视浏览器中完成。不要分享 `browser-profile/`、旧的 profile 目录、`collection-checkpoint.json`、`raw/` 或任何未检查的网络捕获文件。程序不会主动发送保活请求，也不会伪造或延长学校认证令牌的有效期。

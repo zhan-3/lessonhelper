@@ -14,10 +14,35 @@ from playwright.sync_api import BrowserContext, Error, Playwright, Response
 from .capture import CaptureStore
 
 DEFAULT_PORTAL_URL = (
-    "https://webvpn.hitwh.edu.cn/http/"
-    "77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/"
-    "loginCAS"
+    "https://webvpn.hitwh.edu.cn/https/"
+    "77726476706e69737468656265737421f9e15192693861446900c7a99c406d36e9/"
+    "portal/#!/service"
 )
+
+SHARED_PROFILE_NAME = "browser-profile"
+LEGACY_PROFILE_NAMES = ("collector-profile", "explorer-profile")
+PROFILE_LOCK_MARKERS = (
+    "processsingleton",
+    "user data directory is already in use",
+    "profile is in use",
+)
+
+
+def resolve_profile_dir(private_root: Path) -> Path:
+    """Choose one shared profile, reusing a legacy profile when available."""
+    shared = private_root / SHARED_PROFILE_NAME
+    if shared.exists():
+        return shared
+    for legacy_name in LEGACY_PROFILE_NAMES:
+        legacy = private_root / legacy_name
+        if legacy.exists():
+            return legacy
+    return shared
+
+
+def _is_profile_lock_error(error: Error) -> bool:
+    message = str(error).lower()
+    return any(marker in message for marker in PROFILE_LOCK_MARKERS)
 
 
 def _is_login_url(url: str) -> bool:
@@ -133,6 +158,11 @@ def launch_browser_context(
     try:
         return playwright.chromium.launch_persistent_context(**options)
     except Error as exc:
+        if _is_profile_lock_error(exc):
+            raise RuntimeError(
+                f"浏览器 profile 正被其他进程使用：{profile_dir}。"
+                "请关闭占用它的浏览器或采集命令后重试。"
+            ) from exc
         if "Executable doesn't exist" in str(exc):
             raise RuntimeError(
                 "Playwright Chromium 尚未安装。请运行："

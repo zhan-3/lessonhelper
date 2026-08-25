@@ -10,19 +10,25 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from .collector import PlaywrightGradeCollector, find_academic_frame
+from .collector import (
+    CollectionCheckpoint,
+    PlaywrightGradeCollector,
+    find_authenticated_academic_frame,
+    load_checkpoint,
+    save_checkpoint,
+    wait_for_reauthentication,
+)
 from .explorer import (
     DEFAULT_PORTAL_URL,
     PortalExplorer,
     launch_browser_context,
     make_capture_session,
+    resolve_profile_dir,
 )
 from .progress import RequirementBaseline, evaluate_progress, parse_requirements
 
 DEFAULT_PRIVATE_ROOT = Path(".private/course-progress")
 DEFAULT_REQUIREMENTS = Path("docs/校园培养方案解读（2026年版）.md")
-EXPLORER_PROFILE_NAME = "explorer-profile"
-COLLECTOR_PROFILE_NAME = "collector-profile"
 GUIDE_2026_CATEGORY_MAPPING = {
     "本专业选修": "major_elective",
     "外专业选修": "outside_major_elective",
@@ -100,7 +106,7 @@ def run_explore(args: argparse.Namespace) -> int:
         raise SystemExit("--login-timeout-seconds 必须大于 0")
 
     private_root = args.private_root.resolve()
-    profile_dir = private_root / EXPLORER_PROFILE_NAME
+    profile_dir = resolve_profile_dir(private_root)
     capture_dir = make_capture_session(private_root / "captures")
 
     with sync_playwright() as playwright:
@@ -153,7 +159,7 @@ def run_collect(args: argparse.Namespace) -> int:
         raise SystemExit(f"要求基线不存在：{args.requirements}")
 
     private_root = args.private_root.resolve()
-    profile_dir = private_root / COLLECTOR_PROFILE_NAME
+    profile_dir = resolve_profile_dir(private_root)
     profile_dir.mkdir(parents=True, exist_ok=True)
     output_path = private_root / "progress-report.json"
 
@@ -162,13 +168,49 @@ def run_collect(args: argparse.Namespace) -> int:
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(args.url, wait_until="domcontentloaded", timeout=60_000)
-            if find_academic_frame(context.pages) is not None:
+            if find_authenticated_academic_frame(context.pages) is not None:
                 print("检测到已有教务系统会话，正在复用；会话失效时才需要重新认证。")
             else:
                 print("未检测到有效会话，请在浏览器中完成统一身份认证。")
                 print("进入教务系统后将自动采集。")
+            checkpoint_path = private_root / "collection-checkpoint.json"
+            checkpoint = load_checkpoint(checkpoint_path)
+            checkpoint_state = checkpoint
+
+            def save_page_checkpoint(
+                semester,
+                page_number: int,
+                page_count: int,
+                page_records,
+            ) -> None:
+                nonlocal checkpoint_state
+                checkpoint_state = CollectionCheckpoint(
+                    records=checkpoint_state.records + tuple(page_records),
+                    completed_pages=tuple(
+                        sorted(
+                            set(checkpoint_state.completed_pages)
+                            | {(semester.value, page_number)}
+                        )
+                    ),
+                    page_counts=tuple(
+                        sorted(
+                            (
+                                dict(checkpoint_state.page_counts)
+                                | {semester.value: page_count}
+                            ).items()
+                        )
+                    ),
+                )
+                save_checkpoint(checkpoint_path, checkpoint_state)
+
             collection = PlaywrightGradeCollector(page_size=args.page_size).collect(
-                page, frame_timeout_seconds=args.login_timeout_seconds
+                page,
+                frame_timeout_seconds=args.login_timeout_seconds,
+                on_session_expired=lambda: wait_for_reauthentication(
+                    page, args.login_timeout_seconds
+                ),
+                on_page_data=save_page_checkpoint,
+                checkpoint=checkpoint,
             )
         finally:
             context.close()
@@ -187,6 +229,8 @@ def run_collect(args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
+    if collection.complete:
+        (private_root / "collection-checkpoint.json").unlink(missing_ok=True)
 
     print(f"学期数：{len(collection.semesters)}")
     print(f"课程记录：{len(collection.records)}")
