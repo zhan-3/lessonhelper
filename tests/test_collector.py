@@ -11,6 +11,7 @@ from course_progress.collector import (
     find_academic_frame,
     grade_query_parameters,
     load_checkpoint,
+    read_semester_options,
     resolve_academic_url,
     save_checkpoint,
 )
@@ -27,6 +28,18 @@ def grade_page(code: str, semester: str, page_count: int) -> str:
 
 
 class CollectorTests(unittest.TestCase):
+    def test_grade_page_validation_requires_semester_selector(self):
+        class FakeFrame:
+            def locator(self, selector):
+                self.selector = selector
+                return self
+
+            def count(self):
+                return 0
+
+        with self.assertRaisesRegex(SessionExpiredError, "学期选择器"):
+            read_semester_options(FakeFrame())
+
     def test_finds_academic_frame_in_any_open_tab(self):
         academic_frame = type("FakeFrame", (), {"url": "/cjcx/queryQmcj"})()
 

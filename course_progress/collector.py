@@ -288,6 +288,30 @@ def find_authenticated_academic_frame(pages: Iterable[Page]) -> Frame | None:
     return None
 
 
+def read_semester_options(frame: Frame) -> tuple[SemesterOption, ...]:
+    """Read the semester selector from the protected grade page.
+
+    A non-login iframe is not sufficient evidence of an authenticated
+    session: the portal can leave its shell mounted while redirecting the
+    protected application.  The selector is the page-level marker that the
+    collector actually needs.
+    """
+    selector = frame.locator("#xnxqid")
+    if selector.count() == 0:
+        raise SessionExpiredError("受保护成绩页面未提供学期选择器，登录可能已失效")
+    options = selector.locator("option").evaluate_all(
+        "options => options.map(option => ({value: option.value, label: option.textContent.trim()}))"
+    )
+    semesters = tuple(
+        SemesterOption(str(option["value"]), str(option["label"]))
+        for option in options
+        if str(option["value"]).strip()
+    )
+    if not semesters:
+        raise RuntimeError("期末成绩页面未提供任何学期选项")
+    return semesters
+
+
 def wait_for_academic_frame(page: Page, timeout_seconds: int = 300) -> Frame:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -340,37 +364,33 @@ class PlaywrightGradeCollector:
         print("正在等待教务系统标签页和课程 iframe……")
         frame = wait_for_academic_frame(page, frame_timeout_seconds)
         print("已找到教务系统课程 iframe，正在验证受保护成绩页面……")
+        grade_url = ""
 
-        while True:
-            grade_url = resolve_academic_url(frame.url, GRADE_ENDPOINT)
-            frame.goto(grade_url, wait_until="domcontentloaded", timeout=60_000)
-            if _is_login_url(frame.url):
-                if on_session_expired is None:
-                    raise SessionExpiredError("成绩页面要求重新认证")
-                on_session_expired()
+        def load_grade_page(*, reauthenticate: bool) -> tuple[SemesterOption, ...]:
+            nonlocal frame, grade_url
+            needs_reauthentication = reauthenticate
+            while True:
+                if needs_reauthentication:
+                    if on_session_expired is None:
+                        raise SessionExpiredError("成绩页面要求重新认证")
+                    on_session_expired()
+                    needs_reauthentication = False
                 frame = wait_for_academic_frame(page, frame_timeout_seconds)
-                continue
-            options = frame.locator("#xnxqid option").evaluate_all(
-                "options => options.map(option => ({value: option.value, label: option.textContent.trim()}))"
-            )
-            break
+                grade_url = resolve_academic_url(frame.url, GRADE_ENDPOINT)
+                frame.goto(grade_url, wait_until="domcontentloaded", timeout=60_000)
+                if _is_login_url(frame.url):
+                    needs_reauthentication = True
+                    continue
+                try:
+                    return read_semester_options(frame)
+                except SessionExpiredError:
+                    needs_reauthentication = True
 
-        semesters = tuple(
-            SemesterOption(str(option["value"]), str(option["label"]))
-            for option in options
-            if str(option["value"]).strip()
-        )
-        if not semesters:
-            raise RuntimeError("期末成绩页面未提供任何学期选项")
+        semesters = load_grade_page(reauthenticate=False)
         print(f"已读取 {len(semesters)} 个学期，开始逐学期采集成绩记录……")
 
         def refresh_after_session_expiry() -> None:
-            nonlocal frame, grade_url
-            if on_session_expired is not None:
-                on_session_expired()
-            frame = wait_for_academic_frame(page, frame_timeout_seconds)
-            grade_url = resolve_academic_url(frame.url, GRADE_ENDPOINT)
-            frame.goto(grade_url, wait_until="domcontentloaded", timeout=60_000)
+            load_grade_page(reauthenticate=True)
 
         def fetch_page(semester: str, page_number: int) -> str:
             result = frame.evaluate(
