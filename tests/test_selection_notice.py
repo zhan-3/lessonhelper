@@ -7,7 +7,10 @@ from course_selection.notice import (
     confirm_notice,
     fetch_notice_text,
     load_notice,
+    notice_selection_categories,
+    notice_semester_label,
     parse_notice,
+    parse_selection_windows,
     save_notice,
     update_notice,
 )
@@ -17,8 +20,57 @@ NOTICE = """关于2026年秋季学期文化素质教育课程选课的通知
 面向2025级本科生，选课时间为2026年8月26日08:00至2026年8月28日23:00。
 请进入学生选课菜单完成操作。每人限选一门。"""
 
+SCHEDULE_NOTICE = """首页
+关于2026年秋季学期各类课程选课时间安排的通知
+2026年9月4日8:30-2026年9月4日17:00
+2026级
+大学体育
+新教务系统
+2026年8月29日10:30-2026年8月30日17:00
+2024级、2025级
+大学体育
+新教务系统
+2026年8月29日8:30-2026年8月29日11:00
+2023级、2024级、
+2025级
+创新研修课、创新实验课、创新创业课——选课
+新教务系统
+2026年8月29日14:30-2026年8月29日17:00
+2023级、2024级、2025级
+创新研修课、创新实验课、创新创业课——退课
+新教务系统
+2026年8月29日14:30-2026年8月29日16:30
+2025级
+文化素质教育课——选课
+新教务系统
+2026年8月29日8:30-2026年8月30日17:00
+2023级、2024级、2025级
+跨专业发展课程
+新教务系统
+2026年8月29日8:30-2026年8月30日17:00
+2023级、2024级、2025级
+补修
+填写纸质申请表
+报送院系教务员
+"""
+
 
 class SelectionNoticeTests(unittest.TestCase):
+    def test_parses_multirow_schedule_and_filters_by_grade_action_and_method(self):
+        notice = parse_notice(SCHEDULE_NOTICE)
+
+        self.assertEqual(
+            notice.title,
+            "关于2026年秋季学期各类课程选课时间安排的通知",
+        )
+        self.assertEqual(len(parse_selection_windows(SCHEDULE_NOTICE)), 7)
+        self.assertEqual(notice.selection_type, "多类别")
+        self.assertEqual(notice_selection_categories(notice, grade="2026"), ("ty",))
+        self.assertEqual(
+            notice_selection_categories(notice, grade="2025"),
+            ("ty", "cxyx", "cxsy", "cxcy", "szhx", "xsxk"),
+        )
+
     def test_parses_selection_window_without_marking_it_confirmed(self):
         notice = parse_notice(
             NOTICE,
@@ -31,6 +83,16 @@ class SelectionNoticeTests(unittest.TestCase):
         self.assertEqual(notice.closes_at, "2026年8月28日23:00")
         self.assertEqual(notice.status, "pending_confirmation")
         self.assertEqual(notice.missing_fields, ())
+        self.assertEqual(notice_selection_categories(notice), ("szhx",))
+        self.assertEqual(notice_semester_label(notice), "2026秋季")
+
+    def test_notice_categories_include_only_explicitly_named_types(self):
+        notice = parse_notice(
+            "关于2026年秋季学期大学外语、体育课程选课的通知\n"
+            "本轮不开放其他类别。"
+        )
+
+        self.assertEqual(notice_selection_categories(notice), ("yy", "ty"))
 
     def test_missing_required_fields_cannot_be_confirmed(self):
         notice = parse_notice("选课通知\n请关注后续安排", source_kind="manual")

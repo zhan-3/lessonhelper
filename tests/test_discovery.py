@@ -108,6 +108,7 @@ class InterfaceDiscoveryTests(unittest.TestCase):
                 text="文化素质核心",
                 href=category_href,
                 selection_menu_expanded=True,
+                allowed_selection_categories=("szhx",),
             )
         )
         self.assertFalse(
@@ -116,10 +117,28 @@ class InterfaceDiscoveryTests(unittest.TestCase):
                 text="创新创业",
                 href="javascript:void(0)",
                 selection_menu_expanded=True,
+                allowed_selection_categories=("szhx",),
+            )
+        )
+        self.assertFalse(
+            is_control_allowed_in_stage(
+                TARGET_SELECTION,
+                text="创新实验",
+                href="/xsxk/queryXsxk?pageXklb=cxsy",
+                selection_menu_expanded=True,
+                allowed_selection_categories=("szhx",),
             )
         )
 
     def test_read_queries_pass_and_mutation_requests_are_blocked(self):
+        self.assertEqual(
+            score_discovery_control(
+                TARGET_SELECTION,
+                text="查询",
+                target_page_reached=True,
+            ),
+            -1,
+        )
         self.assertFalse(
             is_mutating_request("POST", "/course/list", '{"term":"2026"}')
         )
@@ -138,12 +157,23 @@ class InterfaceDiscoveryTests(unittest.TestCase):
         self.assertEqual(selection.discovery_target, TARGET_SELECTION)
         self.assertEqual(selection.max_clicks, 8)
         self.assertFalse(selection.persistent_session)
+        self.assertIsNone(selection.grade)
+        self.assertEqual(
+            str(selection.notice),
+            ".private\\academic-selection\\selection-notice.json",
+        )
 
         configure = build_parser().parse_args(
             ["configure-login", "--username", "2025000000"]
         )
         self.assertEqual(configure.command, "configure-login")
         self.assertEqual(configure.username, "2025000000")
+
+        profile = build_parser().parse_args(
+            ["configure-profile", "--grade", "2025"]
+        )
+        self.assertEqual(profile.command, "configure-profile")
+        self.assertEqual(profile.grade, "2025")
 
     def test_finds_new_academic_system_in_portal_catalog(self):
         payload = {

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -46,6 +48,16 @@ class SelectionCourseSection:
     capacity: str
     selected: bool | None
     category: str
+    course_code: str = ""
+    campus: str = ""
+    department: str = ""
+    hours: str = ""
+    prerequisites: str = ""
+    audience: str = ""
+    notes: str = ""
+    requirements: str = ""
+    selected_count: str = ""
+    capacity_count: str = ""
 
 
 @dataclass(frozen=True)
@@ -122,6 +134,212 @@ def extract_course_sections(payload: Any) -> tuple[SelectionCourseSection, ...]:
             )
         )
     return tuple(sections)
+
+
+@dataclass
+class _HtmlCell:
+    text: str
+    attributes: str
+
+
+class _SelectionTableParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows: list[list[_HtmlCell]] = []
+        self._row: list[_HtmlCell] | None = None
+        self._cell_text: list[str] | None = None
+        self._cell_attributes: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag == "tr" and self._row is None:
+            self._row = []
+        elif tag in {"th", "td"} and self._row is not None and self._cell_text is None:
+            self._cell_text = []
+            self._cell_attributes = [f"{key}={value or ''}" for key, value in attrs]
+        elif self._cell_text is not None:
+            self._cell_attributes.extend(
+                f"{key}={value or ''}" for key, value in attrs
+            )
+
+    def handle_data(self, data: str) -> None:
+        if self._cell_text is not None:
+            self._cell_text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"th", "td"} and self._row is not None and self._cell_text is not None:
+            self._row.append(
+                _HtmlCell(
+                    text=" ".join("".join(self._cell_text).split()),
+                    attributes=" ".join(self._cell_attributes),
+                )
+            )
+            self._cell_text = None
+            self._cell_attributes = []
+        elif tag == "tr" and self._row is not None:
+            if self._row:
+                self.rows.append(self._row)
+            self._row = None
+
+
+class _PageTextParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        if data.strip():
+            self.parts.append(data.strip())
+
+
+def _normalise_header(value: str) -> str:
+    return re.sub(r"[\s↑↓]", "", value)
+
+
+def _split_capacity(value: str) -> tuple[str, str]:
+    matches = re.findall(r"(\d+)\s*/\s*(\d+)", value)
+    return matches[0] if len(matches) == 1 else ("", "")
+
+
+def _teacher_from_class_info(value: str) -> str:
+    match = re.search(r"(?:教师|老师)[:：]\s*([^,，;；\s]+)", value)
+    if match:
+        return match.group(1)
+    first_segment = value.split("◇", 1)[0].strip()
+    if first_segment and not first_segment.startswith(("上课信息", "[")):
+        return re.sub(r"\d+$", "", first_segment)
+    return ""
+
+
+def _schedule_from_class_info(value: str) -> str:
+    if "◇" in value:
+        value = value.split("◇", 1)[1]
+    return re.sub(r"^上课信息[:：]\s*", "", value).strip("◇ ")
+
+
+def selection_page_count(html: str) -> int:
+    """Return the server-rendered result page count, defaulting to one."""
+    match = re.search(
+        r"<input\b(?=[^>]*\bname\s*=\s*['\"]pageCount['\"])[^>]*"
+        r"\bvalue\s*=\s*['\"](\d+)['\"][^>]*>",
+        html,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        match = re.search(
+            r"<input\b(?=[^>]*\bvalue\s*=\s*['\"](\d+)['\"])[^>]*"
+            r"\bname\s*=\s*['\"]pageCount['\"][^>]*>",
+            html,
+            flags=re.IGNORECASE,
+        )
+    return max(1, int(match.group(1))) if match else 1
+
+
+def extract_course_sections_from_html(html: str) -> tuple[SelectionCourseSection, ...]:
+    """Parse the legacy server-rendered candidate-course table."""
+    parser = _SelectionTableParser()
+    parser.feed(html)
+    headers: dict[str, int] | None = None
+    sections: list[SelectionCourseSection] = []
+    seen: set[str] = set()
+    for row in parser.rows:
+        normalized = [_normalise_header(cell.text) for cell in row]
+        if "课程代码" in normalized and "课程名称" in normalized:
+            headers = {name: index for index, name in enumerate(normalized)}
+            continue
+        if headers is None or len(row) < max(headers.values()) + 1:
+            continue
+
+        def value(name: str) -> str:
+            index = headers.get(name)
+            return row[index].text.strip() if index is not None else ""
+
+        course_code = value("课程代码")
+        name = value("课程名称")
+        if not course_code or not name:
+            continue
+        class_info = value("上课信息")
+        selected_count, capacity_count = _split_capacity(value("已选/容量"))
+        attribute_text = " ".join(cell.attributes for cell in row)
+        task_match = re.search(r"saveXsxk\d?\(['\"]([^'\"]+)", attribute_text)
+        identity = task_match.group(1) if task_match else "|".join(
+            part for part in (course_code, name, class_info) if part
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        sections.append(
+            SelectionCourseSection(
+                identity=identity,
+                name=name,
+                credits=value("学分"),
+                teacher=_teacher_from_class_info(class_info),
+                time=_schedule_from_class_info(class_info),
+                capacity=value("已选/容量"),
+                selected=None,
+                category=value("课程类别"),
+                course_code=course_code,
+                campus=value("校区"),
+                department=value("开课院系"),
+                hours=value("学时"),
+                prerequisites=value("前置课程"),
+                audience=value("面向对象"),
+                notes=value("备注信息"),
+                requirements=value("选课要求"),
+                selected_count=selected_count,
+                capacity_count=capacity_count,
+            )
+        )
+    return tuple(sections)
+
+
+def _selection_window(html: str) -> tuple[datetime, datetime] | None:
+    parser = _PageTextParser()
+    parser.feed(html)
+    text = " ".join(parser.parts)
+    match = re.search(
+        r"选课时间\s*[:：]?\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})"
+        r"\s*至\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})",
+        text,
+    )
+    if not match:
+        return None
+    return tuple(datetime.strptime(value, "%Y-%m-%d %H:%M") for value in match.groups())
+
+
+def classify_selection_html(
+    status_code: int,
+    html: str,
+    *,
+    request_url: str = "",
+    now: datetime | None = None,
+) -> SelectionObservation:
+    """Classify an HTML query without treating a future empty round as no courses."""
+    sections = extract_course_sections_from_html(html)
+    lowered = html.lower()
+    window = _selection_window(html)
+    current = now or datetime.now()
+    if status_code in {401, 403} or "authserver/login" in lowered or "#!/login" in lowered:
+        status = STATUS_LOGIN_REQUIRED
+    elif any(marker in html for marker in ("未开放", "尚未开始", "未到选课时间", "不在选课时间")):
+        status = STATUS_ROUND_NOT_OPEN
+    elif sections:
+        status = STATUS_READY
+    elif window and current < window[0]:
+        status = STATUS_ROUND_NOT_OPEN
+    elif status_code >= 400:
+        status = STATUS_ENTRY_UNREACHABLE
+    else:
+        status = STATUS_EMPTY
+    message = ""
+    if window:
+        message = f"选课窗口：{window[0]:%Y-%m-%d %H:%M} 至 {window[1]:%Y-%m-%d %H:%M}"
+    return SelectionObservation(
+        status=status,
+        request_url=sanitize_url(request_url),
+        method="POST",
+        message=message,
+        sections=sections,
+    )
 
 
 def _payload_text(payload: Any) -> str:

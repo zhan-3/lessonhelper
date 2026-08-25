@@ -25,6 +25,54 @@ SELECTION_KEYWORDS = (
     "选课",
 )
 
+NOTICE_CATEGORY_PATTERNS = (
+    ("文化素质核心", "szhx"),
+    ("文化素质", "szhx"),
+    ("素质教育", "szhx"),
+    ("大学外语", "yy"),
+    ("英语", "yy"),
+    ("体育", "ty"),
+    ("创新研修", "cxyx"),
+    ("创新实验", "cxsy"),
+    ("创新创业", "cxcy"),
+    ("新生研讨", "xsyt"),
+    ("未来技术学院", "tsk"),
+    ("外专业课程", "xsxk"),
+    ("跨专业", "xsxk"),
+    ("微专业", "wzy"),
+)
+
+CATEGORY_LABELS = {
+    "szhx": "文化素质核心",
+    "yy": "英语",
+    "ty": "体育",
+    "cxyx": "创新研修",
+    "cxsy": "创新实验",
+    "cxcy": "创新创业",
+    "xsyt": "新生研讨",
+    "tsk": "未来技术学院课程",
+    "xsxk": "外专业课程",
+    "wzy": "微专业选课",
+}
+
+_WINDOW_RE = re.compile(
+    r"^(20\d{2})年(\d{1,2})月(\d{1,2})日(\d{1,2}):(\d{2})"
+    r"\s*[-—至]\s*"
+    r"(20\d{2})年(\d{1,2})月(\d{1,2})日(\d{1,2}):(\d{2})$"
+)
+
+
+@dataclass(frozen=True)
+class SelectionWindow:
+    opens_at: str
+    closes_at: str
+    grades: tuple[str, ...]
+    audience: str
+    category_text: str
+    category_codes: tuple[str, ...]
+    action: str
+    method: str
+
 
 @dataclass(frozen=True)
 class SelectionNotice:
@@ -41,10 +89,115 @@ class SelectionNotice:
     status: str
     source_text: str
     created_at: str
+    windows: tuple[SelectionWindow, ...] = ()
 
     @property
     def missing_fields(self) -> tuple[str, ...]:
+        if self.windows:
+            return ("term",) if not self.term else ()
         return tuple(field for field in REQUIRED_FIELDS if not getattr(self, field))
+
+
+def _category_codes(value: str) -> tuple[str, ...]:
+    found: list[str] = []
+    matches: list[tuple[int, str]] = []
+    for phrase, code in NOTICE_CATEGORY_PATTERNS:
+        position = value.find(phrase)
+        if position >= 0:
+            matches.append((position, code))
+    for _, code in sorted(matches):
+        if code not in found:
+            found.append(code)
+    return tuple(found)
+
+
+def notice_selection_categories(
+    notice: SelectionNotice, *, grade: str | None = None
+) -> tuple[str, ...]:
+    """Resolve only course categories explicitly named by a confirmed notice."""
+    if notice.windows:
+        found: list[str] = []
+        for window in notice.windows:
+            if window.action != "selection" or window.method != "academic_system":
+                continue
+            if grade and grade not in window.grades:
+                continue
+            for code in window.category_codes:
+                if code not in found:
+                    found.append(code)
+        return tuple(found)
+    primary = f"{notice.selection_type}\n{notice.title}"
+    sources = (primary, notice.source_text)
+    found: list[str] = []
+    for source in sources:
+        for code in _category_codes(source):
+            if code not in found:
+                found.append(code)
+        if found:
+            break
+    return tuple(found)
+
+
+def notice_semester_label(notice: SelectionNotice) -> str:
+    value = re.sub(r"\s+", "", notice.term)
+    return value.replace("年", "").replace("学期", "")
+
+
+def _window_datetime(groups: tuple[str, ...], offset: int) -> str:
+    year, month, day, hour, minute = (int(value) for value in groups[offset : offset + 5])
+    return datetime(year, month, day, hour, minute).strftime("%Y-%m-%d %H:%M")
+
+
+def _window_action(category_text: str, method_text: str) -> str:
+    if "退课" in category_text:
+        return "drop"
+    if "选课" in category_text:
+        return "selection"
+    if any(marker in category_text for marker in ("申请", "重修", "辅修", "免听", "补修")):
+        return "application"
+    if "调整" in category_text:
+        return "adjustment"
+    if "新教务系统" in method_text and _category_codes(category_text):
+        return "selection"
+    return "other"
+
+
+def parse_selection_windows(text: str) -> tuple[SelectionWindow, ...]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    starts = [index for index, line in enumerate(lines) if _WINDOW_RE.fullmatch(line)]
+    windows: list[SelectionWindow] = []
+    for position, start in enumerate(starts):
+        match = _WINDOW_RE.fullmatch(lines[start])
+        if match is None:
+            continue
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        block = lines[start + 1 : end]
+        audience_lines: list[str] = []
+        while block and (re.search(r"20\d{2}级", block[0]) or "结业生" in block[0]):
+            audience_lines.append(block.pop(0))
+        if not block:
+            continue
+        category_text = block.pop(0)
+        method_text = " ".join(block)
+        grades = tuple(dict.fromkeys(re.findall(r"(20\d{2})级", "".join(audience_lines))))
+        method = (
+            "academic_system"
+            if "新教务系统" in method_text
+            else "manual"
+        )
+        windows.append(
+            SelectionWindow(
+                opens_at=_window_datetime(match.groups(), 0),
+                closes_at=_window_datetime(match.groups(), 5),
+                grades=grades,
+                audience="".join(audience_lines),
+                category_text=category_text,
+                category_codes=_category_codes(category_text),
+                action=_window_action(category_text, method_text),
+                method=method,
+            )
+        )
+    return tuple(windows)
 
 
 def _now() -> str:
@@ -104,6 +257,7 @@ def fetch_notice_text_in_browser(
             playwright,
             browser_name=browser,
             profile_root=profile_root,
+            persistent=False,
         ) as session:
             page = session.open_authenticated(
                 source_url, timeout_seconds=login_timeout_seconds
@@ -117,6 +271,17 @@ def fetch_notice_text_in_browser(
 
 def _first_line(text: str) -> str:
     return next((line.strip() for line in text.splitlines() if line.strip()), "")
+
+
+def _notice_title(text: str) -> str:
+    return next(
+        (
+            line.strip()
+            for line in text.splitlines()
+            if line.strip().startswith("关于") and "通知" in line
+        ),
+        _first_line(text),
+    )
 
 
 def _find_term(text: str) -> str:
@@ -160,13 +325,16 @@ def parse_notice(
     """Extract safe defaults; unresolved required fields remain empty."""
 
     normalized = text.strip()
+    windows = parse_selection_windows(normalized)
     opens_at, closes_at = _find_dates(normalized)
+    if windows:
+        opens_at, closes_at = windows[0].opens_at, windows[0].closes_at
     return SelectionNotice(
         source_kind=source_kind,
         source_url=source_url.strip(),
-        title=_first_line(normalized),
+        title=_notice_title(normalized),
         term=_find_term(normalized),
-        selection_type=_find_selection_type(normalized),
+        selection_type="多类别" if windows else _find_selection_type(normalized),
         audience=_find_line(normalized, ("面向", "对象", "适用")),
         opens_at=opens_at,
         closes_at=closes_at,
@@ -175,11 +343,16 @@ def parse_notice(
         status="pending_confirmation",
         source_text=normalized,
         created_at=created_at or _now(),
+        windows=windows,
     )
 
 
 def update_notice(notice: SelectionNotice, **fields: str) -> SelectionNotice:
-    allowed = set(SelectionNotice.__dataclass_fields__) - {"status", "created_at"}
+    allowed = set(SelectionNotice.__dataclass_fields__) - {
+        "status",
+        "created_at",
+        "windows",
+    }
     unknown = set(fields) - allowed
     if unknown:
         raise ValueError(f"不支持的通知字段：{', '.join(sorted(unknown))}")
@@ -211,4 +384,14 @@ def load_notice(path: Path) -> SelectionNotice:
     import json
 
     data = json.loads(path.read_text(encoding="utf-8"))
+    data["windows"] = tuple(
+        SelectionWindow(
+            **{
+                **item,
+                "grades": tuple(item.get("grades", ())),
+                "category_codes": tuple(item.get("category_codes", ())),
+            }
+        )
+        for item in data.get("windows", ())
+    )
     return SelectionNotice(**data)
