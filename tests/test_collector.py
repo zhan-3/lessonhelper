@@ -14,6 +14,8 @@ from course_progress.collector import (
     read_semester_options,
     resolve_academic_url,
     save_checkpoint,
+    format_collection_summary,
+    format_semester_label,
 )
 
 
@@ -28,6 +30,27 @@ def grade_page(code: str, semester: str, page_count: int) -> str:
 
 
 class CollectorTests(unittest.TestCase):
+    def test_formats_academic_semester_codes_for_humans(self):
+        self.assertEqual(format_semester_label("2025-20261", ""), "2025秋季")
+        self.assertEqual(format_semester_label("2025-20262", ""), "2026春季")
+        self.assertEqual(format_semester_label("2025-20263", ""), "2026夏季")
+        self.assertEqual(format_semester_label("not-standard", "自定义学期"), "自定义学期")
+
+    def test_summarizes_course_counts_by_semester(self):
+        semesters = (
+            SemesterOption("2025-20261", "2025秋季"),
+            SemesterOption("2025-20262", "2026春季"),
+        )
+        records = (
+            AcademicRecord("2025-20261", "A", "课 A", "任选", "类别", 1, True),
+            AcademicRecord("2025-20261", "B", "课 B", "任选", "类别", 1, True),
+        )
+
+        self.assertEqual(
+            format_collection_summary(semesters, records),
+            "2025秋季 2 条；2026春季 0 条",
+        )
+
     def test_grade_page_validation_requires_semester_selector(self):
         class FakeFrame:
             def locator(self, selector):

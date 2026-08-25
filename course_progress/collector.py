@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -58,6 +59,28 @@ def grade_query_parameters(
 class SemesterOption:
     value: str
     label: str
+
+
+def format_semester_label(value: str, label: str) -> str:
+    """Turn portal semester codes into compact, human-readable labels."""
+    match = re.fullmatch(r"(\d{4})-(\d{4})([123])", value.strip())
+    if match:
+        start_year, end_year, term = match.groups()
+        year = start_year if term == "1" else end_year
+        season = {"1": "秋季", "2": "春季", "3": "夏季"}[term]
+        return f"{year}{season}"
+    return label.strip() or value.strip()
+
+
+def format_collection_summary(
+    semesters: Iterable[SemesterOption], records: Iterable[AcademicRecord]
+) -> str:
+    """Summarize parsed course counts without printing request-level details."""
+    counts = Counter(record.semester for record in records)
+    return "；".join(
+        f"{format_semester_label(item.value, item.label)} {counts[item.value]} 条"
+        for item in semesters
+    )
 
 
 @dataclass(frozen=True)
@@ -403,25 +426,17 @@ class PlaywrightGradeCollector:
                 },
             )
             body = str(result["body"])
-            print(
-                f"接口响应：学期 {semester} 第 {page_number} 页，"
-                f"HTTP {result['status']}，响应 {len(body)} 字符"
-            )
             return body
 
-        def report_page(
-            semester: SemesterOption, page_number: int, record_count: int
-        ) -> None:
-            print(
-                f"接口解析：{semester.label} 第 {page_number} 页，"
-                f"课程记录 {record_count} 条"
-            )
-
-        return collect_grade_records(
+        collection = collect_grade_records(
             semesters,
             fetch_page,
-            on_page=report_page,
             on_page_data=on_page_data,
             on_session_expired=refresh_after_session_expiry,
             checkpoint=checkpoint,
         )
+        print(
+            f"采集完成：{len(collection.semesters)} 个学期；"
+            f"{format_collection_summary(collection.semesters, collection.records)}"
+        )
+        return collection
