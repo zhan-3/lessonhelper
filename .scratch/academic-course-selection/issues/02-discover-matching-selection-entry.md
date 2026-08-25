@@ -17,3 +17,5 @@
 已实现只读探索命令：认证后由用户手动打开对应学生选课页面，程序只接收匹配通知文本的标签页，监听 Fetch/XHR，保存课程班结果和脱敏请求契约，并在本地页面呈现状态。未捕获到可确认接口时报告 `interface_unconfirmed`，不会误报为空；稳定接口的 `browser_context.request` 直读仍需在真实选课窗口捕获并确认请求契约后实现，当前不会猜测或重放提交请求。
 
 补充自动发现与认证基础设施：自动导航在目标页面前只检查主页面菜单树，记录点击前后的完整可见 DOM 控件与新增二级菜单，避免把 iframe 内“备选课程/已选课程”误判为顶部导航。新增 Windows DPAPI 凭据配置和 Playwright storage state 复用；凭据仅允许填写到 HITWH WebVPN 的 HTTPS CAS 登录路径。
+
+2026-08-25 真实验证通过：Playwright Chromium 经 EasyConnect 失效状态回退、CAS 自动登录和新教务统一认证中间页，严格按“学生选课 → 文化素质核心”进入 `/xsxk/queryXsxk?pageXklb=szhx`。已保存每次点击前后截图、完整 DOM 差异及只读表单契约；确认页面使用 `POST` 查询，筛选字段包括 `pageXnxq`、`pageKkxiaoqu`、`pageKkyx`、`pageKcmc`。页面显示该轮选课时间为 2026-08-29 08:30 至 10:30，当前空表不能判定为无课程。

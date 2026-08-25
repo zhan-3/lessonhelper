@@ -5,6 +5,7 @@ from course_selection.discovery import (
     TARGET_SELECTION,
     TARGET_TIMETABLE,
     find_academic_portal_redirect,
+    is_control_allowed_in_stage,
     is_mutating_request,
     score_discovery_control,
 )
@@ -39,6 +40,10 @@ class InterfaceDiscoveryTests(unittest.TestCase):
 
         self.assertGreater(timetable, portal)
         self.assertGreater(portal, 0)
+        self.assertGreater(
+            score_discovery_control(TARGET_TIMETABLE, text="统一身份认证登录"),
+            0,
+        )
         self.assertEqual(
             score_discovery_control(TARGET_TIMETABLE, text="学生事务"),
             -1,
@@ -69,12 +74,50 @@ class InterfaceDiscoveryTests(unittest.TestCase):
         )
 
     def test_selection_categories_beat_microprogramme_fallback(self):
+        core = score_discovery_control(TARGET_SELECTION, text="文化素质核心")
         elective = score_discovery_control(TARGET_SELECTION, text="全校任选课")
         limited = score_discovery_control(TARGET_SELECTION, text="限选课")
         microprogramme = score_discovery_control(TARGET_SELECTION, text="微专业选课")
 
+        self.assertGreater(core, elective)
         self.assertGreater(elective, limited)
         self.assertGreater(limited, microprogramme)
+
+    def test_selection_categories_require_the_student_selection_menu(self):
+        category_href = "/xsxk/queryXsxk?pageXklb=szhx"
+
+        self.assertTrue(
+            is_control_allowed_in_stage(
+                TARGET_SELECTION,
+                text="学生选课",
+                href="javascript:void(0)",
+                selection_menu_expanded=False,
+            )
+        )
+        self.assertFalse(
+            is_control_allowed_in_stage(
+                TARGET_SELECTION,
+                text="创新创业",
+                href="javascript:void(0)",
+                selection_menu_expanded=False,
+            )
+        )
+        self.assertTrue(
+            is_control_allowed_in_stage(
+                TARGET_SELECTION,
+                text="文化素质核心",
+                href=category_href,
+                selection_menu_expanded=True,
+            )
+        )
+        self.assertFalse(
+            is_control_allowed_in_stage(
+                TARGET_SELECTION,
+                text="创新创业",
+                href="javascript:void(0)",
+                selection_menu_expanded=True,
+            )
+        )
 
     def test_read_queries_pass_and_mutation_requests_are_blocked(self):
         self.assertFalse(

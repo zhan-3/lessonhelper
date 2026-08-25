@@ -20,7 +20,10 @@ from course_progress.sanitizer import (
     sanitize_url,
 )
 from course_progress.credentials import CredentialStore, LoginCredentials
-from course_progress.session import _is_webvpn_credential_page
+from course_progress.session import (
+    _is_legacy_webvpn_login,
+    _is_webvpn_credential_page,
+)
 
 
 class SanitizerTests(unittest.TestCase):
@@ -109,6 +112,16 @@ class CredentialTests(unittest.TestCase):
         )
         self.assertFalse(
             _is_webvpn_credential_page("http://webvpn.hitwh.edu.cn/authserver/login")
+        )
+
+    def test_legacy_easyconnect_login_is_detected_without_accepting_other_hosts(self):
+        self.assertTrue(
+            _is_legacy_webvpn_login(
+                "https://webvpn.hitwh.edu.cn/https/hash/portal/#!/login"
+            )
+        )
+        self.assertFalse(
+            _is_legacy_webvpn_login("https://evil.example/portal/#!/login")
         )
 
 

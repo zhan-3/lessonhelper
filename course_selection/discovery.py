@@ -32,7 +32,14 @@ TARGET_KEYWORDS = {
     TARGET_SELECTION: (
         "全校任选课",
         "人文社科限选课",
+        "文化素质核心",
+        "创新研修",
         "创新实验课",
+        "创新实验",
+        "创新创业",
+        "新生研讨",
+        "未来技术学院课程",
+        "外专业课程",
         "限选课",
         "必修课",
         "学生选课",
@@ -45,10 +52,11 @@ TARGET_KEYWORDS = {
 
 TARGET_FRAME_MARKERS = {
     TARGET_TIMETABLE: ("/kbcx/querygrkb",),
-    TARGET_SELECTION: (),
+    TARGET_SELECTION: ("/xsxk/queryxsxk",),
 }
 
 INTERMEDIATE_KEYWORDS = (
+    "统一身份认证登录",
     "本科生综合服务",
     "综合教务",
     "教务系统",
@@ -146,9 +154,16 @@ def score_discovery_control(
         return -1
     if target == TARGET_SELECTION:
         priorities = (
+            ("文化素质核心", 250),
             ("全校任选课", 240),
             ("人文社科限选课", 235),
+            ("创新研修", 232),
             ("创新实验课", 230),
+            ("创新实验", 230),
+            ("创新创业", 228),
+            ("新生研讨", 226),
+            ("未来技术学院课程", 224),
+            ("外专业课程", 222),
             ("限选课", 220),
             ("必修课", 215),
             ("体育选课", 210),
@@ -185,6 +200,24 @@ def is_mutating_request(method: str, url: str, post_data: str | None = None) -> 
         return False
     searchable = f"{url} {post_data or ''}".lower()
     return any(marker.lower() in searchable for marker in MUTATION_MARKERS)
+
+
+def is_control_allowed_in_stage(
+    target: str,
+    *,
+    text: str,
+    href: str,
+    selection_menu_expanded: bool,
+) -> bool:
+    """Keep top-level menus distinct from similarly named selection categories."""
+    if target != TARGET_SELECTION:
+        return True
+    normalized = "".join(text.split())
+    if not selection_menu_expanded:
+        return normalized in {"统一身份认证登录", "学生选课"}
+    if normalized in {"统一身份认证登录", "学生选课"}:
+        return False
+    return "/xsxk/queryxsxk" in href.lower()
 
 
 def _same_origin(left: str, right: str) -> bool:
@@ -248,6 +281,8 @@ class InterfaceDiscovery:
         self.portal_redirects: list[str] = []
         self.blocked_requests = 0
         self.dom_snapshots: list[dict[str, Any]] = []
+        self.visual_log: list[dict[str, Any]] = []
+        self.selection_menu_expanded = False
 
     def _guard_route(self, route) -> None:
         request = route.request
@@ -299,8 +334,33 @@ class InterfaceDiscovery:
         except Error:
             return False
         if self.target == TARGET_SELECTION:
-            return "选择课程" in body and "已选课程" in body
+            return ("选择课程" in body or "备选课程" in body) and "已选课程" in body
         return False
+
+    def _capture_click_visuals(
+        self,
+        context: BrowserContext,
+        *,
+        click_number: int,
+        stage: str,
+        text: str,
+    ) -> None:
+        files: list[str] = []
+        for page_index, page in enumerate(context.pages, start=1):
+            try:
+                filename = f"click-{click_number:02d}-{stage}-page-{page_index}.png"
+                page.screenshot(path=str(self.output_root / filename), full_page=True)
+                files.append(filename)
+            except Error:
+                continue
+        self.visual_log.append(
+            {
+                "click": click_number,
+                "stage": stage,
+                "text": sanitize_text(text),
+                "files": files,
+            }
+        )
 
     def _refresh_target_pages(self, context: BrowserContext) -> None:
         for page in context.pages:
@@ -356,7 +416,10 @@ class InterfaceDiscovery:
                                 box: {
                                   x: Math.round(rect.x), y: Math.round(rect.y),
                                   width: Math.round(rect.width), height: Math.round(rect.height)
-                                }
+                                },
+                                inViewport: rect.bottom > 0 && rect.right > 0
+                                  && rect.top < window.innerHeight
+                                  && rect.left < window.innerWidth
                               };
                             }""",
                             index,
@@ -383,6 +446,15 @@ class InterfaceDiscovery:
                             }
                         )
                         if score < 0:
+                            continue
+                        if not safe_metadata["inViewport"]:
+                            continue
+                        if not is_control_allowed_in_stage(
+                            self.target,
+                            text=text,
+                            href=href,
+                            selection_menu_expanded=self.selection_menu_expanded,
+                        ):
                             continue
                         if identity in self.visited:
                             continue
@@ -421,6 +493,11 @@ class InterfaceDiscovery:
         print(f"自动点击 [{control.score}]：{control.text or '未命名入口'}")
         try:
             control.locator.click(timeout=10_000)
+            if (
+                self.target == TARGET_SELECTION
+                and "".join(control.text.split()) == "学生选课"
+            ):
+                self.selection_menu_expanded = True
             self.click_log.append(
                 {
                     "score": control.score,
@@ -490,6 +567,13 @@ class InterfaceDiscovery:
             idle_rounds = 0
             selected = controls[0]
             before_identities = {item["identity"] for item in inventory}
+            self.output_root.mkdir(parents=True, exist_ok=True)
+            self._capture_click_visuals(
+                context,
+                click_number=clicks + 1,
+                stage="before",
+                text=selected.text,
+            )
             if self._click(selected):
                 clicks += 1
             pages = context.pages
@@ -505,6 +589,12 @@ class InterfaceDiscovery:
                 f"after-click: {sanitize_text(selected.text)}",
                 after_inventory,
                 newly_visible=newly_visible,
+            )
+            self._capture_click_visuals(
+                context,
+                click_number=clicks,
+                stage="after",
+                text=selected.text,
             )
             if newly_visible:
                 print(f"菜单展开：新增 {len(newly_visible)} 个可见控件")
@@ -575,6 +665,10 @@ class InterfaceDiscovery:
         )
         (self.output_root / "dom-snapshots.json").write_text(
             json.dumps(self.dom_snapshots, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (self.output_root / "visuals.json").write_text(
+            json.dumps(self.visual_log, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         candidates = self.store.write_candidates()

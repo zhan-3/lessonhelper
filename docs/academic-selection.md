@@ -55,3 +55,23 @@ uv run python -m course_selection discover-selection
 
 两个命令默认启动 Playwright 自带 Chromium 的临时可见会话，并加载上次保存的
 WebVPN 状态；传入 `--browser chrome` 才会显式使用系统 Chrome。
+
+2026-08-25 真实页面验证得到的“学生选课”二级菜单与查询类别如下：
+
+| 页面名称 | `pageXklb` |
+| --- | --- |
+| 英语 | `yy` |
+| 体育 | `ty` |
+| 文化素质核心（页面内显示“素质教育”） | `szhx` |
+| 创新研修 | `cxyx` |
+| 创新实验 | `cxsy` |
+| 创新创业 | `cxcy` |
+| 新生研讨 | `xsyt` |
+| 未来技术学院课程 | `tsk` |
+| 外专业课程 | `xsxk` |
+| 微专业选课 | `wzy` |
+
+WebVPN storage state 失效时，旧入口可能显示 EasyConnect `#!/login`。程序不会在
+该页面填写统一认证密码，而是清理失效 Cookie，转到明确的 CAS 入口后再自动
+填写。新教务系统自身还包含一个“统一身份认证登录”中间页，自动发现流程会先
+进入该入口，再展开“学生选课”。

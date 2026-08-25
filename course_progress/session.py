@@ -12,6 +12,11 @@ from .explorer import _is_login_url, launch_browser_context, resolve_profile_dir
 from .credentials import AUTH_STATE_FILE_NAME, credential_store
 
 
+WEBVPN_CAS_ENTRY_URL = (
+    "https://webvpn.hitwh.edu.cn/login?cas_login=true#!/service"
+)
+
+
 def _is_webvpn_credential_page(url: str) -> bool:
     """Restrict credential entry to HITWH's proxied CAS login page."""
     parsed = urlsplit(url)
@@ -19,6 +24,15 @@ def _is_webvpn_credential_page(url: str) -> bool:
         parsed.scheme == "https"
         and parsed.hostname == "webvpn.hitwh.edu.cn"
         and "authserver/login" in parsed.path.lower()
+    )
+
+
+def _is_legacy_webvpn_login(url: str) -> bool:
+    parsed = urlsplit(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == "webvpn.hitwh.edu.cn"
+        and parsed.fragment.lower() == "!/login"
     )
 
 
@@ -92,6 +106,15 @@ class AcademicBrowserSession:
         page = self.context.pages[0] if self.context.pages else self.context.new_page()
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         page.wait_for_timeout(3_000)
+        if _is_legacy_webvpn_login(page.url):
+            print("登录状态：WebVPN 会话已失效，切换到统一身份认证。")
+            self.context.clear_cookies()
+            page.goto(
+                WEBVPN_CAS_ENTRY_URL,
+                wait_until="domcontentloaded",
+                timeout=60_000,
+            )
+            page.wait_for_timeout(3_000)
 
         deadline = time.monotonic() + timeout_seconds
         stable_checks = 0

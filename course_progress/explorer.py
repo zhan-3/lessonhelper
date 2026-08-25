@@ -48,6 +48,7 @@ def _is_login_url(url: str) -> bool:
         "authserver/login" in lowered
         or "logincas" in lowered
         or "loginnocas" in lowered
+        or "#!/login" in lowered
     )
 
 
