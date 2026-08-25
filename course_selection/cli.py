@@ -16,6 +16,7 @@ from course_progress.explorer import (
 )
 
 from .notice import load_notice
+from .discovery import AcademicInterfaceDiscovery, TARGET_SELECTION, TARGET_TIMETABLE
 from .selection_entry import (
     STATUS_ENTRY_UNREACHABLE,
     STATUS_LOGIN_REQUIRED,
@@ -38,7 +39,44 @@ def build_parser() -> argparse.ArgumentParser:
     explore.add_argument("--profile-root", type=Path, default=Path(".private/course-progress"))
     explore.add_argument("--login-timeout-seconds", type=int, default=600)
     explore.add_argument("--wait-seconds", type=int, default=600)
+    for command, target, help_text in (
+        ("discover-timetable", TARGET_TIMETABLE, "自动点击并发现课表只读接口"),
+        ("discover-selection", TARGET_SELECTION, "自动点击并发现选课只读接口"),
+    ):
+        discover = subparsers.add_parser(command, help=help_text)
+        discover.set_defaults(discovery_target=target)
+        discover.add_argument("--url", default=DEFAULT_PORTAL_URL, help="教务门户入口")
+        discover.add_argument("--browser", choices=("chromium", "chrome"), default="chromium")
+        discover.add_argument("--private-root", type=Path, default=Path(".private/academic-selection"))
+        discover.add_argument("--profile-root", type=Path, default=Path(".private/course-progress"))
+        discover.add_argument("--login-timeout-seconds", type=int, default=600)
+        discover.add_argument("--wait-seconds", type=int, default=30)
+        discover.add_argument("--max-clicks", type=int, default=8)
     return parser
+
+
+def run_discovery(args: argparse.Namespace) -> int:
+    if args.login_timeout_seconds <= 0 or args.wait_seconds <= 0 or args.max_clicks <= 0:
+        raise SystemExit("等待时间和自动点击次数必须大于 0")
+    with sync_playwright() as playwright:
+        print("安全边界：只自动点击导航/查询控件；疑似选课、退课、保存请求会被拦截。")
+        report = AcademicInterfaceDiscovery(
+            playwright,
+            browser_name=args.browser,
+            profile_root=args.profile_root,
+            output_root=args.private_root.resolve(),
+        ).discover(
+            args.discovery_target,
+            portal_url=args.url,
+            login_timeout_seconds=args.login_timeout_seconds,
+            wait_seconds=args.wait_seconds,
+            max_clicks=args.max_clicks,
+        )
+    print(
+        f"发现结果：目标页面={'是' if report.target_found else '否'}，"
+        f"点击={report.clicks}，接口={report.captures}，拦截={report.blocked_requests}"
+    )
+    return 0
 
 
 def run_explore_entry(args: argparse.Namespace) -> int:
@@ -98,4 +136,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "explore-entry":
         return run_explore_entry(args)
+    if args.command in {"discover-timetable", "discover-selection"}:
+        return run_discovery(args)
     return 2
