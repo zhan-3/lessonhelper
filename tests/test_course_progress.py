@@ -127,7 +127,10 @@ class AutoNavigationTests(unittest.TestCase):
             shared.mkdir()
             (private_root / "collector-profile").mkdir()
 
-            self.assertEqual(resolve_profile_dir(private_root), shared)
+            self.assertEqual(
+                resolve_profile_dir(private_root),
+                private_root / "collector-profile",
+            )
 
     def test_profile_reuses_legacy_collector_before_explorer(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -161,13 +164,13 @@ class AutoNavigationTests(unittest.TestCase):
         args = build_parser().parse_args(["explore"])
 
         self.assertEqual(args.max_pages, 12)
-        self.assertEqual(args.login_timeout_seconds, 300)
+        self.assertEqual(args.login_timeout_seconds, 600)
 
     def test_collect_defaults_to_dynamic_semester_collection(self):
         args = build_parser().parse_args(["collect"])
 
         self.assertEqual(args.page_size, 20)
-        self.assertEqual(args.login_timeout_seconds, 300)
+        self.assertEqual(args.login_timeout_seconds, 600)
         self.assertEqual(
             args.requirements,
             Path("docs/校园培养方案解读（2026年版）.md"),

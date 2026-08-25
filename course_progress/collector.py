@@ -306,16 +306,11 @@ def wait_for_reauthentication(page: Page, timeout_seconds: int = 300) -> Frame:
         f"最长等待 {timeout_seconds} 秒。"
     )
     deadline = time.monotonic() + timeout_seconds
-    login_seen = False
+    earliest_retry = time.monotonic() + 1.0
     while time.monotonic() < deadline:
         pages = tuple(page.context.pages) or (page,)
-        urls = [candidate.url for candidate in pages]
-        urls.extend(
-            frame.url for candidate in pages for frame in candidate.frames
-        )
-        login_seen = login_seen or any(_is_login_url(url) for url in urls)
         frame = find_authenticated_academic_frame(pages)
-        if login_seen and frame is not None:
+        if time.monotonic() >= earliest_retry and frame is not None:
             print("重新认证完成，继续采集当前分页。")
             return frame
         page.wait_for_timeout(500)
@@ -344,13 +339,22 @@ class PlaywrightGradeCollector:
     ) -> GradeCollection:
         print("正在等待教务系统标签页和课程 iframe……")
         frame = wait_for_academic_frame(page, frame_timeout_seconds)
-        print("已找到教务系统课程 iframe，正在读取学期选项……")
-        grade_url = resolve_academic_url(frame.url, GRADE_ENDPOINT)
-        frame.goto(grade_url, wait_until="domcontentloaded", timeout=60_000)
+        print("已找到教务系统课程 iframe，正在验证受保护成绩页面……")
 
-        options = frame.locator("#xnxqid option").evaluate_all(
-            "options => options.map(option => ({value: option.value, label: option.textContent.trim()}))"
-        )
+        while True:
+            grade_url = resolve_academic_url(frame.url, GRADE_ENDPOINT)
+            frame.goto(grade_url, wait_until="domcontentloaded", timeout=60_000)
+            if _is_login_url(frame.url):
+                if on_session_expired is None:
+                    raise SessionExpiredError("成绩页面要求重新认证")
+                on_session_expired()
+                frame = wait_for_academic_frame(page, frame_timeout_seconds)
+                continue
+            options = frame.locator("#xnxqid option").evaluate_all(
+                "options => options.map(option => ({value: option.value, label: option.textContent.trim()}))"
+            )
+            break
+
         semesters = tuple(
             SemesterOption(str(option["value"]), str(option["label"]))
             for option in options

@@ -75,8 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     explore.add_argument(
         "--login-timeout-seconds",
         type=int,
-        default=300,
-        help="等待 CAS 登录的最长时间，默认 300 秒",
+        default=600,
+        help="等待 CAS 登录和重新认证的最长时间，默认 600 秒",
     )
     collect = subparsers.add_parser(
         "collect", help="登录后按学期和分页采集已通过课程并计算毕业进度"
@@ -93,7 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collect.add_argument("--baseline-version", default="guide-2026")
     collect.add_argument("--page-size", type=int, default=20)
-    collect.add_argument("--login-timeout-seconds", type=int, default=300)
+    collect.add_argument(
+        "--login-timeout-seconds",
+        type=int,
+        default=600,
+        help="等待 CAS 登录和重新认证的最长时间，默认 600 秒",
+    )
     return parser
 
 

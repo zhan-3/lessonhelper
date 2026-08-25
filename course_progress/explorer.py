@@ -30,14 +30,11 @@ PROFILE_LOCK_MARKERS = (
 
 def resolve_profile_dir(private_root: Path) -> Path:
     """Choose one shared profile, reusing a legacy profile when available."""
-    shared = private_root / SHARED_PROFILE_NAME
-    if shared.exists():
-        return shared
     for legacy_name in LEGACY_PROFILE_NAMES:
         legacy = private_root / legacy_name
         if legacy.exists():
             return legacy
-    return shared
+    return private_root / SHARED_PROFILE_NAME
 
 
 def _is_profile_lock_error(error: Error) -> bool:
