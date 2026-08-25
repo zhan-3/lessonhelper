@@ -1,0 +1,101 @@
+"""Command line entry points for local academic selection exploration."""
+
+from __future__ import annotations
+
+import argparse
+import time
+from pathlib import Path
+
+from playwright.sync_api import sync_playwright
+
+from course_progress.explorer import (
+    DEFAULT_PORTAL_URL,
+    _is_login_url,
+    launch_browser_context,
+    resolve_profile_dir,
+)
+
+from .notice import load_notice
+from .selection_entry import (
+    STATUS_ENTRY_UNREACHABLE,
+    STATUS_LOGIN_REQUIRED,
+    SelectionEntryExplorer,
+    SelectionObservation,
+    save_selection_result,
+)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="course-selection")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    explore = subparsers.add_parser(
+        "explore-entry", help="只读观察已确认通知对应的教务选课入口"
+    )
+    explore.add_argument("--notice", type=Path, default=Path(".private/academic-selection/selection-notice.json"))
+    explore.add_argument("--url", default=DEFAULT_PORTAL_URL, help="教务门户入口")
+    explore.add_argument("--browser", choices=("chromium", "chrome"), default="chromium")
+    explore.add_argument("--private-root", type=Path, default=Path(".private/academic-selection"))
+    explore.add_argument("--profile-root", type=Path, default=Path(".private/course-progress"))
+    explore.add_argument("--login-timeout-seconds", type=int, default=600)
+    explore.add_argument("--wait-seconds", type=int, default=600)
+    return parser
+
+
+def run_explore_entry(args: argparse.Namespace) -> int:
+    if args.login_timeout_seconds <= 0 or args.wait_seconds <= 0:
+        raise SystemExit("等待时间必须大于 0")
+    if not args.notice.is_file():
+        raise SystemExit(f"选课通知不存在：{args.notice}")
+    notice = load_notice(args.notice)
+    if notice.status != "confirmed":
+        raise SystemExit("选课通知尚未确认，不能探索对应入口")
+    profile_dir = resolve_profile_dir(args.profile_root.resolve())
+    with sync_playwright() as playwright:
+        context = launch_browser_context(playwright, args.browser, profile_dir)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            try:
+                page.goto(args.url, wait_until="domcontentloaded", timeout=60_000)
+            except Exception as error:
+                save_selection_result(
+                    args.private_root.resolve(),
+                    SelectionObservation(
+                        status=STATUS_ENTRY_UNREACHABLE,
+                        request_url=args.url,
+                        method="GET",
+                        message=str(error),
+                        sections=(),
+                    ),
+                )
+                return 1
+            deadline = time.monotonic() + args.login_timeout_seconds
+            while _is_login_url(page.url) and time.monotonic() < deadline:
+                page.wait_for_timeout(500)
+            if _is_login_url(page.url):
+                save_selection_result(
+                    args.private_root.resolve(),
+                    SelectionObservation(
+                        status=STATUS_LOGIN_REQUIRED,
+                        request_url=page.url,
+                        method="GET",
+                        message="等待统一身份认证超时",
+                        sections=(),
+                    ),
+                )
+                return 1
+            explorer = SelectionEntryExplorer(
+                notice=notice,
+                output_root=args.private_root.resolve(),
+            )
+            explorer.run(context, wait_seconds=args.wait_seconds)
+        finally:
+            context.close()
+    print(f"只读选课入口结果：{args.private_root.resolve() / 'selection-entry.json'}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.command == "explore-entry":
+        return run_explore_entry(args)
+    return 2

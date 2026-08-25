@@ -77,3 +77,18 @@ class SelectionWebTests(unittest.TestCase):
                 content_type="multipart/form-data",
             )
             self.assertEqual(rejected.status_code, 409)
+
+    def test_dashboard_presents_read_only_selection_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "selection-entry.json").write_text(
+                '{"status":"ready","request_url":"/selection/list",'
+                '"sections":[{"name":"人工智能导论","credits":"2",'
+                '"teacher":"李老师","time":"周一 1-2","capacity":"12",'
+                '"selected":false}]}',
+                encoding="utf-8",
+            )
+            dashboard = create_app(root).test_client().get("/")
+
+            self.assertIn("人工智能导论", dashboard.get_data(as_text=True))
+            self.assertIn("ready", dashboard.get_data(as_text=True))

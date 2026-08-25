@@ -16,3 +16,19 @@ uv run python -m course_selection
 4. 检查课程、星期、节次和教学周是否正确；替换已有课表时需要显式勾选确认。
 
 数据只保存到 `.private/academic-selection/`。当前页面不会访问教务选课入口，也不会执行选课、退课或提交操作；对应入口的只读探索属于后续票据。
+
+探索已确认通知对应的教务选课入口：
+
+```powershell
+uv run python -m course_selection explore-entry
+```
+
+命令会复用 `.private/course-progress/` 的教务浏览器 profile。登录完成后，请在可见浏览器中手动打开通知对应的“学生选课”页面；程序只监听该页面产生的 Fetch/XHR JSON，并将脱敏结果保存到：
+
+```text
+.private/academic-selection/
+├── selection-entry.json
+└── selection-contracts.json
+```
+
+当前探索器不会点击选课、退课、保存或提交控件。

@@ -55,6 +55,14 @@ INDEX_TEMPLATE = """<!doctype html>
 {% for item in timetable.entries %}<tr><td>{{ item.course_name }}</td><td>星期{{ item.weekday }}</td><td>{{ item.start_period }}-{{ item.end_period }}</td><td>{{ item.week_start }}-{{ item.week_end }}</td><td>{{ item.week_parity }}</td><td>{{ item.location }}</td></tr>{% endfor %}
 </table>{% else %}<p class="muted">尚未导入课表。</p>{% endif %}
 </section>
+<section>
+<h2>教务选课入口（只读）</h2>
+{% if selection %}<p>状态：<strong>{{ selection.status }}</strong>；请求：{{ selection.request_url or "暂无" }}</p>
+{% if selection.sections %}<table><tr><th>课程</th><th>学分</th><th>教师</th><th>时间</th><th>容量</th><th>已选</th></tr>
+{% for item in selection.sections %}<tr><td>{{ item.name }}</td><td>{{ item.credits }}</td><td>{{ item.teacher }}</td><td>{{ item.time }}</td><td>{{ item.capacity }}</td><td>{{ item.selected }}</td></tr>{% endfor %}</table>
+{% else %}<p class="muted">当前没有可呈现的课程班结果。</p>{% endif %}
+{% else %}<p class="muted">尚未探索教务选课入口。</p>{% endif %}
+</section>
 </body></html>"""
 
 
@@ -88,10 +96,12 @@ def create_app(private_root: Path | str = ".private/academic-selection") -> Flas
     def index():
         notice_data = _notice_for_view(root / "selection-notice.json")
         timetable_data = _read_json(root / "current-timetable.json")
+        selection_data = _read_json(root / "selection-entry.json")
         return render_template_string(
             INDEX_TEMPLATE,
             notice=notice_data,
             timetable=timetable_data,
+            selection=selection_data,
         )
 
     @app.post("/notices")
