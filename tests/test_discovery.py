@@ -16,6 +16,10 @@ class InterfaceDiscoveryTests(unittest.TestCase):
             score_discovery_control(TARGET_SELECTION, text="学生选课"),
             0,
         )
+        self.assertGreater(
+            score_discovery_control(TARGET_SELECTION, text="全校任选课选课"),
+            score_discovery_control(TARGET_SELECTION, text="学生选课"),
+        )
         self.assertEqual(
             score_discovery_control(TARGET_SELECTION, text="提交选课"),
             -1,
@@ -27,10 +31,50 @@ class InterfaceDiscoveryTests(unittest.TestCase):
 
     def test_timetable_and_intermediate_portal_controls_are_ranked(self):
         timetable = score_discovery_control(TARGET_TIMETABLE, text="我的课表")
-        portal = score_discovery_control(TARGET_TIMETABLE, text="本科生综合服务")
+        portal = score_discovery_control(
+            TARGET_TIMETABLE,
+            text="学生选课",
+            href="javascript:void(0)",
+        )
 
         self.assertGreater(timetable, portal)
         self.assertGreater(portal, 0)
+        self.assertEqual(
+            score_discovery_control(TARGET_TIMETABLE, text="学生事务"),
+            -1,
+        )
+        self.assertEqual(
+            score_discovery_control(
+                TARGET_TIMETABLE,
+                text="导出课表",
+                target_page_reached=True,
+            ),
+            -1,
+        )
+        self.assertEqual(
+            score_discovery_control(
+                TARGET_TIMETABLE,
+                text="个人课表查询",
+                target_page_reached=True,
+            ),
+            -1,
+        )
+        self.assertGreater(
+            score_discovery_control(
+                TARGET_TIMETABLE,
+                text="查询",
+                target_page_reached=True,
+            ),
+            0,
+        )
+
+    def test_selection_categories_beat_microprogramme_fallback(self):
+        elective = score_discovery_control(TARGET_SELECTION, text="全校任选课")
+        limited = score_discovery_control(TARGET_SELECTION, text="限选课")
+        microprogramme = score_discovery_control(TARGET_SELECTION, text="微专业选课")
+
+        self.assertGreater(elective, limited)
+        self.assertGreater(limited, microprogramme)
 
     def test_read_queries_pass_and_mutation_requests_are_blocked(self):
         self.assertFalse(
@@ -50,6 +94,13 @@ class InterfaceDiscoveryTests(unittest.TestCase):
         self.assertEqual(timetable.discovery_target, TARGET_TIMETABLE)
         self.assertEqual(selection.discovery_target, TARGET_SELECTION)
         self.assertEqual(selection.max_clicks, 8)
+        self.assertFalse(selection.persistent_session)
+
+        configure = build_parser().parse_args(
+            ["configure-login", "--username", "2025000000"]
+        )
+        self.assertEqual(configure.command, "configure-login")
+        self.assertEqual(configure.username, "2025000000")
 
     def test_finds_new_academic_system_in_portal_catalog(self):
         payload = {

@@ -19,6 +19,8 @@ from course_progress.sanitizer import (
     sanitize_request_body,
     sanitize_url,
 )
+from course_progress.credentials import CredentialStore, LoginCredentials
+from course_progress.session import _is_webvpn_credential_page
 
 
 class SanitizerTests(unittest.TestCase):
@@ -48,6 +50,15 @@ class SanitizerTests(unittest.TestCase):
         self.assertIn("semester=2025-1", result)
         self.assertNotIn("ST-secret", result)
 
+    def test_redacts_legacy_academic_user_query_parameters(self):
+        result = sanitize_url(
+            "https://example.test/xsxk/query?yhxx=student-detail&yhid=2025000000"
+        )
+
+        self.assertNotIn("student-detail", result)
+        self.assertNotIn("2025000000", result)
+        self.assertEqual(result.count("%5BREDACTED%5D"), 2)
+
     def test_redacts_form_encoded_login_body(self):
         result = sanitize_request_body(
             "username=2025000000&password=do-not-store&execution=e1s1"
@@ -67,6 +78,38 @@ class SanitizerTests(unittest.TestCase):
 
         self.assertEqual(result["user"]["name"], REDACTED)
         self.assertEqual(result["course"]["name"], "高等数学")
+
+
+class CredentialTests(unittest.TestCase):
+    def test_encrypted_store_round_trips_without_writing_plaintext(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "login.dpapi"
+            store = CredentialStore(
+                path,
+                protect=lambda value: b"encrypted:" + value[::-1],
+                unprotect=lambda value: value.removeprefix(b"encrypted:")[::-1],
+            )
+            expected = LoginCredentials("2025000000", "do-not-store-plainly")
+
+            store.save(expected)
+
+            self.assertEqual(store.load(), expected)
+            self.assertNotIn(b"do-not-store-plainly", path.read_bytes())
+
+    def test_credentials_are_only_entered_on_exact_webvpn_cas_host(self):
+        self.assertTrue(
+            _is_webvpn_credential_page(
+                "https://webvpn.hitwh.edu.cn/https/hash/authserver/login?service=x"
+            )
+        )
+        self.assertFalse(
+            _is_webvpn_credential_page(
+                "https://evil.example/authserver/login?next=webvpn.hitwh.edu.cn"
+            )
+        )
+        self.assertFalse(
+            _is_webvpn_credential_page("http://webvpn.hitwh.edu.cn/authserver/login")
+        )
 
 
 class CandidateTests(unittest.TestCase):

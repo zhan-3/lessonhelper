@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import time
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from course_progress.explorer import (
     launch_browser_context,
     resolve_profile_dir,
 )
+from course_progress.credentials import LoginCredentials, credential_store
 
 from .notice import load_notice
 from .discovery import AcademicInterfaceDiscovery, TARGET_SELECTION, TARGET_TIMETABLE
@@ -29,6 +31,11 @@ from .selection_entry import (
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="course-selection")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    configure = subparsers.add_parser(
+        "configure-login", help="使用 Windows DPAPI 加密保存 WebVPN 登录信息"
+    )
+    configure.add_argument("--profile-root", type=Path, default=Path(".private/course-progress"))
+    configure.add_argument("--username", help="学号/工号；省略时交互输入")
     explore = subparsers.add_parser(
         "explore-entry", help="只读观察已确认通知对应的教务选课入口"
     )
@@ -52,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
         discover.add_argument("--login-timeout-seconds", type=int, default=600)
         discover.add_argument("--wait-seconds", type=int, default=30)
         discover.add_argument("--max-clicks", type=int, default=8)
+        discover.add_argument(
+            "--persistent-session",
+            action="store_true",
+            help="复用持久登录 profile；默认使用 Playwright 临时无痕会话",
+        )
     return parser
 
 
@@ -65,6 +77,7 @@ def run_discovery(args: argparse.Namespace) -> int:
             browser_name=args.browser,
             profile_root=args.profile_root,
             output_root=args.private_root.resolve(),
+            persistent_session=args.persistent_session,
         ).discover(
             args.discovery_target,
             portal_url=args.url,
@@ -76,6 +89,16 @@ def run_discovery(args: argparse.Namespace) -> int:
         f"发现结果：目标页面={'是' if report.target_found else '否'}，"
         f"点击={report.clicks}，接口={report.captures}，拦截={report.blocked_requests}"
     )
+    return 0
+
+
+def run_configure_login(args: argparse.Namespace) -> int:
+    username = (args.username or input("学号/工号：")).strip()
+    password = getpass.getpass("统一身份认证密码（输入不会显示）：")
+    credential_store(args.profile_root).save(
+        LoginCredentials(username=username, password=password)
+    )
+    print("登录信息已由 Windows DPAPI 加密保存，仅当前 Windows 用户可解密。")
     return 0
 
 
@@ -134,6 +157,8 @@ def run_explore_entry(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "configure-login":
+        return run_configure_login(args)
     if args.command == "explore-entry":
         return run_explore_entry(args)
     if args.command in {"discover-timetable", "discover-selection"}:

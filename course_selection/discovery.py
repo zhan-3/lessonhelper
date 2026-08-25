@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlsplit
 from playwright.sync_api import BrowserContext, Error, Playwright, Response
 
 from course_progress.capture import CaptureStore
+from course_progress.sanitizer import sanitize_text, sanitize_url
 from course_progress.session import AcademicBrowserSession
 
 
@@ -29,12 +30,22 @@ TARGET_KEYWORDS = {
         "课表",
     ),
     TARGET_SELECTION: (
+        "全校任选课",
+        "人文社科限选课",
+        "创新实验课",
+        "限选课",
+        "必修课",
         "学生选课",
         "选课中心",
         "课程选课",
         "网上选课",
         "选课",
     ),
+}
+
+TARGET_FRAME_MARKERS = {
+    TARGET_TIMETABLE: ("/kbcx/querygrkb",),
+    TARGET_SELECTION: (),
 }
 
 INTERMEDIATE_KEYWORDS = (
@@ -44,7 +55,6 @@ INTERMEDIATE_KEYWORDS = (
     "教务",
     "本科生",
     "学生服务",
-    "学生",
     "academic",
     "student",
     "jwgl",
@@ -102,6 +112,7 @@ class DiscoveryControl:
     text: str
     frame_url: str
     locator: Any
+    metadata: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -125,18 +136,44 @@ def score_discovery_control(
     """Rank navigation and read-only query controls; reject mutation controls."""
     if target not in TARGET_KEYWORDS:
         raise ValueError(f"未知发现目标：{target}")
-    searchable = f"{text} {href}".strip().lower()
+    normalized_text = "".join(text.split()).lower()
+    searchable = f"{normalized_text} {href}".strip().lower()
     if not searchable or any(marker.lower() in searchable for marker in CONTROL_BLOCKLIST):
         return -1
-    target_hits = [
-        keyword for keyword in TARGET_KEYWORDS[target] if keyword.lower() in searchable
-    ]
+    if target_page_reached:
+        if normalized_text in {keyword.lower() for keyword in SAFE_QUERY_KEYWORDS}:
+            return 60
+        return -1
+    if target == TARGET_SELECTION:
+        priorities = (
+            ("全校任选课", 240),
+            ("人文社科限选课", 235),
+            ("创新实验课", 230),
+            ("限选课", 220),
+            ("必修课", 215),
+            ("体育选课", 210),
+            ("英语选课", 205),
+            ("跨专业选课", 200),
+            ("双学位选课", 195),
+            ("学生选课", 180),
+            ("选课中心", 175),
+            ("微专业选课", 120),
+        )
+        for keyword, score in priorities:
+            if keyword.lower() in searchable:
+                return score
+    if target == TARGET_TIMETABLE:
+        if any(
+            keyword in searchable
+            for keyword in ("我的课表", "个人课表", "学生课表", "课表查询")
+        ):
+            return 240
+        if "学生选课" in searchable:
+            # The legacy academic system exposes timetable queries below this menu.
+            return 180
+    target_hits = [keyword for keyword in TARGET_KEYWORDS[target] if keyword.lower() in searchable]
     if target_hits:
         return 100 + max(len(keyword) for keyword in target_hits)
-    if target_page_reached and any(
-        keyword.lower() in searchable for keyword in SAFE_QUERY_KEYWORDS
-    ):
-        return 60
     if any(keyword.lower() in searchable for keyword in INTERMEDIATE_KEYWORDS):
         return 30
     return -1
@@ -210,6 +247,7 @@ class InterfaceDiscovery:
         self.target_pages: list[Any] = []
         self.portal_redirects: list[str] = []
         self.blocked_requests = 0
+        self.dom_snapshots: list[dict[str, Any]] = []
 
     def _guard_route(self, route) -> None:
         request = route.request
@@ -250,11 +288,19 @@ class InterfaceDiscovery:
         print(f"接口记录：{candidate.score:02d} {request.method} {candidate.url[:100]}")
 
     def _page_matches_target(self, page) -> bool:
+        return any(self._frame_matches_target(frame) for frame in page.frames)
+
+    def _frame_matches_target(self, frame) -> bool:
+        markers = TARGET_FRAME_MARKERS[self.target]
+        if markers:
+            return any(marker in frame.url.lower() for marker in markers)
         try:
-            body = (page.locator("body").inner_text(timeout=700) or "").lower()
+            body = (frame.locator("body").inner_text(timeout=700) or "").lower()
         except Error:
             return False
-        return any(keyword.lower() in body for keyword in TARGET_KEYWORDS[self.target])
+        if self.target == TARGET_SELECTION:
+            return "选择课程" in body and "已选课程" in body
+        return False
 
     def _refresh_target_pages(self, context: BrowserContext) -> None:
         for page in context.pages:
@@ -264,11 +310,20 @@ class InterfaceDiscovery:
                 self.target_pages.append(page)
                 print(f"目标页面：{page.title()} | {page.url[:110]}")
 
-    def _controls(self, context: BrowserContext) -> list[DiscoveryControl]:
+    def _controls(
+        self, context: BrowserContext
+    ) -> tuple[list[DiscoveryControl], list[dict[str, Any]]]:
         found: list[DiscoveryControl] = []
+        inventory: list[dict[str, Any]] = []
         target_reached = bool(self.target_pages)
         for page in context.pages:
-            for frame in page.frames:
+            # Before reaching the destination, only inspect the academic shell's
+            # menu tree. Content iframes contain tabs such as “备选课程”, which are
+            # not navigation entries and previously caused false clicks.
+            frames = page.frames if target_reached else (page.main_frame,)
+            for frame in frames:
+                if target_reached and not self._frame_matches_target(frame):
+                    continue
                 controls = frame.locator(CONTROL_SELECTOR)
                 try:
                     count = min(controls.count(), 200)
@@ -283,27 +338,83 @@ class InterfaceDiscovery:
                         if not text:
                             text = (locator.get_attribute("aria-label") or locator.get_attribute("title") or "")[:120]
                         href = locator.get_attribute("href") or ""
+                        metadata = locator.evaluate(
+                            """(element, index) => {
+                              const rect = element.getBoundingClientRect();
+                              const owner = element.closest(
+                                "li, [role='menuitem'], .menu, .submenu, .nav-item"
+                              );
+                              return {
+                                index,
+                                tag: element.tagName.toLowerCase(),
+                                role: element.getAttribute('role') || '',
+                                href: element.getAttribute('href') || '',
+                                onclick: element.getAttribute('onclick') || '',
+                                ownerText: owner && owner !== element
+                                  ? (owner.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 160)
+                                  : '',
+                                box: {
+                                  x: Math.round(rect.x), y: Math.round(rect.y),
+                                  width: Math.round(rect.width), height: Math.round(rect.height)
+                                }
+                              };
+                            }""",
+                            index,
+                        )
                         score = score_discovery_control(
                             self.target,
                             text=text,
                             href=href,
                             target_page_reached=target_reached,
                         )
+                        identity = f"{frame.url}|{metadata['tag']}|{text}|{href}|{index}"
+                        safe_metadata = {
+                            **metadata,
+                            "href": sanitize_url(href) if href.startswith(("http://", "https://")) else sanitize_text(href),
+                            "onclick": sanitize_text(metadata["onclick"])[:240],
+                        }
+                        inventory.append(
+                            {
+                                "identity": sanitize_text(identity),
+                                "text": sanitize_text(text),
+                                "frame_url": sanitize_url(frame.url),
+                                "score": score,
+                                **safe_metadata,
+                            }
+                        )
                         if score < 0:
                             continue
-                        identity = f"{frame.url}|{text}|{href}"
                         if identity in self.visited:
                             continue
-                        if href.startswith(("javascript:", "mailto:")):
+                        if href.startswith("mailto:"):
                             continue
                         if href.startswith(("http://", "https://")) and not _same_origin(frame.url, href):
                             continue
                         found.append(
-                            DiscoveryControl(score, identity, text, frame.url, locator)
+                            DiscoveryControl(
+                                score, identity, text, frame.url, locator, safe_metadata
+                            )
                         )
                     except Error:
                         continue
-        return sorted(found, key=lambda item: (-item.score, item.identity))
+        return sorted(found, key=lambda item: (-item.score, item.identity)), inventory
+
+    def _record_dom_snapshot(
+        self,
+        stage: str,
+        inventory: list[dict[str, Any]],
+        *,
+        newly_visible: list[str] | None = None,
+    ) -> None:
+        self.dom_snapshots.append(
+            {
+                "sequence": len(self.dom_snapshots) + 1,
+                "stage": stage,
+                "target_reached": bool(self.target_pages),
+                "newly_visible": newly_visible or [],
+                "controls": inventory,
+            }
+        )
 
     def _click(self, control: DiscoveryControl) -> bool:
         self.visited.add(control.identity)
@@ -351,6 +462,14 @@ class InterfaceDiscovery:
                     if identity not in self.visited:
                         self.visited.add(identity)
                         print(f"自动导航：门户目录 -> {target_url[:110]}")
+                        self.click_log.append(
+                            {
+                                "score": 120,
+                                "text": "门户目录：新教务系统",
+                                "frame_url": pages[-1].url,
+                                "result": "navigated",
+                            }
+                        )
                         pages[-1].goto(
                             target_url,
                             wait_until="domcontentloaded",
@@ -359,7 +478,8 @@ class InterfaceDiscovery:
                         pages[-1].wait_for_timeout(1_500)
                         clicks += 1
                         continue
-            controls = self._controls(context)
+            controls, inventory = self._controls(context)
+            self._record_dom_snapshot("before-click", inventory)
             if not controls:
                 idle_rounds += 1
                 if self.target_pages and idle_rounds >= 3:
@@ -368,15 +488,94 @@ class InterfaceDiscovery:
                 (pages[-1].wait_for_timeout(500) if pages else time.sleep(0.5))
                 continue
             idle_rounds = 0
-            if self._click(controls[0]):
+            selected = controls[0]
+            before_identities = {item["identity"] for item in inventory}
+            if self._click(selected):
                 clicks += 1
             pages = context.pages
             (pages[-1].wait_for_timeout(1200) if pages else time.sleep(1.2))
+            self._refresh_target_pages(context)
+            _, after_inventory = self._controls(context)
+            newly_visible = [
+                item["text"]
+                for item in after_inventory
+                if item["identity"] not in before_identities
+            ]
+            self._record_dom_snapshot(
+                f"after-click: {sanitize_text(selected.text)}",
+                after_inventory,
+                newly_visible=newly_visible,
+            )
+            if newly_visible:
+                print(f"菜单展开：新增 {len(newly_visible)} 个可见控件")
 
         self._refresh_target_pages(context)
         self.output_root.mkdir(parents=True, exist_ok=True)
+        target_contracts: list[dict[str, Any]] = []
+        for page in self.target_pages:
+            for frame in page.frames:
+                if not self._frame_matches_target(frame):
+                    continue
+                try:
+                    html_path = self.output_root / "target-frame.html"
+                    html_path.write_text(frame.content(), encoding="utf-8")
+                    forms = frame.locator("form").evaluate_all(
+                        """forms => forms.map(form => ({
+                          method: (form.method || 'GET').toUpperCase(),
+                          action: form.action,
+                          fields: Array.from(form.elements).map(field => ({
+                            tag: field.tagName.toLowerCase(),
+                            type: field.type || '',
+                            name: field.name || ''
+                          })),
+                          selects: Array.from(form.querySelectorAll('select')).map(select => ({
+                            name: select.name || '',
+                            options: Array.from(select.options).map(option => ({
+                              text: option.textContent.trim(), value: option.value
+                            }))
+                          }))
+                        }))"""
+                    )
+                    for form in forms:
+                        form["action"] = sanitize_url(form.get("action", ""))
+                    target_contracts.append(
+                        {
+                            "url": sanitize_url(frame.url),
+                            "html": html_path.name,
+                            "forms": forms,
+                        }
+                    )
+                except Error as error:
+                    target_contracts.append({"error": str(error)[:180]})
+        (self.output_root / "target-contract.json").write_text(
+            json.dumps(target_contracts, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        page_diagnostics: list[dict[str, Any]] = []
+        for index, page in enumerate(context.pages):
+            try:
+                screenshot_path = self.output_root / f"page-{index + 1}.png"
+                page.screenshot(path=str(screenshot_path), full_page=True)
+                page_diagnostics.append(
+                    {
+                        "title": page.title(),
+                        "url": sanitize_url(page.url),
+                        "frames": [sanitize_url(frame.url) for frame in page.frames],
+                        "screenshot": screenshot_path.name,
+                    }
+                )
+            except Error as error:
+                page_diagnostics.append({"error": str(error)[:180]})
+        (self.output_root / "pages.json").write_text(
+            json.dumps(page_diagnostics, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         (self.output_root / "clicks.json").write_text(
             json.dumps(self.click_log, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (self.output_root / "dom-snapshots.json").write_text(
+            json.dumps(self.dom_snapshots, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
         candidates = self.store.write_candidates()
         print(f"自动点击：{clicks}；捕获 JSON：{self.captured}")
@@ -403,11 +602,13 @@ class AcademicInterfaceDiscovery:
         browser_name: str,
         profile_root: Path,
         output_root: Path,
+        persistent_session: bool = False,
     ):
         self.playwright = playwright
         self.browser_name = browser_name
         self.profile_root = profile_root
         self.output_root = output_root
+        self.persistent_session = persistent_session
 
     def discover(
         self,
@@ -423,14 +624,15 @@ class AcademicInterfaceDiscovery:
             self.playwright,
             browser_name=self.browser_name,
             profile_root=self.profile_root,
+            persistent=self.persistent_session,
         ) as session:
             if session.context is None:
                 raise RuntimeError("浏览器会话未初始化")
-            session.context.route("**/*", navigator._guard_route)
             session.context.on("response", navigator._handle_response)
             session.open_authenticated(
                 portal_url, timeout_seconds=login_timeout_seconds
             )
+            session.context.route("**/*", navigator._guard_route)
             return navigator.run(
                 session.context,
                 max_clicks=max_clicks,
