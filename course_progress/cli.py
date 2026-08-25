@@ -13,7 +13,6 @@ from playwright.sync_api import sync_playwright
 from .collector import (
     CollectionCheckpoint,
     PlaywrightGradeCollector,
-    find_authenticated_academic_frame,
     load_checkpoint,
     save_checkpoint,
     wait_for_reauthentication,
@@ -173,11 +172,7 @@ def run_collect(args: argparse.Namespace) -> int:
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(args.url, wait_until="domcontentloaded", timeout=60_000)
-            if find_authenticated_academic_frame(context.pages) is not None:
-                print("检测到已有教务系统会话，正在复用；会话失效时才需要重新认证。")
-            else:
-                print("未检测到有效会话，请在浏览器中完成统一身份认证。")
-                print("进入教务系统后将自动采集。")
+            print("正在检查已有会话；会话失效时请在浏览器中完成统一身份认证。")
             checkpoint_path = private_root / "collection-checkpoint.json"
             checkpoint = load_checkpoint(checkpoint_path)
             checkpoint_state = checkpoint

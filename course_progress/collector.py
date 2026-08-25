@@ -370,6 +370,7 @@ class PlaywrightGradeCollector:
                 on_session_expired()
             frame = wait_for_academic_frame(page, frame_timeout_seconds)
             grade_url = resolve_academic_url(frame.url, GRADE_ENDPOINT)
+            frame.goto(grade_url, wait_until="domcontentloaded", timeout=60_000)
 
         def fetch_page(semester: str, page_number: int) -> str:
             result = frame.evaluate(
