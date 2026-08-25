@@ -26,6 +26,10 @@ nul
 
 # Playwright MCP logs
 .playwright-mcp/
+.playwright-cli/
 
 # Playwright screenshots from exploration
 *.png
+
+# Private browser profiles and captured portal data
+.private/
