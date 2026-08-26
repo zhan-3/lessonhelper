@@ -13,7 +13,9 @@
     "react": "latest",
     "react-dom": "latest",
     "openapi-typescript": "latest",
-    "vitest": "latest"
+    "vitest": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest"
   },
   "devDependencies": {}
 }

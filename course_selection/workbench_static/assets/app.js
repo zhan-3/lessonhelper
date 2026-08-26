@@ -1,1 +1,0 @@
-fetch('/api/state').then(r=>r.json()).then(s=>{const snaps=s.snapshots;document.querySelector('#state').innerHTML=`<div class="card">教务会话：${s.academic_session.state}</div><div class="card">学生画像：${s.profile?.grade||'尚未配置'}级</div><div class="card">课表快照：${snaps.timetable?.source_at||'暂无'}</div><div class="card">待选课程快照：${snaps.selection?.source_at||'暂无'}</div>`})
