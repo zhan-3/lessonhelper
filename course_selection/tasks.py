@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from .gateway import AcademicGateway
-from .persistence import WorkspaceDatabase, utc_now
+from .persistence import WorkspaceDatabase, sanitize_for_storage, utc_now
 
 
 class TaskState(str, Enum):
@@ -56,7 +56,7 @@ class ObservationService:
     def submit(self, operation: str, context: dict[str, Any] | None = None) -> SubmittedTask:
         if operation not in {"connect", "refresh-selection", "refresh-timetable"}:
             raise ValueError("unsupported observation operation")
-        context = context or {}
+        context = sanitize_for_storage(context or {})
         key = hashlib.sha256(json.dumps([operation, context], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         with self._lock, self.database.connection:
             row = self.database.connection.execute(
@@ -97,14 +97,19 @@ class ObservationService:
         return self._done.setdefault(identity, threading.Event()).wait(timeout)
 
     def _update(self, identity: str, state: str, progress: dict[str, Any] | None = None, error: str = "") -> None:
-        safe_error = error[:1000]
+        safe_error = str(sanitize_for_storage(error))[:1000]
         with self._lock, self.database.connection:
-            self.database.connection.execute("update observation_tasks set state=?,updated_at=?,progress=?,error=? where id=?", (state, utc_now(), json.dumps(progress or {}, ensure_ascii=False), safe_error, identity))
+            safe_progress = sanitize_for_storage(progress or {})
+            self.database.connection.execute("update observation_tasks set state=?,updated_at=?,progress=?,error=? where id=?", (state, utc_now(), json.dumps(safe_progress, ensure_ascii=False), safe_error, identity))
 
     def _run(self) -> None:
         while True:
             identity = self._queue.get()
             if identity is None:
+                if self.gateway:
+                    self.gateway.close()
+                    self.gateway = None
+                self.session_state = "disconnected"
                 return
             task = self.inspect(identity)
             if not task or task["state"] == TaskState.CANCELLED.value:
@@ -112,6 +117,12 @@ class ObservationService:
             try:
                 self._execute(identity)
             except Exception as error:
+                task = self.inspect(identity)
+                if task and task["operation"] in {"refresh-selection", "refresh-timetable"}:
+                    self.database.record_failed_attempt(
+                        "selection" if task["operation"] == "refresh-selection" else "timetable",
+                        str(error),
+                    )
                 self._update(identity, TaskState.FAILED.value, error=str(error))
             finally:
                 self._done.setdefault(identity, threading.Event()).set()
@@ -162,6 +173,4 @@ class ObservationService:
         self._queue.put(None)
         if self._thread:
             self._thread.join(timeout=5)
-        if self.gateway:
-            self.gateway.close()
-        self.session_state = "disconnected"
+        # The worker owns the gateway and closes it when it consumes the sentinel.

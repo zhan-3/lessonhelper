@@ -82,6 +82,20 @@ def create_workbench_app(
     def cancel_task(identity: str):
         return (jsonify({"cancelled": True}), 202) if service.cancel(identity) else (jsonify({"cancelled": False}), 409)
 
+    @app.post("/api/plans")
+    def save_plan():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or not isinstance(body.get("goals"), list):
+            return jsonify({"error": "goals must be an array"}), 400
+        if not all(isinstance(goal, dict) for goal in body["goals"]):
+            return jsonify({"error": "each goal must be an object"}), 400
+        return jsonify(core.save_plan(body["goals"])), 201
+
+    @app.get("/api/plans/latest")
+    def latest_plan():
+        plan = database.latest_plan()
+        return (jsonify(plan), 200) if plan else (jsonify({"error": "not found"}), 404)
+
     @app.post("/api/notices/candidates")
     def create_notice_candidate():
         body = request.get_json(silent=True)

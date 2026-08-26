@@ -87,6 +87,16 @@ class WorkspaceDatabaseTests(unittest.TestCase):
 
 
 class ObservationServiceTests(unittest.TestCase):
+    def test_task_context_is_sanitized_before_persistence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            service = ObservationService(database, FakeGateway, autostart=False)
+            task = service.submit("connect", {"token": "secret", "nested": {"authorization": "Bearer abc"}})
+            context = database.connection.execute("select context from observation_tasks where id=?", (task.id,)).fetchone()[0]
+            self.assertNotIn("secret", context)
+            self.assertNotIn("Bearer abc", context)
+            database.close()
+
     def test_equivalent_pending_refreshes_are_coalesced(self):
         with tempfile.TemporaryDirectory() as directory:
             database = WorkspaceDatabase.open(Path(directory))
@@ -132,6 +142,7 @@ class ObservationServiceTests(unittest.TestCase):
             self.assertEqual(TaskState.WAITING_FOR_AUTHENTICATION.value, service.session_state)
             self.assertFalse(gateway.closed)
             service.close()
+            self.assertTrue(gateway.closed)
             database.close()
 
 
@@ -175,6 +186,23 @@ class WorkbenchApiTests(unittest.TestCase):
             state = client.get("/api/state").get_json()
             headers = {"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]}
             self.assertEqual(400, client.post("/api/tasks", json={"operation": "nope"}, headers=headers).status_code)
+            app.extensions["observation_service"].close()
+            app.extensions["workspace_database"].close()
+
+    def test_read_only_plan_is_persisted_without_starting_gateway(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = FakeGateway()
+            app = create_workbench_app(Path(directory), gateway_factory=lambda: gateway)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]}
+            response = client.post("/api/plans", json={"goals": [{"course_identity": "MATH", "rank": 1}]}, headers=headers)
+            self.assertEqual(201, response.status_code)
+            self.assertEqual("blocked", response.get_json()["status"])
+            latest = client.get("/api/plans/latest")
+            self.assertEqual(200, latest.status_code)
+            self.assertEqual(response.get_json()["id"], latest.get_json()["id"])
+            self.assertEqual(0, gateway.connect_count)
             app.extensions["observation_service"].close()
             app.extensions["workspace_database"].close()
 

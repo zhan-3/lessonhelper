@@ -13,6 +13,7 @@ from typing import Any
 from .notice import fetch_notice_text
 from .notice_discovery import candidate_from_text, notice_diff
 from .persistence import WorkspaceDatabase
+from .planning import ReadOnlyPlan, build_read_only_plan
 
 
 class NoticeReadError(ValueError):
@@ -40,6 +41,7 @@ class WorkbenchService:
             "profile": self.database.current_profile(),
             "confirmed_notice": self.database.confirmed_notice(),
             "snapshots": {"selection": selection, "timetable": timetable},
+            "latest_plan": self.database.latest_plan(),
             "stale": {"selection": is_stale(selection, 1800), "timetable": is_stale(timetable, 86400)},
             "academic_session": {"state": session_state},
         }
@@ -51,7 +53,7 @@ class WorkbenchService:
         profile, notice = self.database.current_profile(), self.database.confirmed_notice()
         windows = (notice or {}).get("windows", [])
         grade = str((profile or {}).get("grade", ""))
-        allowed = [item for item in windows if item.get("action") == "selection" and item.get("method") == "academic_system" and (not grade or grade in item.get("grades", []))]
+        allowed = [item for item in windows if item.get("action") == "selection" and item.get("method") == "academic_system" and grade and grade in item.get("grades", [])]
         categories = list(dict.fromkeys(code for item in allowed for code in item.get("category_codes", [])))
         return {
             "term": (notice or {}).get("term", ""),
@@ -86,3 +88,25 @@ class WorkbenchService:
 
     def confirm_notice(self, identity: str) -> dict[str, Any]:
         return self.database.confirm_notice(identity)
+
+    def build_plan(self, goals: list[dict[str, Any]]) -> ReadOnlyPlan:
+        """Build a local plan from the latest applicable snapshots.
+
+        This service method intentionally has no gateway dependency; callers
+        can expose it through HTTP, CLI, or another adapter without granting
+        the planner any academic write capability.
+        """
+        profile = self.database.current_profile() or {}
+        notice = self.database.confirmed_notice() or {}
+        timetable = self.database.latest_snapshot("timetable")
+        selection = self.database.latest_snapshot("selection")
+        term = str(notice.get("term") or (timetable or {}).get("term") or "")
+        return build_read_only_plan(
+            term=term, profile_id=str(profile.get("version_id", "")),
+            notice_id=str(notice.get("version_id", "")), timetable_snapshot=timetable,
+            selection_snapshot=selection, goals=goals,
+        )
+
+    def save_plan(self, goals: list[dict[str, Any]]) -> dict[str, Any]:
+        """Persist a read-only plan; this method has no gateway or write path."""
+        return self.database.save_plan(self.build_plan(goals).to_dict())
