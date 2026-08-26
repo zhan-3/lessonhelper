@@ -136,6 +136,25 @@ class ObservationServiceTests(unittest.TestCase):
 
 
 class WorkbenchApiTests(unittest.TestCase):
+    def test_production_frontend_is_served_from_configured_build_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            frontend = Path(directory) / "frontend"
+            (frontend / "assets").mkdir(parents=True)
+            (frontend / "index.html").write_text(
+                '<div id="root">react-build</div>', encoding="utf-8"
+            )
+            (frontend / "assets" / "app.js").write_text("bundle", encoding="utf-8")
+            app = create_workbench_app(
+                Path(directory) / "workspace",
+                frontend_root=frontend,
+                gateway_factory=FakeGateway,
+            )
+            client = app.test_client()
+            self.assertIn("react-build", client.get("/").get_data(as_text=True))
+            self.assertEqual("bundle", client.get("/assets/app.js").get_data(as_text=True))
+            app.extensions["observation_service"].close()
+            app.extensions["workspace_database"].close()
+
     def test_notice_check_requires_csrf_and_lists_candidates(self):
         with tempfile.TemporaryDirectory() as directory:
             app = create_workbench_app(Path(directory), gateway_factory=FakeGateway)

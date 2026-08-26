@@ -3,40 +3,46 @@
 from __future__ import annotations
 
 import secrets
-import json
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 from flask import Flask, abort, jsonify, request, send_from_directory
 
 from .gateway import AcademicGateway, PlaywrightAcademicGateway
-from .notice_discovery import candidate_from_text, notice_diff
-from .notice import fetch_notice_text
 from .persistence import WorkspaceDatabase
 from .tasks import ObservationService
 from .timetable import import_timetable, timetable_snapshot_payload
+from .workbench_service import NoticeReadError, WorkbenchService
 
 
-def _stale(snapshot: dict | None, seconds: int) -> bool:
-    if not snapshot:
-        return False
-    source_at = datetime.fromisoformat(snapshot["source_at"])
-    return (datetime.now(timezone.utc) - source_at).total_seconds() > seconds
-
-
-def create_workbench_app(root: Path | str = ".private/academic-selection", *, gateway_factory: Callable[[], AcademicGateway] | None = None) -> Flask:
+def create_workbench_app(
+    root: Path | str = ".private/academic-selection",
+    *,
+    gateway_factory: Callable[[], AcademicGateway] | None = None,
+    frontend_root: Path | str | None = None,
+) -> Flask:
     root = Path(root)
     database = WorkspaceDatabase.open(root)
     if gateway_factory is None:
         gateway_factory = lambda: PlaywrightAcademicGateway(root.parent / "course-progress", root)
     service = ObservationService(database, gateway_factory)
-    frontend = Path(__file__).with_name("workbench_static")
+    core = WorkbenchService(database)
+    # The Vite config writes its production bundle here.  Keeping the bundle
+    # beside the Python package makes the same Flask entry point work from a
+    # checkout and from an installed wheel.  Tests and embedders may provide a
+    # different directory without changing application code.
+    frontend = Path(frontend_root) if frontend_root is not None else Path(__file__).with_name("workbench_static")
+    frontend = frontend.resolve()
     app = Flask(__name__, static_folder=None)
-    app.config.update(WORKBENCH_ROOT=root, CSRF_TOKEN=secrets.token_urlsafe(24))
+    app.config.update(
+        WORKBENCH_ROOT=root,
+        WORKBENCH_FRONTEND=frontend,
+        CSRF_TOKEN=secrets.token_urlsafe(24),
+    )
     app.extensions["workspace_database"] = database
     app.extensions["observation_service"] = service
+    app.extensions["workbench_service"] = core
 
     @app.before_request
     def protect_state_changes():
@@ -48,9 +54,7 @@ def create_workbench_app(root: Path | str = ".private/academic-selection", *, ga
 
     @app.get("/api/state")
     def state():
-        selection = database.latest_snapshot("selection")
-        timetable = database.latest_snapshot("timetable")
-        return jsonify({"profile": database.current_profile(), "confirmed_notice": database.confirmed_notice(), "snapshots": {"selection": selection, "timetable": timetable}, "stale": {"selection": _stale(selection, 1800), "timetable": _stale(timetable, 86400)}, "academic_session": {"state": service.session_state}, "csrf_token": app.config["CSRF_TOKEN"]})
+        return jsonify(core.state(session_state=service.session_state, csrf_token=app.config["CSRF_TOKEN"]))
 
     @app.post("/api/tasks")
     def submit_task():
@@ -65,18 +69,7 @@ def create_workbench_app(root: Path | str = ".private/academic-selection", *, ga
             return jsonify({"error": "context must be an object"}), 400
         context = dict(raw_context)
         if operation == "refresh-selection":
-            profile, notice = database.current_profile(), database.confirmed_notice()
-            windows = (notice or {}).get("windows", [])
-            grade = str((profile or {}).get("grade", ""))
-            allowed = [item for item in windows if item.get("action") == "selection" and item.get("method") == "academic_system" and (not grade or grade in item.get("grades", []))]
-            context = {
-                "term": (notice or {}).get("term", ""),
-                "semester_label": str((notice or {}).get("term", "")).replace("年", "").replace("学期", "").replace(" ", ""),
-                "profile_id": (profile or {}).get("version_id"),
-                "notice_id": (notice or {}).get("version_id"),
-                "allowed_categories": list(dict.fromkeys(code for item in allowed for code in item.get("category_codes", []))),
-                "allowed_windows": {code: [item for item in allowed if code in item.get("category_codes", [])] for code in dict.fromkeys(code for item in allowed for code in item.get("category_codes", []))},
-            }
+            context = core.refresh_context()
         task = service.submit(operation, context)
         return jsonify({"id": task.id, "state": task.state}), 202
 
@@ -96,40 +89,22 @@ def create_workbench_app(root: Path | str = ".private/academic-selection", *, ga
             return jsonify({"error": "JSON object required"}), 400
         source_url = str(body.get("source_url", "")).strip()
         text = str(body.get("text", "")).strip()
-        if not text and source_url:
-            try:
-                text = fetch_notice_text(source_url)
-            except (OSError, ValueError) as error:
-                return jsonify({"error": f"unable to read notice: {error}"}), 400
-        if not source_url or not text:
-            return jsonify({"error": "source_url and text are required"}), 400
         try:
-            candidate = candidate_from_text(
-                source_url, text,
-                official_hosts=tuple(app.config.get("OFFICIAL_NOTICE_HOSTS", ("jwc.hitwh.edu.cn",))),
-            )
+            saved, diff = core.create_notice_candidate(source_url, text)
+        except NoticeReadError as error:
+            return jsonify({"error": str(error)}), 400
         except ValueError as error:
             return jsonify({"error": str(error)}), 422
-        previous = database.confirmed_notice()
-        saved = database.save_notice(candidate)
-        return jsonify({"notice": saved, "diff": notice_diff(previous, saved) if previous else ""}), 201
+        return jsonify({"notice": saved, "diff": diff}), 201
 
     @app.get("/api/notices/candidates")
     def list_notice_candidates():
-        rows = database.connection.execute(
-            "select id,payload,status,created_at from notice_versions order by created_at desc"
-        ).fetchall()
-        notices = []
-        for row in rows:
-            payload = json.loads(row["payload"])
-            payload.update(version_id=row["id"], status=row["status"], created_at=row["created_at"])
-            notices.append(payload)
-        return jsonify({"notices": notices})
+        return jsonify({"notices": core.list_notice_candidates()})
 
     @app.post("/api/notices/<identity>/confirm")
     def confirm_notice(identity: str):
         try:
-            return jsonify(database.confirm_notice(identity))
+            return jsonify(core.confirm_notice(identity))
         except ValueError as error:
             return jsonify({"error": str(error)}), 409
 

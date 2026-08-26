@@ -101,10 +101,13 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         self._session.context.route("**/*", navigator._guard_route)
         progress("reading", {"category": categories[0], "page": 1})
         report = navigator.run(self._session.context, max_clicks=8, wait_seconds=30)
-        if not report.selection_query_path:
+        if not report.selection_query_payload:
             return {"status": "interface_unconfirmed", "sections": []}
-        import json
-        payload = json.loads(report.selection_query_path.read_text(encoding="utf-8"))
+        # Discovery keeps a JSON artifact for read-only diagnostics, but the
+        # refresh path consumes its structured result directly.  SQLite is
+        # written by ObservationService after this method returns, so a stale
+        # diagnostic file cannot be published as a snapshot.
+        payload = report.selection_query_payload
         queries = payload.get("queries", [])
         complete = bool(queries) and all(item.get("complete") for item in queries)
         sections = [section for query in queries for section in query.get("sections", [])]

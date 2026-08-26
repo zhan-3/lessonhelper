@@ -179,6 +179,9 @@ class DiscoveryReport:
     candidates_path: Path
     click_log_path: Path
     selection_query_path: Path | None
+    # Structured selection results are returned directly to the caller.  The
+    # JSON path is retained only as a read-only diagnostic artifact.
+    selection_query_payload: dict[str, Any] | None = None
 
 
 def score_discovery_control(
@@ -578,13 +581,13 @@ class InterfaceDiscovery:
             )
             return False
 
-    def _query_selection_page(self) -> Path | None:
+    def _query_selection_page(self) -> tuple[dict[str, Any] | None, Path | None]:
         if (
             self.target != TARGET_SELECTION
             or not self.allowed_selection_categories
             or not self.notice_semester
         ):
-            return None
+            return None, None
         for page in self.target_pages:
             for frame in page.frames:
                 if not self._frame_matches_target(frame):
@@ -667,13 +670,17 @@ class InterfaceDiscovery:
                             }
                         )
                         print(f"课程查询失败 [{category}]：{str(error)[:160]}")
+                payload = {"queries": queries}
+                # Keep this file for operator diagnostics only.  Callers must
+                # consume ``payload`` in memory so stale JSON can never be
+                # mistaken for application state.
                 query_path = self.output_root / "selection-query.json"
                 query_path.write_text(
-                    json.dumps({"queries": queries}, ensure_ascii=False, indent=2),
+                    json.dumps(payload, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
-                return query_path
-        return None
+                return payload, query_path
+        return None, None
 
     def run(
         self,
@@ -828,7 +835,7 @@ class InterfaceDiscovery:
             json.dumps(self.visual_log, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        selection_query_path = self._query_selection_page()
+        selection_query_payload, selection_query_path = self._query_selection_page()
         candidates = self.store.write_candidates()
         print(f"自动点击：{clicks}；捕获 JSON：{self.captured}")
         print(f"点击审计：{self.output_root / 'clicks.json'}")
@@ -842,6 +849,7 @@ class InterfaceDiscovery:
             candidates_path=candidates,
             click_log_path=self.output_root / "clicks.json",
             selection_query_path=selection_query_path,
+            selection_query_payload=selection_query_payload,
         )
 
 
