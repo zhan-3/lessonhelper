@@ -13,14 +13,18 @@ class TimetableEntry:
     term: str
     course_code: str
     course_name: str
-    weekday: int
-    start_period: int
-    end_period: int
-    week_start: int
-    week_end: int
+    weekday: int | None
+    start_period: int | None
+    end_period: int | None
+    week_start: int | None
+    week_end: int | None
     week_parity: str
     location: str = ""
     week_numbers: tuple[int, ...] = ()
+    # ``unknown`` is deliberately distinct from an empty/free slot.  It is
+    # set when a source explicitly reports a pending time or cannot be
+    # parsed reliably, so conflict checking must ask the user to review it.
+    conflict_status: str = "known"
 
 
 HEADER_ALIASES = {
@@ -57,6 +61,13 @@ def _parse_int_range(value: str, label: str) -> tuple[int, int]:
     if len(numbers) == 1:
         return numbers[0], numbers[0]
     return min(numbers[0], numbers[1]), max(numbers[0], numbers[1])
+
+
+_UNKNOWN_TIME = re.compile(r"待定|未定|待安排|未知|时间未定|tbd|pending", re.I)
+
+
+def _is_unknown_time(value: str) -> bool:
+    return bool(_UNKNOWN_TIME.search(value.strip()))
 
 
 def _parse_week_numbers(value: str) -> tuple[int, ...]:
@@ -143,6 +154,8 @@ def _grid_entry_text(value: str) -> tuple[str, str, str]:
         week_match = re.search(r"\[([^]]+)\]", combined)
         week_text = week_match.group(1) if week_match else ""
         location = combined[week_match.end():].replace("周", "").strip() if week_match else ""
+    if not week_text and _is_unknown_time(combined if 'combined' in locals() else value):
+        week_text = "待定"
     if not week_text:
         raise ValueError(f"课程缺少教学周：{value}")
     return course_name, week_text, location
@@ -161,7 +174,12 @@ def _import_grid_timetable(rows: list[list[object]], expected_term: str | None) 
     for row in rows[2:]:
         if len(row) < 2 or not _clean(row[1]):
             continue
-        period_start, period_end = _parse_int_range(_clean(row[1]), "节次")
+        period_text = _clean(row[1])
+        unknown_period = _is_unknown_time(period_text)
+        if unknown_period:
+            period_start = period_end = None
+        else:
+            period_start, period_end = _parse_int_range(period_text, "节次")
         for column, weekday in weekdays.items():
             if column >= len(row) or not _clean(row[column]):
                 continue
@@ -170,8 +188,9 @@ def _import_grid_timetable(rows: list[list[object]], expected_term: str | None) 
                     continue
                 course_name, week_text, location = _grid_entry_text(raw_line)
                 week_numbers = _parse_week_numbers(week_text)
-                if not week_numbers:
-                    raise ValueError(f"无法解析教学周：{raw_line}")
+                unknown_time = unknown_period or _is_unknown_time(week_text) or not week_numbers
+                if unknown_time:
+                    week_numbers = ()
                 entries.append(
                     TimetableEntry(
                         term=term,
@@ -180,11 +199,12 @@ def _import_grid_timetable(rows: list[list[object]], expected_term: str | None) 
                         weekday=weekday,
                         start_period=period_start,
                         end_period=period_end,
-                        week_start=min(week_numbers),
-                        week_end=max(week_numbers),
+                        week_start=min(week_numbers) if week_numbers else None,
+                        week_end=max(week_numbers) if week_numbers else None,
                         week_parity="all",
                         location=location,
                         week_numbers=week_numbers,
+                        conflict_status="unknown" if unknown_time else "known",
                     )
                 )
     if not entries:
@@ -218,11 +238,16 @@ def import_timetable(path: Path, *, expected_term: str | None = None) -> tuple[T
             continue
         if expected_term and term != expected_term:
             raise ValueError(f"课表学期不匹配：发现 {term!r}，期望 {expected_term!r}")
-        period_start, period_end = _parse_int_range(
-            _value(row, headers, "periods"), "节次"
-        )
-        week_start, week_end = _parse_int_range(_value(row, headers, "weeks"), "周次")
-        week_numbers = _parse_week_numbers(_value(row, headers, "weeks"))
+        periods_text = _value(row, headers, "periods")
+        weeks_text = _value(row, headers, "weeks")
+        unknown_time = _is_unknown_time(periods_text) or _is_unknown_time(weeks_text)
+        if unknown_time:
+            period_start = period_end = week_start = week_end = None
+            week_numbers = ()
+        else:
+            period_start, period_end = _parse_int_range(periods_text, "节次")
+            week_start, week_end = _parse_int_range(weeks_text, "周次")
+            week_numbers = _parse_week_numbers(weeks_text)
         entries.append(
             TimetableEntry(
                 term=term,
@@ -236,6 +261,7 @@ def import_timetable(path: Path, *, expected_term: str | None = None) -> tuple[T
                 week_parity=_parse_parity(_value(row, headers, "week_parity")),
                 location=_value(row, headers, "location"),
                 week_numbers=week_numbers,
+                conflict_status="unknown" if unknown_time else "known",
             )
         )
     if not entries:
@@ -245,3 +271,27 @@ def import_timetable(path: Path, *, expected_term: str | None = None) -> tuple[T
 
 def entries_to_dict(entries: Iterable[TimetableEntry]) -> list[dict[str, object]]:
     return [asdict(entry) for entry in entries]
+
+
+def timetable_snapshot_payload(
+    entries: Iterable[TimetableEntry], *, source_name: str, source_kind: str = "user-imported",
+    source_at: str | None = None,
+) -> dict[str, object]:
+    """Build the persisted, explicitly sourced timetable representation.
+
+    Keeping this construction beside the importer prevents a file import from
+    being mistaken for a live academic read.  Unknown time rows remain in the
+    snapshot and carry ``conflict_status=unknown``.
+    """
+    materialized = tuple(entries)
+    if not materialized:
+        raise ValueError("timetable has no usable course records")
+    payload: dict[str, object] = {
+        "status": "complete",
+        "source_kind": source_kind,
+        "source_name": source_name,
+        "entries": entries_to_dict(materialized),
+    }
+    if source_at:
+        payload["source_at"] = source_at
+    return payload

@@ -25,7 +25,17 @@ class UnconfirmedAcademicGateway:
         return {"status": "interface_unconfirmed", "sections": []}
 
     def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
-        return {"status": "interface_unconfirmed", "entries": []}
+        # No timetable request contract has been confirmed.  Returning an
+        # explicit blocked result is important: an empty list would mean
+        # "free" to downstream conflict checks.  This method intentionally
+        # performs no navigation, guessing, or write request.
+        progress("interface_unconfirmed", {"target": "timetable", "message": "timetable read interface is not confirmed"})
+        return {
+            "status": "interface_unconfirmed",
+            "reason": "timetable_read_contract_unconfirmed",
+            "source_kind": "academic-unconfirmed",
+            "entries": [],
+        }
 
     def close(self) -> None:
         return None
@@ -60,6 +70,10 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         )
         self._session.__enter__()
         try:
+            # Authentication is an intentional, user-visible pause.  Publish
+            # this before entering the blocking browser wait so task observers
+            # can render the state while the user operates the browser.
+            progress("waiting_for_authentication", {"message": "waiting for authentication in the bundled browser"})
             self._session.open_authenticated(self.portal_url, timeout_seconds=600)
         except TimeoutError:
             progress("waiting_for_authentication", {"message": "authentication timed out; browser remains available"})

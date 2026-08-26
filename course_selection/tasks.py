@@ -20,6 +20,7 @@ class TaskState(str, Enum):
     CONNECTING = "connecting"
     WAITING_FOR_AUTHENTICATION = "waiting_for_authentication"
     READING = "reading"
+    INTERFACE_UNCONFIRMED = "interface_unconfirmed"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCEL_REQUESTED = "cancel_requested"
@@ -128,7 +129,10 @@ class ObservationService:
             return identity in self._cancelled
         def progress(state: str, details: dict[str, Any]) -> None:
             mapped = TaskState(state).value
-            self.session_state = "waiting_for_authentication" if mapped == TaskState.WAITING_FOR_AUTHENTICATION.value else self.session_state
+            if mapped == TaskState.WAITING_FOR_AUTHENTICATION.value:
+                self.session_state = TaskState.WAITING_FOR_AUTHENTICATION.value
+            elif mapped == TaskState.CONNECTING.value:
+                self.session_state = TaskState.CONNECTING.value
             self._update(identity, mapped, details)
         self._update(identity, TaskState.CONNECTING.value)
         self.session_state = "connecting"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+import json
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,9 +13,10 @@ from flask import Flask, abort, jsonify, request, send_from_directory
 
 from .gateway import AcademicGateway, PlaywrightAcademicGateway
 from .notice_discovery import candidate_from_text, notice_diff
+from .notice import fetch_notice_text
 from .persistence import WorkspaceDatabase
 from .tasks import ObservationService
-from .timetable import entries_to_dict, import_timetable
+from .timetable import import_timetable, timetable_snapshot_payload
 
 
 def _stale(snapshot: dict | None, seconds: int) -> bool:
@@ -52,9 +54,16 @@ def create_workbench_app(root: Path | str = ".private/academic-selection", *, ga
 
     @app.post("/api/tasks")
     def submit_task():
-        body = request.get_json(force=True)
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
         operation = body.get("operation", "")
-        context = dict(body.get("context", {}))
+        if operation not in {"connect", "refresh-selection", "refresh-timetable"}:
+            return jsonify({"error": "unsupported observation operation"}), 400
+        raw_context = body.get("context", {})
+        if not isinstance(raw_context, dict):
+            return jsonify({"error": "context must be an object"}), 400
+        context = dict(raw_context)
         if operation == "refresh-selection":
             profile, notice = database.current_profile(), database.confirmed_notice()
             windows = (notice or {}).get("windows", [])
@@ -82,14 +91,40 @@ def create_workbench_app(root: Path | str = ".private/academic-selection", *, ga
 
     @app.post("/api/notices/candidates")
     def create_notice_candidate():
-        body = request.get_json(force=True)
-        candidate = candidate_from_text(
-            body.get("source_url", ""), body.get("text", ""),
-            official_hosts=tuple(app.config.get("OFFICIAL_NOTICE_HOSTS", ("jwc.hitwh.edu.cn",))),
-        )
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        source_url = str(body.get("source_url", "")).strip()
+        text = str(body.get("text", "")).strip()
+        if not text and source_url:
+            try:
+                text = fetch_notice_text(source_url)
+            except (OSError, ValueError) as error:
+                return jsonify({"error": f"unable to read notice: {error}"}), 400
+        if not source_url or not text:
+            return jsonify({"error": "source_url and text are required"}), 400
+        try:
+            candidate = candidate_from_text(
+                source_url, text,
+                official_hosts=tuple(app.config.get("OFFICIAL_NOTICE_HOSTS", ("jwc.hitwh.edu.cn",))),
+            )
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 422
         previous = database.confirmed_notice()
         saved = database.save_notice(candidate)
         return jsonify({"notice": saved, "diff": notice_diff(previous, saved) if previous else ""}), 201
+
+    @app.get("/api/notices/candidates")
+    def list_notice_candidates():
+        rows = database.connection.execute(
+            "select id,payload,status,created_at from notice_versions order by created_at desc"
+        ).fetchall()
+        notices = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload.update(version_id=row["id"], status=row["status"], created_at=row["created_at"])
+            notices.append(payload)
+        return jsonify({"notices": notices})
 
     @app.post("/api/notices/<identity>/confirm")
     def confirm_notice(identity: str):
@@ -110,7 +145,12 @@ def create_workbench_app(root: Path | str = ".private/academic-selection", *, ga
             upload.save(temporary)
             expected = request.form.get("term") or None
             entries = import_timetable(temporary, expected_term=expected)
-            snapshot = database.publish_snapshot("timetable", entries[0].term, {"status": "complete", "entries": entries_to_dict(entries)}, source="user-imported")
+            payload = timetable_snapshot_payload(
+                entries, source_name=upload.filename or "timetable.xlsx",
+            )
+            snapshot = database.publish_snapshot(
+                "timetable", entries[0].term, payload, source="user-imported",
+            )
             return jsonify(snapshot), 201
         finally:
             temporary.unlink(missing_ok=True)

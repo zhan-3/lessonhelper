@@ -4,7 +4,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 
-from course_selection.timetable import import_timetable
+from course_selection.timetable import import_timetable, timetable_snapshot_payload
 
 
 class TimetableImportTests(unittest.TestCase):
@@ -75,3 +75,19 @@ class TimetableImportTests(unittest.TestCase):
         self.assertEqual(entries[0].week_numbers, (1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16))
         self.assertEqual(entries[0].location, "N楼-331")
         self.assertEqual(entries[1].weekday, 2)
+
+    def test_pending_time_is_conflict_unknown_not_free(self):
+        temp_dir, path = self._write_workbook(
+            [
+                ["学期", "课程名称", "星期", "节次", "周次"],
+                ["2026年秋季学期", "待定课程", "星期一", "待定", "待定"],
+            ]
+        )
+        self.addCleanup(temp_dir.cleanup)
+        entries = import_timetable(path, expected_term="2026年秋季学期")
+        self.assertEqual(entries[0].conflict_status, "unknown")
+        self.assertIsNone(entries[0].start_period)
+        self.assertIsNone(entries[0].week_start)
+        payload = timetable_snapshot_payload(entries, source_name="current.xlsx")
+        self.assertEqual(payload["source_kind"], "user-imported")
+        self.assertEqual(payload["entries"][0]["conflict_status"], "unknown")

@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -30,6 +31,26 @@ class FakeGateway:
 
     def close(self):
         self.closed = True
+
+
+class AuthenticationGateway(FakeGateway):
+    def __init__(self):
+        super().__init__()
+        self.authentication_complete = threading.Event()
+
+    def connect(self, progress, cancelled):
+        self.connect_count += 1
+        progress("waiting_for_authentication", {"message": "sign in in the browser"})
+        self.authentication_complete.wait(2)
+        if not self.authentication_complete.is_set():
+            raise TimeoutError("authentication timed out")
+
+
+class TimedOutAuthenticationGateway(FakeGateway):
+    def connect(self, progress, cancelled):
+        self.connect_count += 1
+        progress("waiting_for_authentication", {"message": "sign in in the browser"})
+        raise TimeoutError("authentication timed out")
 
 
 class WorkspaceDatabaseTests(unittest.TestCase):
@@ -81,8 +102,63 @@ class ObservationServiceTests(unittest.TestCase):
             service.close()
             database.close()
 
+    def test_authentication_wait_is_observable_and_same_task_resumes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            gateway = AuthenticationGateway()
+            service = ObservationService(database, lambda: gateway)
+            task = service.submit("refresh-selection", {"term": "2025-2026-2"})
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if service.inspect(task.id)["state"] == TaskState.WAITING_FOR_AUTHENTICATION.value:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(TaskState.WAITING_FOR_AUTHENTICATION.value, service.inspect(task.id)["state"])
+            gateway.authentication_complete.set()
+            self.assertTrue(service.wait(task.id, 2))
+            self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(task.id)["state"])
+            self.assertEqual(1, gateway.connect_count)
+            service.close()
+            database.close()
+
+    def test_authentication_timeout_fails_task_but_keeps_gateway_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            gateway = TimedOutAuthenticationGateway()
+            service = ObservationService(database, lambda: gateway)
+            task = service.submit("connect")
+            self.assertTrue(service.wait(task.id, 2))
+            self.assertEqual(TaskState.FAILED.value, service.inspect(task.id)["state"])
+            self.assertEqual(TaskState.WAITING_FOR_AUTHENTICATION.value, service.session_state)
+            self.assertFalse(gateway.closed)
+            service.close()
+            database.close()
+
 
 class WorkbenchApiTests(unittest.TestCase):
+    def test_notice_check_requires_csrf_and_lists_candidates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_workbench_app(Path(directory), gateway_factory=FakeGateway)
+            client = app.test_client()
+            body = {"source_url": "https://jwc.hitwh.edu.cn/a", "text": "关于选课的通知"}
+            self.assertEqual(403, client.post("/api/notices/candidates", json=body).status_code)
+            state = client.get("/api/state").get_json()
+            response = client.post("/api/notices/candidates", json=body, headers={"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]})
+            self.assertEqual(422, response.status_code)
+            self.assertEqual([], client.get("/api/notices/candidates").get_json()["notices"])
+            app.extensions["observation_service"].close()
+            app.extensions["workspace_database"].close()
+
+    def test_task_submission_validates_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_workbench_app(Path(directory), gateway_factory=FakeGateway)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]}
+            self.assertEqual(400, client.post("/api/tasks", json={"operation": "nope"}, headers=headers).status_code)
+            app.extensions["observation_service"].close()
+            app.extensions["workspace_database"].close()
+
     def test_loading_state_reads_sqlite_without_starting_gateway(self):
         with tempfile.TemporaryDirectory() as directory:
             gateway = FakeGateway()
