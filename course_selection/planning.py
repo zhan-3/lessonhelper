@@ -200,5 +200,7 @@ def build_read_only_plan(*, term: str, profile_id: str, notice_id: str, timetabl
             right_times = _meetings(section_map[right_id]) if right_id in section_map else None
             if right_times and any(_overlap(a, b) for a in left_times for b in right_times):
                 conflicts.append(Conflict(left_id, "candidate_sections", right_id))
+    if any(conflict.kind == "conflict_unknown" for conflict in conflicts):
+        blocked.append("conflict_unknown")
     return ReadOnlyPlan(term, profile_id, notice_id, str((timetable_snapshot or {}).get("id", "")),
                         str((selection_snapshot or {}).get("id", "")), tuple(parsed_goals), tuple(conflicts), tuple(dict.fromkeys(blocked)))

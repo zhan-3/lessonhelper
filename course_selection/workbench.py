@@ -68,7 +68,7 @@ def create_workbench_app(
         if not isinstance(raw_context, dict):
             return jsonify({"error": "context must be an object"}), 400
         context = dict(raw_context)
-        if operation == "refresh-selection":
+        if operation in {"refresh-selection", "refresh-timetable"}:
             context = core.refresh_context()
         task = service.submit(operation, context)
         return jsonify({"id": task.id, "state": task.state}), 202
@@ -137,8 +137,10 @@ def create_workbench_app(
             payload = timetable_snapshot_payload(
                 entries, source_name=upload.filename or "timetable.xlsx",
             )
+            profile = database.current_profile() or {}
             snapshot = database.publish_snapshot(
                 "timetable", entries[0].term, payload, source="user-imported",
+                profile_id=profile.get("version_id"),
             )
             return jsonify(snapshot), 201
         finally:

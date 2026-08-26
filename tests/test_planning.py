@@ -42,6 +42,8 @@ class PlanningTests(unittest.TestCase):
             timetable_snapshot=self.timetable, selection_snapshot=self.selection,
             goals=[{"course_identity": "COURSE", "preferences": [{"section_id": "unknown"}]}], now=NOW)
         self.assertTrue(any(c.kind == "conflict_unknown" for c in plan.conflicts))
+        self.assertFalse(plan.ready)
+        self.assertIn("conflict_unknown", plan.blocked_reasons)
 
     def test_stale_or_mismatched_snapshots_block_plan(self):
         stale = snapshot("selection", "sel-old", notice="old-notice", age=1801,

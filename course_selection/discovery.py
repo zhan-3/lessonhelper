@@ -771,8 +771,6 @@ class InterfaceDiscovery:
                 if not self._frame_matches_target(frame):
                     continue
                 try:
-                    html_path = self.output_root / "target-frame.html"
-                    html_path.write_text(frame.content(), encoding="utf-8")
                     forms = frame.locator("form").evaluate_all(
                         """forms => forms.map(form => ({
                           method: (form.method || 'GET').toUpperCase(),

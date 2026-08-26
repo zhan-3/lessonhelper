@@ -21,7 +21,7 @@ function scheduleItem(raw: Record<string, unknown>, source: ScheduleItem["source
 }
 function ScheduleBoard({ timetable, selection }: { timetable: WorkbenchState["snapshots"]["timetable"]; selection: WorkbenchState["snapshots"]["selection"] }) {
   const [mobileDay, setMobileDay] = useState(1);
-  const [mobileWeek, setMobileWeek] = useState(false);
+  const [mobileWeek, setMobileWeek] = useState(() => window.matchMedia("(min-width: 701px)").matches);
   const current = useMemo(() => ((timetable?.payload.entries as Record<string, unknown>[] | undefined) ?? []).map((item, i) => scheduleItem(item, "current", i)), [timetable]);
   const candidates = useMemo(() => ((selection?.payload.sections as Record<string, unknown>[] | undefined) ?? []).map((item, i) => scheduleItem(item, "candidate", i)), [selection]);
   const all = [...current, ...candidates];
@@ -115,6 +115,7 @@ function App() {
     <header><p className="eyebrow">READ-ONLY ACADEMIC WORKBENCH</p><h1>选课规划工作台</h1><span className="session">教务会话 · {state.academic_session.state}</span></header>
     {message && <p className="notice">{message}</p>}
     <section className="toolbar"><button onClick={() => run("connect")}>连接教务会话</button><button onClick={() => run("refresh-selection")} disabled={!state.confirmed_notice}>刷新选课班</button><button onClick={() => run("refresh-timetable")}>刷新课表</button><button className="secondary" onClick={load}>刷新状态</button></section>
+    {(state.stale.selection || state.stale.timetable) && <p className="warning">存在过期快照：刷新失败时仍保留旧数据，规划不会把过期数据标记为已就绪。</p>}
     {task && <section className="task"><strong>任务：{task.state}</strong>{task.progress && <span> · {JSON.stringify(task.progress)}</span>}{!["succeeded", "failed", "cancelled"].includes(task.state) && <button className="danger" onClick={cancel}>取消</button>}</section>}
     <section className="facts"><article><small>当前画像</small><strong>{String(state.profile?.grade ?? "尚未配置")} 年级</strong></article><article><small>已确认通知</small><strong>{String(state.confirmed_notice?.title ?? "尚未确认")}</strong></article><article><small>当前学期</small><strong>{timetable?.term || selection?.term || "—"}</strong></article></section>
     <section className="panel"><h2>主动检查官方选课通知</h2><p>仅解析批准的官方来源，不会执行选课操作。</p><input value={url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUrl(e.target.value)} placeholder="https://jwc.hitwh.edu.cn/…" /><textarea value={text} onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setText(e.target.value)} placeholder="也可以粘贴通知正文" rows={4} /><button onClick={inspectNotice}>检查并生成候选</button></section>
