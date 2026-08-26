@@ -49,9 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
     explore.add_argument("--url", default=DEFAULT_PORTAL_URL, help="教务系统入口 URL")
     explore.add_argument(
         "--browser",
-        choices=("chromium", "chrome"),
+        choices=("chromium",),
         default="chromium",
-        help="默认使用 Playwright Chromium；CAS 不兼容时可切换 chrome",
+        help="固定使用可见的 Playwright Chromium",
     )
     explore.add_argument(
         "--private-root",
@@ -82,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collect.add_argument("--url", default=DEFAULT_PORTAL_URL, help="教务系统入口 URL")
     collect.add_argument(
-        "--browser", choices=("chromium", "chrome"), default="chromium"
+        "--browser", choices=("chromium",), default="chromium"
     )
     collect.add_argument(
         "--private-root", type=Path, default=DEFAULT_PRIVATE_ROOT

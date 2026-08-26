@@ -21,6 +21,7 @@ def create_workbench_app(
     *,
     gateway_factory: Callable[[], AcademicGateway] | None = None,
     frontend_root: Path | str | None = None,
+    workbench_url: str = "http://127.0.0.1:5000",
 ) -> Flask:
     root = Path(root)
     database = WorkspaceDatabase.open(root)
@@ -39,6 +40,7 @@ def create_workbench_app(
         WORKBENCH_ROOT=root,
         WORKBENCH_FRONTEND=frontend,
         CSRF_TOKEN=secrets.token_urlsafe(24),
+        WORKBENCH_URL=workbench_url.rstrip("/"),
     )
     app.extensions["workspace_database"] = database
     app.extensions["observation_service"] = service
@@ -62,25 +64,37 @@ def create_workbench_app(
         if not isinstance(body, dict):
             return jsonify({"error": "JSON object required"}), 400
         operation = body.get("operation", "")
-        if operation not in {"connect", "refresh-selection", "refresh-timetable"}:
+        if operation not in {"connect", "refresh-selection", "refresh-timetable", "observe-navigation"}:
             return jsonify({"error": "unsupported observation operation"}), 400
         raw_context = body.get("context", {})
         if not isinstance(raw_context, dict):
             return jsonify({"error": "context must be an object"}), 400
         context = dict(raw_context)
-        if operation in {"refresh-selection", "refresh-timetable"}:
+        if operation in {"connect", "refresh-selection", "refresh-timetable"}:
             context = core.refresh_context()
         task = service.submit(operation, context)
-        return jsonify({"id": task.id, "state": task.state}), 202
+        return jsonify({"id": task.id, "operation": operation, "state": task.state}), 202
 
     @app.get("/api/tasks/<identity>")
     def inspect_task(identity: str):
         task = service.inspect(identity)
         return (jsonify(task), 200) if task else (jsonify({"error": "not found"}), 404)
 
+    @app.post("/api/shell/activate")
+    def activate_shell():
+        task = service.submit(
+            "launch-shell",
+            {"workbench_url": app.config["WORKBENCH_URL"]},
+        )
+        return jsonify({"id": task.id, "operation": "launch-shell", "state": task.state}), 202
+
     @app.delete("/api/tasks/<identity>")
     def cancel_task(identity: str):
         return (jsonify({"cancelled": True}), 202) if service.cancel(identity) else (jsonify({"cancelled": False}), 409)
+
+    @app.post("/api/tasks/<identity>/finish")
+    def finish_task(identity: str):
+        return (jsonify({"finished": True}), 202) if service.finish(identity) else (jsonify({"finished": False}), 409)
 
     @app.post("/api/plans")
     def save_plan():

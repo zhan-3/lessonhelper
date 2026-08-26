@@ -122,6 +122,14 @@ CONTROL_SELECTOR = (
     ".el-menu-item, .ant-menu-item, .layui-nav-item a"
 )
 
+
+def _academic_pages(context: BrowserContext) -> list[Any]:
+    """Exclude the loopback workbench tab from academic navigation."""
+    return [
+        page for page in context.pages
+        if (urlsplit(page.url).hostname or "").lower() not in {"127.0.0.1", "localhost", "::1"}
+    ]
+
 _FETCH_SELECTION_PAGE = """
 async ({url, category, semesterLabel, pageNo, pageCount}) => {
   const form = document.querySelector('form#queryform, form[name="queryform"]');
@@ -335,6 +343,9 @@ class InterfaceDiscovery:
 
     def _guard_route(self, route) -> None:
         request = route.request
+        if (urlsplit(request.url).hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}:
+            route.continue_()
+            return
         if is_mutating_request(request.method, request.url, request.post_data):
             self.blocked_requests += 1
             print(f"安全拦截：{request.method} {request.url[:110]}")
@@ -344,6 +355,8 @@ class InterfaceDiscovery:
 
     def _handle_response(self, response: Response) -> None:
         request = response.request
+        if (urlsplit(response.url).hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}:
+            return
         if request.resource_type not in {"xhr", "fetch"}:
             return
         content_type = response.headers.get("content-type", "").lower()
@@ -408,7 +421,7 @@ class InterfaceDiscovery:
         text: str,
     ) -> None:
         files: list[str] = []
-        for page_index, page in enumerate(context.pages, start=1):
+        for page_index, page in enumerate(_academic_pages(context), start=1):
             try:
                 filename = f"click-{click_number:02d}-{stage}-page-{page_index}.png"
                 page.screenshot(path=str(self.output_root / filename), full_page=True)
@@ -425,7 +438,7 @@ class InterfaceDiscovery:
         )
 
     def _refresh_target_pages(self, context: BrowserContext) -> None:
-        for page in context.pages:
+        for page in _academic_pages(context):
             if self._page_matches_target(page) and not any(
                 page is known for known in self.target_pages
             ):
@@ -438,7 +451,7 @@ class InterfaceDiscovery:
         found: list[DiscoveryControl] = []
         inventory: list[dict[str, Any]] = []
         target_reached = bool(self.target_pages)
-        for page in context.pages:
+        for page in _academic_pages(context):
             # Before reaching the destination, only inspect the academic shell's
             # menu tree. Content iframes contain tabs such as “备选课程”, which are
             # not navigation entries and previously caused false clicks.
@@ -696,7 +709,7 @@ class InterfaceDiscovery:
             self._refresh_target_pages(context)
             if not self.target_pages and self.portal_redirects:
                 redirect = self.portal_redirects.pop(0)
-                pages = context.pages
+                pages = _academic_pages(context)
                 if pages:
                     target_url = urljoin(pages[-1].url, redirect)
                     identity = f"portal-catalog|{target_url}"
@@ -725,7 +738,7 @@ class InterfaceDiscovery:
                 idle_rounds += 1
                 if self.target_pages and idle_rounds >= 3:
                     break
-                pages = context.pages
+                pages = _academic_pages(context)
                 (pages[-1].wait_for_timeout(500) if pages else time.sleep(0.5))
                 continue
             idle_rounds = 0
@@ -740,7 +753,7 @@ class InterfaceDiscovery:
             )
             if self._click(selected):
                 clicks += 1
-            pages = context.pages
+            pages = _academic_pages(context)
             (pages[-1].wait_for_timeout(1200) if pages else time.sleep(1.2))
             self._refresh_target_pages(context)
             _, after_inventory = self._controls(context)
@@ -793,7 +806,6 @@ class InterfaceDiscovery:
                     target_contracts.append(
                         {
                             "url": sanitize_url(frame.url),
-                            "html": html_path.name,
                             "forms": forms,
                         }
                     )
@@ -804,7 +816,7 @@ class InterfaceDiscovery:
             encoding="utf-8",
         )
         page_diagnostics: list[dict[str, Any]] = []
-        for index, page in enumerate(context.pages):
+        for index, page in enumerate(_academic_pages(context)):
             try:
                 screenshot_path = self.output_root / f"page-{index + 1}.png"
                 page.screenshot(path=str(screenshot_path), full_page=True)

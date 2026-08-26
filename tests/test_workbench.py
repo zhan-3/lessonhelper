@@ -33,6 +33,41 @@ class FakeGateway:
         self.closed = True
 
 
+class ShellGateway(FakeGateway):
+    def __init__(self):
+        super().__init__()
+        self.shell_urls = []
+        self.timetable_count = 0
+
+    def launch_shell(self, url, progress, cancelled):
+        self.shell_urls.append(url)
+        progress("connecting", {"message": "visible shell opened"})
+
+    def refresh_timetable(self, context, progress, cancelled):
+        self.timetable_count += 1
+        return {"status": "complete", "entries": [{"course_name": "Current"}]}
+
+
+class ManualObservationGateway(FakeGateway):
+    def __init__(self):
+        super().__init__()
+        self.observing = threading.Event()
+
+    def observe_navigation(self, context, progress, cancelled, finished):
+        progress("observing", {"message": "manual navigation observation active"})
+        self.observing.set()
+        while not cancelled() and not finished():
+            time.sleep(0.01)
+        return {
+            "status": "complete",
+            "report": {
+                "browser_instances": 1,
+                "events": [{"method": "GET", "url": "https://example.test/academic"}],
+                "blocked_requests": [],
+            },
+        }
+
+
 class AuthenticationGateway(FakeGateway):
     def __init__(self):
         super().__init__()
@@ -87,6 +122,38 @@ class WorkspaceDatabaseTests(unittest.TestCase):
 
 
 class ObservationServiceTests(unittest.TestCase):
+    def test_shell_launch_opens_workbench_without_authenticating(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            gateway = ShellGateway()
+            service = ObservationService(database, lambda: gateway)
+            task = service.submit("launch-shell", {"workbench_url": "http://127.0.0.1:5000"})
+            self.assertTrue(service.wait(task.id, 2))
+            self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(task.id)["state"])
+            self.assertEqual(["http://127.0.0.1:5000"], gateway.shell_urls)
+            self.assertEqual(0, gateway.connect_count)
+            service.close()
+            database.close()
+
+    def test_connect_authenticates_then_refreshes_timetable_and_allowed_selection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            gateway = ShellGateway()
+            service = ObservationService(database, lambda: gateway)
+            task = service.submit("connect", {
+                "term": "2026-1",
+                "allowed_categories": ["szhx"],
+            })
+            self.assertTrue(service.wait(task.id, 2))
+            self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(task.id)["state"])
+            self.assertEqual(1, gateway.connect_count)
+            self.assertEqual(1, gateway.timetable_count)
+            self.assertEqual(1, gateway.selection_count)
+            self.assertIsNotNone(database.latest_snapshot("timetable"))
+            self.assertIsNotNone(database.latest_snapshot("selection"))
+            service.close()
+            database.close()
+
     def test_task_context_is_sanitized_before_persistence(self):
         with tempfile.TemporaryDirectory() as directory:
             database = WorkspaceDatabase.open(Path(directory))
@@ -204,6 +271,28 @@ class WorkbenchApiTests(unittest.TestCase):
             self.assertEqual(response.get_json()["id"], latest.get_json()["id"])
             self.assertEqual(0, gateway.connect_count)
             app.extensions["observation_service"].close()
+            app.extensions["workspace_database"].close()
+
+    def test_manual_navigation_observation_can_be_finished_through_api(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = ManualObservationGateway()
+            app = create_workbench_app(Path(directory), gateway_factory=lambda: gateway)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]}
+            created = client.post("/api/tasks", json={"operation": "observe-navigation"}, headers=headers)
+            self.assertEqual(202, created.status_code)
+            task = created.get_json()
+            self.assertEqual("observe-navigation", task["operation"])
+            self.assertTrue(gateway.observing.wait(2))
+            finished = client.post(f"/api/tasks/{task['id']}/finish", headers=headers)
+            self.assertEqual(202, finished.status_code)
+            service = app.extensions["observation_service"]
+            self.assertTrue(service.wait(task["id"], 2))
+            report = client.get(f"/api/tasks/{task['id']}").get_json()
+            self.assertEqual(TaskState.SUCCEEDED.value, report["state"])
+            self.assertEqual(1, report["progress"]["report"]["browser_instances"])
+            service.close()
             app.extensions["workspace_database"].close()
 
     def test_loading_state_reads_sqlite_without_starting_gateway(self):

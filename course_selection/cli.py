@@ -64,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     explore.add_argument("--notice", type=Path, default=Path(".private/academic-selection/selection-notice.json"))
     explore.add_argument("--url", default=DEFAULT_PORTAL_URL, help="教务门户入口")
-    explore.add_argument("--browser", choices=("chromium", "chrome"), default="chromium")
+    explore.add_argument("--browser", choices=("chromium",), default="chromium")
     explore.add_argument("--private-root", type=Path, default=Path(".private/academic-selection"))
     explore.add_argument("--profile-root", type=Path, default=Path(".private/course-progress"))
     explore.add_argument("--login-timeout-seconds", type=int, default=600)
@@ -76,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
         discover = subparsers.add_parser(command, help=help_text)
         discover.set_defaults(discovery_target=target)
         discover.add_argument("--url", default=DEFAULT_PORTAL_URL, help="教务门户入口")
-        discover.add_argument("--browser", choices=("chromium", "chrome"), default="chromium")
+        discover.add_argument("--browser", choices=("chromium",), default="chromium")
         discover.add_argument("--private-root", type=Path, default=Path(".private/academic-selection"))
         discover.add_argument("--profile-root", type=Path, default=Path(".private/course-progress"))
         discover.add_argument("--login-timeout-seconds", type=int, default=600)
@@ -241,20 +241,8 @@ def run_explore_entry(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "workbench":
-        from .single_instance import WorkspaceLock
-        from .workbench import create_workbench_app
-        lock = WorkspaceLock(args.private_root.resolve(), args.port)
-        if not lock.acquire():
-            print(f"工作台已在运行：http://127.0.0.1:{args.port}")
-            return 0
-        app = create_workbench_app(args.private_root.resolve())
-        try:
-            app.run(host="127.0.0.1", port=args.port, debug=False)
-        finally:
-            app.extensions["observation_service"].close()
-            app.extensions["workspace_database"].close()
-            lock.release()
-        return 0
+        from .application import run_workbench_application
+        return run_workbench_application(args.private_root, args.port)
     if args.command == "configure-login":
         return run_configure_login(args)
     if args.command == "configure-profile":

@@ -25,6 +25,10 @@ paths:
     delete:
       parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
       responses: {'202': {description: Cancellation requested}, '409': {description: Task cannot be cancelled}}
+  /api/tasks/{identity}/finish:
+    post:
+      parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
+      responses: {'202': {description: Observation finish requested}, '409': {description: Task cannot be finished}}
   /api/notices/candidates:
     get:
       responses: {'200': {description: Candidate notice versions}}
@@ -45,7 +49,7 @@ components:
       type: object
       required: [operation]
       properties:
-        operation: {type: string, enum: [connect, refresh-selection, refresh-timetable]}
+        operation: {type: string, enum: [connect, refresh-selection, refresh-timetable, observe-navigation]}
         context: {type: object, additionalProperties: true}
     PlanRequest:
       type: object

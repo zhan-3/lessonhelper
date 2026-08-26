@@ -19,8 +19,7 @@ DEFAULT_PORTAL_URL = (
     "portal/#!/service"
 )
 
-SHARED_PROFILE_NAME = "browser-profile"
-LEGACY_PROFILE_NAMES = ("collector-profile", "explorer-profile")
+SHARED_PROFILE_NAME = "playwright-chromium-profile"
 PROFILE_LOCK_MARKERS = (
     "processsingleton",
     "user data directory is already in use",
@@ -29,11 +28,7 @@ PROFILE_LOCK_MARKERS = (
 
 
 def resolve_profile_dir(private_root: Path) -> Path:
-    """Choose one shared profile, reusing a legacy profile when available."""
-    for legacy_name in LEGACY_PROFILE_NAMES:
-        legacy = private_root / legacy_name
-        if legacy.exists():
-            return legacy
+    """Use one dedicated profile compatible with bundled Playwright Chromium."""
     return private_root / SHARED_PROFILE_NAME
 
 
@@ -149,6 +144,7 @@ def launch_browser_context(
         "user_data_dir": str(profile_dir),
         "headless": False,
         "no_viewport": True,
+        "args": ["--start-maximized"],
     }
     if browser_name == "chrome":
         options["channel"] = "chrome"

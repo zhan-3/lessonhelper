@@ -41,6 +41,10 @@ class WorkbenchService:
             "profile": self.database.current_profile(),
             "confirmed_notice": self.database.confirmed_notice(),
             "snapshots": {"selection": selection, "timetable": timetable},
+            "snapshot_changes": {
+                "selection": self.database.latest_snapshot_change("selection"),
+                "timetable": self.database.latest_snapshot_change("timetable"),
+            },
             "latest_plan": self.database.latest_plan(),
             "stale": {"selection": is_stale(selection, 1800), "timetable": is_stale(timetable, 86400)},
             "academic_session": {"state": session_state},

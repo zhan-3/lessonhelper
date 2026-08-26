@@ -19,6 +19,8 @@ class TimetableEntry:
     week_start: int | None
     week_end: int | None
     week_parity: str
+    teaching_class: str = ""
+    teacher: str = ""
     location: str = ""
     week_numbers: tuple[int, ...] = ()
     # ``unknown`` is deliberately distinct from an empty/free slot.  It is

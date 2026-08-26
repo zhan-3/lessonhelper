@@ -52,6 +52,8 @@ create table if not exists profiles(id text primary key, created_at text not nul
 create table if not exists notice_versions(id text primary key, source_url text not null default '', body_hash text not null default '', status text not null, created_at text not null, payload text not null);
 create table if not exists snapshots(id text primary key, kind text not null, term text not null, profile_id text, notice_id text, source text not null, source_at text not null, created_at text not null, payload text not null, complete integer not null check(complete in (0,1)));
 create index if not exists snapshots_kind_created on snapshots(kind, created_at desc);
+create table if not exists snapshot_changes(id text primary key, kind text not null, previous_snapshot_id text, snapshot_id text not null, created_at text not null, payload text not null);
+create index if not exists snapshot_changes_kind_created on snapshot_changes(kind, created_at desc);
 create table if not exists plans(id text primary key, term text not null, profile_id text not null, notice_id text not null, timetable_snapshot_id text not null, selection_snapshot_id text not null, created_at text not null, payload text not null);
 create index if not exists plans_created on plans(created_at desc);
 create table if not exists refresh_attempts(id text primary key, kind text not null, state text not null, started_at text not null, finished_at text, error text not null default '', snapshot_id text references snapshots(id));
@@ -82,6 +84,10 @@ class WorkspaceDatabase:
                 connection.executescript(SCHEMA)
                 connection.execute(
                     "insert or ignore into schema_migrations(version, applied_at) values(1, ?)",
+                    (utc_now(),),
+                )
+                connection.execute(
+                    "insert or ignore into schema_migrations(version, applied_at) values(2, ?)",
                     (utc_now(),),
                 )
             database = cls(root, connection)
@@ -187,14 +193,32 @@ class WorkspaceDatabase:
         return {**notice, "status": "confirmed"}
 
     def publish_snapshot(self, kind: str, term: str, payload: dict[str, Any], *, source: str, profile_id: str | None = None, notice_id: str | None = None) -> dict[str, Any]:
+        safe_payload = sanitize_for_storage(payload)
         with self.connection:
-            identity = self._insert_snapshot(kind, term, payload, source, profile_id, notice_id)
+            previous = self.connection.execute(
+                "select id,payload from snapshots where kind=? and term=? and profile_id is ? and notice_id is ? and complete=1 order by created_at desc, rowid desc limit 1",
+                (kind, term, profile_id, notice_id),
+            ).fetchone()
+            identity = self._insert_snapshot(kind, term, safe_payload, source, profile_id, notice_id)
+            change = structured_snapshot_diff(
+                json.loads(previous["payload"]) if previous else None,
+                safe_payload,
+            )
+            self.connection.execute(
+                "insert into snapshot_changes values(?,?,?,?,?,?)",
+                (uuid.uuid4().hex, kind, previous["id"] if previous else None, identity, utc_now(), json.dumps(change, ensure_ascii=False)),
+            )
             self.connection.execute("insert into refresh_attempts values(?,?,?,?,?,?,?)", (uuid.uuid4().hex, kind, "succeeded", utc_now(), utc_now(), "", identity))
             # Timestamps have second precision, so rowid breaks ties for rapid refreshes.
             old = self.connection.execute("select id from snapshots where kind=? order by created_at desc, rowid desc limit -1 offset 20", (kind,)).fetchall()
             # Keep refresh diagnostics while allowing retention to remove the referenced snapshot.
             self.connection.executemany("update refresh_attempts set snapshot_id=null where snapshot_id=?", ((row[0],) for row in old))
             self.connection.executemany("delete from snapshots where id=?", ((row[0],) for row in old))
+            old_changes = self.connection.execute(
+                "select id from snapshot_changes where kind=? order by created_at desc, rowid desc limit -1 offset 20",
+                (kind,),
+            ).fetchall()
+            self.connection.executemany("delete from snapshot_changes where id=?", ((row[0],) for row in old_changes))
         return self.snapshot(identity)
 
     def record_failed_attempt(self, kind: str, error: str) -> None:
@@ -209,6 +233,20 @@ class WorkspaceDatabase:
     def latest_snapshot(self, kind: str) -> dict[str, Any] | None:
         row = self.connection.execute("select * from snapshots where kind=? and complete=1 order by created_at desc limit 1", (kind,)).fetchone()
         return self._snapshot_dict(row) if row else None
+
+    def latest_snapshot_change(self, kind: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "select * from snapshot_changes where kind=? order by created_at desc, rowid desc limit 1",
+            (kind,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"], "kind": row["kind"],
+            "previous_snapshot_id": row["previous_snapshot_id"],
+            "snapshot_id": row["snapshot_id"], "created_at": row["created_at"],
+            "payload": json.loads(row["payload"]),
+        }
 
     def save_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
         identity = uuid.uuid4().hex
@@ -236,3 +274,48 @@ class WorkspaceDatabase:
 
     def close(self) -> None:
         self.connection.close()
+
+
+def structured_snapshot_diff(before: Any, after: Any, *, limit: int = 500) -> dict[str, Any]:
+    """Return a bounded, value-safe structural diff for two snapshot payloads."""
+    changes: list[dict[str, Any]] = []
+
+    def walk(old: Any, new: Any, path: str) -> None:
+        if len(changes) >= limit or old == new:
+            return
+        if isinstance(old, dict) and isinstance(new, dict):
+            for key in sorted(old.keys() | new.keys(), key=str):
+                child_path = f"{path}/{str(key).replace('~', '~0').replace('/', '~1')}"
+                if key not in old:
+                    changes.append({"operation": "add", "path": child_path, "value": new[key]})
+                elif key not in new:
+                    changes.append({"operation": "remove", "path": child_path, "previous": old[key]})
+                else:
+                    walk(old[key], new[key], child_path)
+                if len(changes) >= limit:
+                    return
+            return
+        if isinstance(old, list) and isinstance(new, list):
+            for index in range(max(len(old), len(new))):
+                child_path = f"{path}/{index}"
+                if index >= len(old):
+                    changes.append({"operation": "add", "path": child_path, "value": new[index]})
+                elif index >= len(new):
+                    changes.append({"operation": "remove", "path": child_path, "previous": old[index]})
+                else:
+                    walk(old[index], new[index], child_path)
+                if len(changes) >= limit:
+                    return
+            return
+        changes.append({"operation": "replace", "path": path or "/", "previous": old, "value": new})
+
+    if before is not None:
+        walk(before, after, "")
+    counts = {name: sum(item["operation"] == name for item in changes) for name in ("add", "remove", "replace")}
+    return {
+        "baseline": before is None,
+        "changed": before is not None and bool(changes),
+        "counts": counts,
+        "changes": changes,
+        "truncated": len(changes) >= limit,
+    }

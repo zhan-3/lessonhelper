@@ -116,6 +116,8 @@ class PersistentWorkbenchAcceptanceTests(unittest.TestCase):
                 }, source="deterministic")
             count = db.connection.execute("select count(*) from snapshots where kind='selection'").fetchone()[0]
             self.assertEqual(20, count)
+            change_count = db.connection.execute("select count(*) from snapshot_changes where kind='selection'").fetchone()[0]
+            self.assertEqual(20, change_count)
             raw = " ".join(str(row[0]) for row in db.connection.execute("select payload from snapshots"))
             self.assertNotIn("<html>", raw)
             self.assertNotIn("20250001", raw)
@@ -124,6 +126,29 @@ class PersistentWorkbenchAcceptanceTests(unittest.TestCase):
             diagnostics = str(db.connection.execute("select error from refresh_attempts order by finished_at desc limit 1").fetchone()[0])
             self.assertNotIn("<html>", diagnostics)
             self.assertNotIn("token=abc", diagnostics)
+            db.close()
+
+    def test_successful_snapshots_record_sanitized_structured_diffs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = WorkspaceDatabase.open(Path(directory))
+            first = db.publish_snapshot(
+                "timetable", "2026-1",
+                {"entries": [{"course_code": "A", "location": "1-101"}], "token": "secret"},
+                source="personal-timetable-api", profile_id="profile-1",
+            )
+            baseline = db.latest_snapshot_change("timetable")
+            self.assertTrue(baseline["payload"]["baseline"])
+            second = db.publish_snapshot(
+                "timetable", "2026-1",
+                {"entries": [{"course_code": "A", "location": "1-102"}], "token": "changed-secret"},
+                source="personal-timetable-api", profile_id="profile-1",
+            )
+            change = db.latest_snapshot_change("timetable")
+            self.assertEqual(first["id"], change["previous_snapshot_id"])
+            self.assertEqual(second["id"], change["snapshot_id"])
+            self.assertTrue(change["payload"]["changed"])
+            self.assertIn("/entries/0/location", [item["path"] for item in change["payload"]["changes"]])
+            self.assertNotIn("changed-secret", json.dumps(change, ensure_ascii=False))
             db.close()
 
     def test_single_instance_lock_recovers_stale_descriptor(self):

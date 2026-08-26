@@ -48,7 +48,9 @@ class AcademicBrowserSession:
         persistent: bool = True,
     ):
         self.playwright = playwright
-        self.browser_name = browser_name
+        if browser_name != "chromium":
+            raise ValueError("academic browser must use Playwright Chromium")
+        self.browser_name = "chromium"
         self.private_root = profile_root.resolve()
         self.profile_dir = resolve_profile_dir(self.private_root)
         self.auth_state_path = self.private_root / AUTH_STATE_FILE_NAME
@@ -56,7 +58,7 @@ class AcademicBrowserSession:
         self.persistent = persistent
         self.browser: Browser | None = None
         self.context: BrowserContext | None = None
-        self.actual_browser_name = browser_name
+        self.actual_browser_name = "chromium"
 
     def __enter__(self) -> "AcademicBrowserSession":
         if not self.persistent:
@@ -78,16 +80,10 @@ class AcademicBrowserSession:
             return self
         try:
             self.context = launch_browser_context(
-                self.playwright, self.browser_name, self.profile_dir
+                self.playwright, "chromium", self.profile_dir
             )
         except Error:
-            if self.browser_name != "chromium":
-                raise
-            print("Chromium 无法读取现有登录 profile，改用系统 Chrome 重试。")
-            self.actual_browser_name = "chrome"
-            self.context = launch_browser_context(
-                self.playwright, "chrome", self.profile_dir
-            )
+            raise
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -98,12 +94,12 @@ class AcademicBrowserSession:
             self.browser.close()
             self.browser = None
 
-    def open_authenticated(self, url: str, *, timeout_seconds: int = 600):
+    def open_authenticated(self, url: str, *, timeout_seconds: int = 600, page=None):
         if self.context is None:
             raise RuntimeError("浏览器会话尚未启动")
         if timeout_seconds <= 0:
             raise ValueError("认证等待时间必须大于 0")
-        page = self.context.pages[0] if self.context.pages else self.context.new_page()
+        page = page or (self.context.pages[0] if self.context.pages else self.context.new_page())
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         page.wait_for_timeout(3_000)
         if _is_legacy_webvpn_login(page.url):

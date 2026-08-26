@@ -176,19 +176,19 @@ class AutoNavigationTests(unittest.TestCase):
         self.assertTrue(DEFAULT_PORTAL_URL.endswith("/portal/#!/service"))
         self.assertIn("webvpn.hitwh.edu.cn/https/", DEFAULT_PORTAL_URL)
 
-    def test_profile_prefers_new_shared_profile(self):
+    def test_profile_ignores_profiles_from_other_browser_channels(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             private_root = Path(temp_dir)
-            shared = private_root / "browser-profile"
+            shared = private_root / "playwright-chromium-profile"
             shared.mkdir()
             (private_root / "collector-profile").mkdir()
 
             self.assertEqual(
                 resolve_profile_dir(private_root),
-                private_root / "collector-profile",
+                shared,
             )
 
-    def test_profile_reuses_legacy_collector_before_explorer(self):
+    def test_profile_does_not_reuse_legacy_collector_or_explorer(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             private_root = Path(temp_dir)
             (private_root / "collector-profile").mkdir()
@@ -196,16 +196,19 @@ class AutoNavigationTests(unittest.TestCase):
 
             self.assertEqual(
                 resolve_profile_dir(private_root),
-                private_root / "collector-profile",
+                private_root / "playwright-chromium-profile",
             )
 
-    def test_profile_reuses_legacy_explorer_when_collector_is_missing(self):
+    def test_profile_does_not_reuse_legacy_explorer(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             private_root = Path(temp_dir)
             explorer = private_root / "explorer-profile"
             explorer.mkdir()
 
-            self.assertEqual(resolve_profile_dir(private_root), explorer)
+            self.assertEqual(
+                resolve_profile_dir(private_root),
+                private_root / "playwright-chromium-profile",
+            )
 
     def test_profile_defaults_to_new_shared_directory(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -213,7 +216,7 @@ class AutoNavigationTests(unittest.TestCase):
 
             self.assertEqual(
                 resolve_profile_dir(private_root),
-                private_root / "browser-profile",
+                private_root / "playwright-chromium-profile",
             )
 
     def test_explore_defaults_to_automatic_navigation_without_enter_prompt(self):

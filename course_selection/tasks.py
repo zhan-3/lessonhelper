@@ -20,6 +20,7 @@ class TaskState(str, Enum):
     CONNECTING = "connecting"
     WAITING_FOR_AUTHENTICATION = "waiting_for_authentication"
     READING = "reading"
+    OBSERVING = "observing"
     INTERFACE_UNCONFIRMED = "interface_unconfirmed"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -41,6 +42,8 @@ class ObservationService:
         self.session_state = "disconnected"
         self._queue: queue.Queue[str | None] = queue.Queue()
         self._cancelled: set[str] = set()
+        self._finished: set[str] = set()
+        self._shutdown = threading.Event()
         self._done: dict[str, threading.Event] = {}
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
@@ -54,13 +57,13 @@ class ObservationService:
         self._thread.start()
 
     def submit(self, operation: str, context: dict[str, Any] | None = None) -> SubmittedTask:
-        if operation not in {"connect", "refresh-selection", "refresh-timetable"}:
+        if operation not in {"launch-shell", "connect", "refresh-selection", "refresh-timetable", "observe-navigation"}:
             raise ValueError("unsupported observation operation")
         context = sanitize_for_storage(context or {})
         key = hashlib.sha256(json.dumps([operation, context], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         with self._lock, self.database.connection:
             row = self.database.connection.execute(
-                "select id,state from observation_tasks where coalesce_key=? and state in ('queued','connecting','waiting_for_authentication','reading','cancel_requested') order by created_at desc limit 1",
+                "select id,state from observation_tasks where coalesce_key=? and state in ('queued','connecting','waiting_for_authentication','reading','observing','cancel_requested') order by created_at desc limit 1",
                 (key,),
             ).fetchone()
             if row:
@@ -93,6 +96,18 @@ class ObservationService:
                 self._done.setdefault(identity, threading.Event()).set()
             return True
 
+    def finish(self, identity: str) -> bool:
+        with self._lock:
+            row = self.database.connection.execute(
+                "select operation,state from observation_tasks where id=?", (identity,)
+            ).fetchone()
+            if not row or row["operation"] != "observe-navigation":
+                return False
+            if row["state"] in {TaskState.SUCCEEDED.value, TaskState.FAILED.value, TaskState.CANCELLED.value}:
+                return False
+            self._finished.add(identity)
+            return True
+
     def wait(self, identity: str, timeout: float | None = None) -> bool:
         return self._done.setdefault(identity, threading.Event()).wait(timeout)
 
@@ -104,7 +119,17 @@ class ObservationService:
 
     def _run(self) -> None:
         while True:
-            identity = self._queue.get()
+            try:
+                identity = self._queue.get(timeout=0.25)
+            except queue.Empty:
+                if self.gateway:
+                    poll = getattr(self.gateway, "poll", None)
+                    if poll is not None:
+                        try:
+                            poll()
+                        except Exception:
+                            self.session_state = "disconnected"
+                continue
             if identity is None:
                 if self.gateway:
                     self.gateway.close()
@@ -137,7 +162,7 @@ class ObservationService:
         if self.gateway is None:
             self.gateway = self.gateway_factory()
         def cancelled() -> bool:
-            return identity in self._cancelled
+            return identity in self._cancelled or self._shutdown.is_set()
         def progress(state: str, details: dict[str, Any]) -> None:
             mapped = TaskState(state).value
             if mapped == TaskState.WAITING_FOR_AUTHENTICATION.value:
@@ -145,6 +170,15 @@ class ObservationService:
             elif mapped == TaskState.CONNECTING.value:
                 self.session_state = TaskState.CONNECTING.value
             self._update(identity, mapped, details)
+        if operation == "launch-shell":
+            self._update(identity, TaskState.CONNECTING.value)
+            launcher = getattr(self.gateway, "launch_shell", None)
+            if launcher is None:
+                raise RuntimeError("academic gateway cannot launch the workbench shell")
+            launcher(str(context.get("workbench_url", "")), progress, cancelled)
+            self.session_state = "disconnected"
+            self._update(identity, TaskState.SUCCEEDED.value, {"status": "complete"})
+            return
         self._update(identity, TaskState.CONNECTING.value)
         self.session_state = "connecting"
         self.gateway.connect(progress, cancelled)
@@ -153,7 +187,41 @@ class ObservationService:
             return
         self.session_state = "connected"
         if operation == "connect":
-            self._update(identity, TaskState.SUCCEEDED.value)
+            refreshes: dict[str, str] = {}
+            for kind, reader in (
+                ("timetable", self.gateway.refresh_timetable),
+                ("selection", self.gateway.refresh_selection),
+            ):
+                if kind == "selection" and not context.get("allowed_categories"):
+                    refreshes[kind] = "skipped_no_confirmed_categories"
+                    continue
+                self._update(identity, TaskState.READING.value, {"target": kind})
+                result = reader(context, progress, cancelled)
+                status = str(result.get("status", "incomplete"))
+                refreshes[kind] = status
+                if status == "complete":
+                    self.database.publish_snapshot(
+                        kind,
+                        result.get("term", context.get("term", "")),
+                        result,
+                        source=result.get("source_kind", "academic"),
+                        profile_id=context.get("profile_id"),
+                        notice_id=context.get("notice_id"),
+                    )
+                else:
+                    self.database.record_failed_attempt(kind, status)
+            self._update(identity, TaskState.SUCCEEDED.value, {"status": "complete", "refreshes": refreshes})
+            return
+        if operation == "observe-navigation":
+            result = self.gateway.observe_navigation(
+                context, progress, cancelled, lambda: identity in self._finished
+            )
+            if cancelled():
+                self._update(identity, TaskState.CANCELLED.value)
+            elif result.get("status") == "complete":
+                self._update(identity, TaskState.SUCCEEDED.value, result)
+            else:
+                self._update(identity, TaskState.FAILED.value, result, str(result.get("status", "incomplete")))
             return
         self._update(identity, TaskState.READING.value)
         kind = "selection" if operation == "refresh-selection" else "timetable"
@@ -162,7 +230,14 @@ class ObservationService:
         if cancelled():
             self._update(identity, TaskState.CANCELLED.value)
         elif result.get("status") == "complete":
-            self.database.publish_snapshot(kind, context.get("term", ""), result, source="academic", profile_id=context.get("profile_id"), notice_id=context.get("notice_id"))
+            self.database.publish_snapshot(
+                kind,
+                result.get("term", context.get("term", "")),
+                result,
+                source=result.get("source_kind", "academic"),
+                profile_id=context.get("profile_id"),
+                notice_id=context.get("notice_id"),
+            )
             self._update(identity, TaskState.SUCCEEDED.value)
         else:
             error = result.get("status", "incomplete")
@@ -170,6 +245,7 @@ class ObservationService:
             self._update(identity, TaskState.FAILED.value, error=error)
 
     def close(self) -> None:
+        self._shutdown.set()
         self._queue.put(None)
         if self._thread:
             self._thread.join(timeout=5)
