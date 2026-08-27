@@ -18,6 +18,7 @@ from course_progress.sanitizer import sanitize_text, sanitize_url
 from course_progress.sanitizer import sanitize_request_body
 from course_progress.session import AcademicBrowserSession
 from course_selection.categories import CATEGORY_MENU_KEYWORDS, COURSE_CATEGORIES
+from course_selection.manual_observation import is_official_authentication_request
 from course_selection.selection_entry import (
     classify_selection_html,
     observation_to_dict,
@@ -243,6 +244,8 @@ def score_discovery_control(
 def is_mutating_request(method: str, url: str, post_data: str | None = None) -> bool:
     """Conservatively identify requests that may change course-selection state."""
     if method.upper() in {"GET", "HEAD", "OPTIONS"}:
+        return False
+    if method.upper() == "POST" and is_official_authentication_request(url):
         return False
     searchable = f"{url} {post_data or ''}".lower()
     return any(marker.lower() in searchable for marker in MUTATION_MARKERS)

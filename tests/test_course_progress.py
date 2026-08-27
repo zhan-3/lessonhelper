@@ -176,6 +176,47 @@ class AutoNavigationTests(unittest.TestCase):
         self.assertTrue(DEFAULT_PORTAL_URL.endswith("/portal/#!/service"))
         self.assertIn("webvpn.hitwh.edu.cn/https/", DEFAULT_PORTAL_URL)
 
+    def test_official_webvpn_authentication_posts_are_not_treated_as_course_mutations(self):
+        from course_selection.discovery import is_mutating_request
+
+        login_body = "username=student&password=redacted&execution=e1s1&submit=login"
+
+        self.assertFalse(
+            is_mutating_request(
+                "POST",
+                "https://webvpn.hitwh.edu.cn/login?cas_login=true",
+                login_body,
+            )
+        )
+        self.assertFalse(
+            is_mutating_request(
+                "POST",
+                "https://webvpn.hitwh.edu.cn/https/hash/authserver/login?service=academic",
+                login_body,
+            )
+        )
+        self.assertTrue(
+            is_mutating_request(
+                "POST",
+                "https://webvpn.hitwh.edu.cn/api/resource/open",
+                "action=query&submit=confirm",
+            )
+        )
+        self.assertTrue(
+            is_mutating_request(
+                "POST",
+                "http://webvpn.hitwh.edu.cn/login",
+                login_body,
+            )
+        )
+        self.assertTrue(
+            is_mutating_request(
+                "POST",
+                "https://evil.example/authserver/login?next=webvpn.hitwh.edu.cn",
+                login_body,
+            )
+        )
+
     def test_profile_ignores_profiles_from_other_browser_channels(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             private_root = Path(temp_dir)

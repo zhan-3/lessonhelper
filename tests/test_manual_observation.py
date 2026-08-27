@@ -4,6 +4,31 @@ from course_selection.manual_observation import ManualObservationPolicy, summari
 
 
 class ManualObservationPolicyTests(unittest.TestCase):
+    def test_official_authentication_post_is_allowed_but_lookalikes_are_blocked(self):
+        policy = ManualObservationPolicy([])
+        body = "username=student&password=redacted&execution=e1s1&submit=login"
+
+        allowed, evidence = policy.inspect_request(
+            "POST",
+            "https://webvpn.hitwh.edu.cn/https/hash/authserver/login?service=academic",
+            body,
+            "application/x-www-form-urlencoded",
+            "document",
+        )
+        lookalike, _ = policy.inspect_request(
+            "POST",
+            "https://evil.example/authserver/login?next=webvpn.hitwh.edu.cn",
+            body,
+            "application/x-www-form-urlencoded",
+            "document",
+        )
+
+        self.assertTrue(allowed)
+        self.assertFalse(evidence["blocked"])
+        self.assertFalse(lookalike)
+        self.assertNotIn("student", str(evidence))
+        self.assertNotIn("redacted", str(evidence))
+
     def test_unknown_post_is_blocked_without_persisting_values(self):
         policy = ManualObservationPolicy([])
 

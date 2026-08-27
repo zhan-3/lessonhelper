@@ -33,3 +33,9 @@ nul
 
 # Private browser profiles and captured portal data
 .private/
+
+# Frontend dependencies and TypeScript build output
+frontend/node_modules/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts

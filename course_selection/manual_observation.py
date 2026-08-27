@@ -7,6 +7,15 @@ from typing import Any, Iterable, Mapping
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 
+def is_official_authentication_request(url: str) -> bool:
+    """Allow only HITWH WebVPN's exact HTTPS authentication endpoints."""
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() != "https" or (parsed.hostname or "").lower() != "webvpn.hitwh.edu.cn":
+        return False
+    path = parsed.path.lower().rstrip("/") or "/"
+    return path == "/login" or path.endswith("/authserver/login")
+
+
 def _canonical_url(url: str) -> str:
     parsed = urlsplit(url)
     return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path, "", ""))
@@ -106,8 +115,9 @@ class ManualObservationPolicy:
         fields = sorted(body_values)
         canonical_url = _canonical_url(url)
         query_fields = tuple(sorted(parse_qs(urlsplit(url).query, keep_blank_values=True).keys()))
-        allowed = normalized_method in {"GET", "HEAD", "OPTIONS"}
-        if normalized_method == "POST":
+        authentication_post = normalized_method == "POST" and is_official_authentication_request(url)
+        allowed = normalized_method in {"GET", "HEAD", "OPTIONS"} or authentication_post
+        if normalized_method == "POST" and not authentication_post:
             constraints = self.allowed_posts.get((canonical_url, query_fields, tuple(fields)))
             allowed = constraints is not None
             if allowed:

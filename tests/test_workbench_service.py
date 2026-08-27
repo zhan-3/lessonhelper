@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from course_selection.persistence import WorkspaceDatabase
@@ -7,6 +8,28 @@ from course_selection.workbench_service import WorkbenchService
 
 
 class WorkbenchServiceTests(unittest.TestCase):
+    def test_state_publishes_completed_course_progress_without_turning_missing_into_zero(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = WorkspaceDatabase.open(root / "workspace")
+            report_path = root / "progress-report.json"
+            report_path.write_text(json.dumps({
+                "data_complete": True,
+                "progress": [{
+                    "key": "cultural_quality",
+                    "required_credits": 8,
+                    "completed_credits": 5,
+                    "courses": [{"code": "HIST", "name": "四史专题", "credits": 2}],
+                }],
+            }, ensure_ascii=False), encoding="utf-8")
+            service = WorkbenchService(database, progress_report_path=report_path)
+            progress = service.state(session_state="disconnected")["graduation_progress"]
+            self.assertEqual("ready", progress["status"])
+            self.assertEqual(5, progress["report"]["progress"][0]["completed_credits"])
+            report_path.unlink()
+            self.assertEqual("missing", service.graduation_progress()["status"])
+            database.close()
+
     def test_refresh_context_is_computed_without_flask(self):
         with tempfile.TemporaryDirectory() as directory:
             database = WorkspaceDatabase.open(Path(directory))

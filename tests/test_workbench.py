@@ -4,7 +4,10 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from course_selection.gateway import PlaywrightAcademicGateway
 from course_selection.persistence import WorkspaceDatabase
 from course_selection.notice_discovery import candidate_from_text
 from course_selection.tasks import ObservationService, TaskState
@@ -79,6 +82,60 @@ class AuthenticationGateway(FakeGateway):
         self.authentication_complete.wait(2)
         if not self.authentication_complete.is_set():
             raise TimeoutError("authentication timed out")
+
+
+class PlaywrightGatewayRouteTests(unittest.TestCase):
+    def test_selection_refresh_removes_temporary_request_and_response_handlers(self):
+        class FakeContext:
+            def __init__(self):
+                self.routes = []
+                self.unroutes = []
+                self.listeners = []
+                self.removed_listeners = []
+
+            def route(self, pattern, handler):
+                self.routes.append((pattern, handler))
+
+            def unroute(self, pattern, handler):
+                self.unroutes.append((pattern, handler))
+
+            def on(self, event, handler):
+                self.listeners.append((event, handler))
+
+            def remove_listener(self, event, handler):
+                self.removed_listeners.append((event, handler))
+
+        class FakeNavigator:
+            def __init__(self, **_kwargs):
+                pass
+
+            def _handle_response(self, _response):
+                pass
+
+            def _guard_route(self, _route):
+                pass
+
+            def run(self, _context, **_kwargs):
+                return SimpleNamespace(selection_query_payload=None)
+
+        context = FakeContext()
+        gateway = PlaywrightAcademicGateway(Path("profile"), Path("workspace"))
+        gateway._session = SimpleNamespace(context=context)
+
+        with patch("course_selection.discovery.InterfaceDiscovery", FakeNavigator):
+            result = gateway.refresh_selection(
+                {
+                    "allowed_categories": ["allowed"],
+                    "allowed_windows": {},
+                    "semester_label": "2026-2027-1",
+                },
+                lambda _state, _details: None,
+                lambda: False,
+            )
+
+        self.assertEqual("interface_unconfirmed", result["status"])
+        self.assertEqual(context.routes, context.unroutes)
+        self.assertEqual(context.listeners, context.removed_listeners)
 
 
 class TimedOutAuthenticationGateway(FakeGateway):

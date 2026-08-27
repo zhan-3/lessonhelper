@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from .notice import fetch_notice_text
@@ -30,9 +31,30 @@ def is_stale(snapshot: dict[str, Any] | None, seconds: int) -> bool:
 class WorkbenchService:
     """Use cases shared by HTTP and other possible adapters."""
 
-    def __init__(self, database: WorkspaceDatabase, *, official_notice_hosts: tuple[str, ...] = ("jwc.hitwh.edu.cn",)):
+    def __init__(
+        self,
+        database: WorkspaceDatabase,
+        *,
+        official_notice_hosts: tuple[str, ...] = ("jwc.hitwh.edu.cn",),
+        progress_report_path: Path | str | None = None,
+    ):
         self.database = database
         self.official_notice_hosts = official_notice_hosts
+        self.progress_report_path = Path(progress_report_path) if progress_report_path else None
+
+    def graduation_progress(self) -> dict[str, Any]:
+        """Publish the sanitized progress report without treating missing data as zero."""
+        path = self.progress_report_path
+        if path is None or not path.is_file():
+            return {"status": "missing", "report": None}
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return {"status": "invalid", "report": None}
+        if not isinstance(report, dict) or not isinstance(report.get("progress"), list):
+            return {"status": "invalid", "report": None}
+        status = "ready" if report.get("data_complete") is True else "incomplete"
+        return {"status": status, "report": report}
 
     def state(self, *, session_state: str, csrf_token: str | None = None) -> dict[str, Any]:
         selection = self.database.latest_snapshot("selection")
@@ -46,6 +68,7 @@ class WorkbenchService:
                 "timetable": self.database.latest_snapshot_change("timetable"),
             },
             "latest_plan": self.database.latest_plan(),
+            "graduation_progress": self.graduation_progress(),
             "stale": {"selection": is_stale(selection, 1800), "timetable": is_stale(timetable, 86400)},
             "academic_session": {"state": session_state},
         }

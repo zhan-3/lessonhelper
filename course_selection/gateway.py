@@ -160,10 +160,17 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             allowed_selection_windows=windows,
             notice_semester=context["semester_label"],
         )
-        self._session.context.on("response", navigator._handle_response)
-        self._session.context.route("**/*", navigator._guard_route)
-        progress("reading", {"category": categories[0], "page": 1})
-        report = navigator.run(self._session.context, max_clicks=8, wait_seconds=30)
+        browser_context = self._session.context
+        response_handler = navigator._handle_response
+        route_handler = navigator._guard_route
+        browser_context.on("response", response_handler)
+        browser_context.route("**/*", route_handler)
+        try:
+            progress("reading", {"category": categories[0], "page": 1})
+            report = navigator.run(browser_context, max_clicks=8, wait_seconds=30)
+        finally:
+            browser_context.unroute("**/*", route_handler)
+            browser_context.remove_listener("response", response_handler)
         if not report.selection_query_payload:
             return {"status": "interface_unconfirmed", "sections": []}
         # Discovery keeps a JSON artifact for read-only diagnostics, but the

@@ -64,6 +64,7 @@ components:
         confirmed_notice: {type: object, nullable: true, additionalProperties: true}
         snapshots: {type: object, additionalProperties: true}
         latest_plan: {type: object, nullable: true, additionalProperties: true}
+        graduation_progress: {type: object, additionalProperties: true}
         stale: {type: object, additionalProperties: {type: boolean}}
         academic_session: {type: object, properties: {state: {type: string}}}
         csrf_token: {type: string}

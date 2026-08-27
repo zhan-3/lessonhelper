@@ -28,7 +28,10 @@ def create_workbench_app(
     if gateway_factory is None:
         gateway_factory = lambda: PlaywrightAcademicGateway(root.parent / "course-progress", root)
     service = ObservationService(database, gateway_factory)
-    core = WorkbenchService(database)
+    core = WorkbenchService(
+        database,
+        progress_report_path=root.parent / "course-progress" / "progress-report.json",
+    )
     # The Vite config writes its production bundle here.  Keeping the bundle
     # beside the Python package makes the same Flask entry point work from a
     # checkout and from an installed wheel.  Tests and embedders may provide a
