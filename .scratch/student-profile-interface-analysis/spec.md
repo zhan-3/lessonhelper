@@ -1,6 +1,16 @@
 # Student Profile Interface Analysis and Local Login
 
-**Status:** implemented-awaiting-review
+**Status:** implemented-reviewed
+
+## Review notes
+
+Parallel code review (standards + spec axes) found three P1s; all addressed:
+
+1. **Privacy leak (fixed)** — candidate artifacts could carry identity values via raw JSON object keys and URL fragments. `student_profile_observation.py` now redacts dynamic keys (`[dynamic-key]`), strips URL fragments, and uses a structural summarizer (`_safe_structure`) instead of raw key dumps; regression test `test_identity_values_used_as_keys_and_url_fragments_are_redacted`.
+2. **Reset-login race / lost shell (fixed)** — login configuration no longer races the frontend `connect`; `POST /api/login-configuration` now atomically (under `run_when_idle`) configures, enqueues `reset-login` → `launch-shell` → `connect`, and returns the created connection task id. `DELETE` runs the same idle-guarded sequence. `PlaywrightAcademicGateway.reset_login()` now fails closed if the profile dir cannot be removed and refuses reconnect (`_login_reset_error` blocks all non-reset tasks); `_shell_url` is preserved across gateway replacement via the `launch-shell` context.
+3. **Graduation progress ignoring snapshot applicability (fixed)** — `WorkbenchService.graduation_progress()` returns `not_applicable` when the progress snapshot's `profile_id` no longer matches the current profile or when `baseline_version != "guide-2026"`; OpenAPI + generated types updated (`not_applicable` status, `Snapshot`/`GraduationProgress` schemas).
+
+Post-review verification: 129 Python tests, 9 frontend tests, `tsc -b`, Vite build, and Ruff all pass. Committed as `d95f5d0` on `develop`.
 
 ## Intent
 
