@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { CandidateNotice, Task, WorkbenchState } from "./api.generated";
+import type { CandidateNotice, Task, WorkbenchState } from "./api";
 import { ScheduleBoard } from "./ScheduleBoard";
 import "./style.css";
 
@@ -15,6 +15,9 @@ function App() {
   const [goals, setGoals] = useState('[{"goal_id":"goal-1","course_identity":"COURSE","rank":1,"preferences":[{"section_id":"SECTION","rank":1}]}]');
   const [plan, setPlan] = useState<Record<string, unknown> | null>(null);
   const [message, setMessage] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [savingLogin, setSavingLogin] = useState(false);
 
   const load = useCallback(async () => {
     const [response, notices] = await Promise.all([
@@ -31,6 +34,49 @@ function App() {
   }, []);
 
   useEffect(() => { load().catch((error: unknown) => setMessage(String(error))); }, [load]);
+
+  const configureLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!state || savingLogin) return;
+    setSavingLogin(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/login-configuration", {
+        method: "POST",
+        headers: jsonHeaders(state.csrf_token),
+        body: JSON.stringify({ username, password }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        setMessage(result.error ?? "无法保存自动登录配置");
+        return;
+      }
+      setPassword("");
+      if (result.connection_task) {
+        setTask({
+          id: result.connection_task.id,
+          state: result.connection_task.state,
+          operation: "connect",
+        });
+      }
+    } finally {
+      setSavingLogin(false);
+    }
+  };
+
+  const clearLogin = async () => {
+    if (!state || !window.confirm("清除自动登录并重置当前学生的画像、课程快照和规划？官方通知会保留。")) return;
+    const response = await fetch("/api/login-configuration", {
+      method: "DELETE",
+      headers: jsonHeaders(state.csrf_token),
+    });
+    if (response.ok) {
+      setTask(null);
+      setUsername("");
+      setPassword("");
+      await load();
+    } else setMessage("无法清除自动登录配置");
+  };
 
   const run = async (operation: string) => {
     if (!state) return;
@@ -133,13 +179,32 @@ function App() {
   };
 
   if (!state) return <main className="shell"><p>正在读取本地工作台…</p></main>;
+  if (!state.login_configuration.configured) return <main className="login-shell">
+    <section className="login-intro">
+      <p className="eyebrow">LOCAL ACADEMIC WORKBENCH</p>
+      <h1>先连接你的教务身份</h1>
+      <p>保存一次，之后工作台会在学校统一认证页面自动登录。成绩、课表和选课查询仍只在本机完成。</p>
+      <dl><div><dt>存储位置</dt><dd>仅本机 .private 目录</dd></div><div><dt>加密方式</dt><dd>Windows DPAPI · 当前用户可解密</dd></div><div><dt>操作边界</dt><dd>当前只读取，不会选课或退课</dd></div></dl>
+    </section>
+    <section className="login-form-panel" aria-labelledby="login-title">
+      <div><span>首次设置</span><h2 id="login-title">自动登录配置</h2><p>请输入学校统一身份认证使用的学号和密码。</p></div>
+      {message && <p className="login-error" role="alert">{message}</p>}
+      {state.login_configuration.state === "invalid" && <p className="login-error" role="alert">{state.login_configuration.message ?? "原登录配置无法读取，请重新保存。"}</p>}
+      <form onSubmit={configureLogin} autoComplete="off">
+        <label>学号<input name="academic-username" value={username} onChange={event => setUsername(event.target.value)} inputMode="numeric" autoComplete="off" required autoFocus /></label>
+        <label>密码<input name="academic-password" type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password" required /></label>
+        <button type="submit" disabled={savingLogin}>{savingLogin ? "正在安全保存…" : "保存并连接学校"}</button>
+      </form>
+      <small>凭据不会写入数据库、日志或课程快照。学校要求验证码时，浏览器会停下等待你处理。</small>
+    </section>
+  </main>;
   const timetable = state.snapshots.timetable;
   const selection = state.snapshots.selection;
 
   return <main className="shell">
-    <header><p className="eyebrow">READ-ONLY ACADEMIC WORKBENCH</p><h1>选课规划工作台</h1><span className="session">教务会话 · {state.academic_session.state}</span></header>
+    <header><p className="eyebrow">READ-ONLY ACADEMIC WORKBENCH</p><h1>选课规划工作台</h1><span className="session">{state.login_configuration.masked_username} · 教务会话 {state.academic_session.state} · <button className="text-button" onClick={clearLogin}>重新配置</button></span></header>
     {message && <p className="notice">{message}</p>}
-    <section className="toolbar"><button onClick={() => run("connect")}>连接教务会话</button><button onClick={() => run("observe-navigation")}>开始手动监听</button><button onClick={() => run("refresh-selection")} disabled={!state.confirmed_notice}>刷新选课班</button><button onClick={() => run("refresh-timetable")}>刷新课表</button><button className="secondary" onClick={load}>刷新状态</button></section>
+    <section className="toolbar"><button onClick={() => run("connect")}>连接教务会话</button><button onClick={() => run("observe-navigation")}>开始手动监听</button><button onClick={() => run("refresh-selection")} disabled={!state.confirmed_notice}>刷新选课班</button><button onClick={() => run("refresh-timetable")}>刷新课表</button><button onClick={() => run("refresh-progress")}>同步毕业进度</button><button className="secondary" onClick={load}>刷新状态</button></section>
     {(state.stale.selection || state.stale.timetable) && <p className="warning">存在过期快照：刷新失败时仍保留旧数据，规划不会把过期数据标记为已就绪。</p>}
     {task && <section className="task"><strong>任务：{task.state}</strong>{task.progress && <span> · {JSON.stringify(task.progress)}</span>}{task.operation === "observe-navigation" && !["succeeded", "failed", "cancelled"].includes(task.state) && <button onClick={finishObservation}>完成监听</button>}{!["succeeded", "failed", "cancelled"].includes(task.state) && <button className="danger" onClick={cancel}>取消</button>}</section>}
     <section className="facts"><article><small>当前画像</small><strong>{String(state.profile?.grade ?? "尚未配置")} 年级</strong></article><article><small>已确认通知</small><strong>{String(state.confirmed_notice?.title ?? "尚未确认")}</strong></article><article><small>当前学期</small><strong>{timetable?.term || selection?.term || "—"}</strong></article></section>

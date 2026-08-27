@@ -201,6 +201,7 @@ def collect_grade_records(
     | None = None,
     on_session_expired: Callable[[], None] | None = None,
     checkpoint: CollectionCheckpoint | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
 ) -> GradeCollection:
     """Collect all result pages; preserve failures instead of treating them as zero."""
     semester_list = tuple(semesters)
@@ -222,6 +223,9 @@ def collect_grade_records(
                 on_session_expired()
 
     for semester in semester_list:
+        if is_cancelled is not None and is_cancelled():
+            failures.append(CollectionFailure(semester.value, semester.label, 0, "cancelled"))
+            break
         if (semester.value, 1) in completed_pages and semester.value in page_counts:
             page_count = page_counts[semester.value]
         else:
@@ -245,6 +249,9 @@ def collect_grade_records(
                 continue
 
         for page_number in range(2, page_count + 1):
+            if is_cancelled is not None and is_cancelled():
+                failures.append(CollectionFailure(semester.value, semester.label, page_number, "cancelled"))
+                return GradeCollection(tuple(records), semester_list, tuple(failures))
             if (semester.value, page_number) in completed_pages:
                 continue
             try:
@@ -383,6 +390,7 @@ class PlaywrightGradeCollector:
         ]
         | None = None,
         checkpoint: CollectionCheckpoint | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> GradeCollection:
         print("正在等待教务系统标签页和课程 iframe……")
         frame = wait_for_academic_frame(page, frame_timeout_seconds)
@@ -434,6 +442,7 @@ class PlaywrightGradeCollector:
             on_page_data=on_page_data,
             on_session_expired=refresh_after_session_expiry,
             checkpoint=checkpoint,
+            is_cancelled=is_cancelled,
         )
         print(
             f"采集完成：{len(collection.semesters)} 个学期；"

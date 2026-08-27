@@ -69,6 +69,24 @@ WebVPN 状态；传入 `--browser chrome` 才会显式使用系统 Chrome。
 上课时间、容量等字段。结果保存在本次运行目录的 `selection-query.json`；不会调用
 `saveXsxk`，也不会执行选课或退课。
 
+维护者可以运行结构化的学生画像接口分析器：
+
+```powershell
+uv run python -m course_selection analyze-interface --target student-profile
+```
+
+该命令复用本机 DPAPI 登录和唯一的可见 Chromium，只允许 GET/HEAD/OPTIONS 与精确的
+学校认证 POST。它验证 WebVPN 用户信息和门户目录能力，动态进入新教务系统，并在短暂
+观察窗口内只记录候选响应的字段名和类型；不会保存姓名、学号等响应值，不修改 SQLite
+或当前学生画像。结果位于 `.private/interface-analysis/student-profile/<时间>/`，超过
+七天的旧分析目录会在下次运行时清理。普通工作台同步不会自动运行接口分析器。
+
+工作台的普通“刷新选课班”使用版本化的 `hitwh-jwts-selection-query-v1` 只读契约：
+浏览器只负责统一认证、Cookie 和动态查询表单，刷新会直接进入已验证页面并通过页面
+同源接口查询通知白名单内的全部类别和分页，不再逐次点击教务菜单。只有已验证入口或
+查询表单缺失时才进入受控接口发现流程；某一类别或分页的临时失败只记录为不完整刷新，
+不会通过另一种路径重复查询，也不会替换上一次完整快照。
+
 2026-08-25 真实页面验证得到的“学生选课”二级菜单与查询类别如下：
 
 | 页面名称 | `pageXklb` |

@@ -116,8 +116,11 @@ class AcademicBrowserSession:
         stable_checks = 0
         auto_login_attempted = False
         while time.monotonic() < deadline:
-            pages = self.context.pages
-            current = pages[-1] if pages else page
+            # Authentication belongs to the requested academic tab.  The
+            # persistent context also contains the loopback workbench shell;
+            # selecting context.pages[-1] can mistake that shell for a
+            # successful academic login and leave the real tab on CAS.
+            current = page
             if _is_login_url(current.url):
                 stable_checks = 0
                 if not auto_login_attempted and self._fill_and_submit_login(current):

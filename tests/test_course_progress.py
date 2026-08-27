@@ -21,9 +21,59 @@ from course_progress.sanitizer import (
 )
 from course_progress.credentials import CredentialStore, LoginCredentials
 from course_progress.session import (
+    AcademicBrowserSession,
     _is_legacy_webvpn_login,
     _is_webvpn_credential_page,
 )
+
+
+class AcademicBrowserSessionTests(unittest.TestCase):
+    def test_authentication_tracks_the_requested_academic_tab_not_the_workbench_tab(self):
+        class Page:
+            def __init__(self, url):
+                self.url = url
+
+            def goto(self, *_args, **_kwargs):
+                return None
+
+            def wait_for_timeout(self, *_args):
+                return None
+
+        class Context:
+            def __init__(self, pages):
+                self.pages = pages
+
+            def storage_state(self, **_kwargs):
+                return None
+
+            def clear_cookies(self):
+                return None
+
+        target = Page(
+            "https://webvpn.hitwh.edu.cn/https/hash/authserver/login?service=academic"
+        )
+        shell = Page("http://127.0.0.1:5000/")
+        with tempfile.TemporaryDirectory() as directory:
+            session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+            session.context = Context([target, shell])
+            session.private_root = Path(directory)
+            session.auth_state_path = Path(directory) / "state.json"
+            attempts = []
+
+            def login(page):
+                attempts.append(page.url)
+                page.url = "https://webvpn.hitwh.edu.cn/http/academic/xsxk/queryXsxk"
+                return True
+
+            session._fill_and_submit_login = login
+            result = session.open_authenticated(
+                "https://webvpn.hitwh.edu.cn/http/academic/xsxk/queryXsxk",
+                timeout_seconds=1,
+                page=target,
+            )
+
+        self.assertIs(target, result)
+        self.assertEqual(1, len(attempts))
 
 
 class SanitizerTests(unittest.TestCase):

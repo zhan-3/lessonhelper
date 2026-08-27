@@ -7,6 +7,12 @@ paths:
         '200':
           description: Local persisted workbench state
           content: {application/json: {schema: {$ref: '#/components/schemas/WorkbenchState'}}}
+  /api/login-configuration:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LoginConfigurationRequest'}}}}
+      responses: {'201': {description: DPAPI-protected login saved}, '400': {description: Invalid login configuration}}
+    delete:
+      responses: {'204': {description: Saved login cleared}}
   /api/tasks:
     post:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TaskRequest'}}}}
@@ -45,26 +51,128 @@ paths:
       responses: {'201': {description: Timetable snapshot imported}}
 components:
   schemas:
+    LoginConfigurationRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string, maxLength: 64}
+        password: {type: string, format: password, maxLength: 256}
     TaskRequest:
       type: object
       required: [operation]
       properties:
-        operation: {type: string, enum: [connect, refresh-selection, refresh-timetable, observe-navigation]}
+        operation: {type: string, enum: [connect, refresh-selection, refresh-timetable, refresh-progress, observe-navigation]}
         context: {type: object, additionalProperties: true}
     PlanRequest:
       type: object
       required: [goals]
       properties:
         goals: {type: array, items: {type: object, additionalProperties: true}}
+    LoginConfiguration:
+      type: object
+      required: [state, configured]
+      properties:
+        state: {type: string, enum: [missing, configured, invalid]}
+        configured: {type: boolean}
+        masked_username: {type: string}
+        message: {type: string}
+    Task:
+      type: object
+      required: [id, state]
+      properties:
+        id: {type: string}
+        operation: {type: string}
+        state: {type: string}
+        progress: {type: object, additionalProperties: true}
+        error: {type: string}
+    CandidateNotice:
+      type: object
+      required: [version_id, status]
+      properties:
+        version_id: {type: string}
+        status: {type: string}
+        title: {type: string}
+        term: {type: string}
+        query_eligible: {type: boolean}
+      additionalProperties: true
+    Snapshot:
+      type: object
+      required: [id, kind, term, source, source_at, payload]
+      properties:
+        id: {type: string}
+        kind: {type: string}
+        term: {type: string}
+        profile_id: {type: string, nullable: true}
+        notice_id: {type: string, nullable: true}
+        source: {type: string}
+        source_at: {type: string}
+        created_at: {type: string}
+        payload: {type: object, additionalProperties: true}
+    CompletedCourseFact:
+      type: object
+      required: [code, name, category, credits]
+      properties:
+        code: {type: string}
+        name: {type: string}
+        category: {type: string}
+        credits: {type: number}
+    RequirementProgress:
+      type: object
+      required: [key, label, required_credits, completed_credits, remaining_credits, courses]
+      properties:
+        key: {type: string}
+        label: {type: string}
+        required_credits: {type: number}
+        completed_credits: {type: number}
+        remaining_credits: {type: number}
+        courses: {type: array, items: {$ref: '#/components/schemas/CompletedCourseFact'}}
+    GraduationProgressReport:
+      type: object
+      required: [data_complete, progress]
+      properties:
+        generated_at: {type: string}
+        baseline_version: {type: string}
+        data_complete: {type: boolean}
+        progress: {type: array, items: {$ref: '#/components/schemas/RequirementProgress'}}
+    GraduationProgress:
+      type: object
+      required: [status, report]
+      properties:
+        status: {type: string, enum: [ready, incomplete, missing, invalid, not_applicable]}
+        report: {$ref: '#/components/schemas/GraduationProgressReport', nullable: true}
+        snapshot: {$ref: '#/components/schemas/Snapshot', nullable: true}
     WorkbenchState:
       type: object
-      required: [snapshots, stale, academic_session, csrf_token]
+      required: [login_configuration, profile, confirmed_notice, snapshots, snapshot_changes, latest_plan, graduation_progress, stale, academic_session, csrf_token]
       properties:
+        login_configuration: {$ref: '#/components/schemas/LoginConfiguration'}
         profile: {type: object, nullable: true, additionalProperties: true}
         confirmed_notice: {type: object, nullable: true, additionalProperties: true}
-        snapshots: {type: object, additionalProperties: true}
+        snapshots:
+          type: object
+          required: [selection, timetable, progress]
+          properties:
+            selection: {$ref: '#/components/schemas/Snapshot', nullable: true}
+            timetable: {$ref: '#/components/schemas/Snapshot', nullable: true}
+            progress: {$ref: '#/components/schemas/Snapshot', nullable: true}
+        snapshot_changes:
+          type: object
+          required: [selection, timetable, progress]
+          properties:
+            selection: {type: object, nullable: true, additionalProperties: true}
+            timetable: {type: object, nullable: true, additionalProperties: true}
+            progress: {type: object, nullable: true, additionalProperties: true}
         latest_plan: {type: object, nullable: true, additionalProperties: true}
-        graduation_progress: {type: object, additionalProperties: true}
-        stale: {type: object, additionalProperties: {type: boolean}}
-        academic_session: {type: object, properties: {state: {type: string}}}
+        graduation_progress: {$ref: '#/components/schemas/GraduationProgress'}
+        stale:
+          type: object
+          required: [selection, timetable, progress]
+          properties:
+            selection: {type: boolean}
+            timetable: {type: boolean}
+            progress: {type: boolean}
+        academic_session:
+          type: object
+          required: [state]
+          properties: {state: {type: string}}
         csrf_token: {type: string}

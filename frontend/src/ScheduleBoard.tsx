@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { WorkbenchState } from "./api.generated";
+import type { WorkbenchState } from "./api";
 import {
   activeInWeek,
   candidateOption,

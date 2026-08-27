@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from course_selection.cli import build_parser
 from course_selection.discovery import (
@@ -160,7 +161,7 @@ class InterfaceDiscoveryTests(unittest.TestCase):
         self.assertIsNone(selection.grade)
         self.assertEqual(
             str(selection.notice),
-            ".private\\academic-selection\\selection-notice.json",
+            str(Path(".private") / "academic-selection" / "selection-notice.json"),
         )
 
         configure = build_parser().parse_args(

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import secrets
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
+from urllib.parse import urlsplit
 
 from flask import Flask, abort, jsonify, request, send_from_directory
 
@@ -22,15 +23,21 @@ def create_workbench_app(
     gateway_factory: Callable[[], AcademicGateway] | None = None,
     frontend_root: Path | str | None = None,
     workbench_url: str = "http://127.0.0.1:5000",
+    login_root: Path | str | None = None,
+    require_login_configuration: bool = False,
 ) -> Flask:
     root = Path(root)
+    resolved_login_root = Path(login_root) if login_root else (
+        root.parent / "course-progress" if root.name == "academic-selection" else root / "course-progress"
+    )
     database = WorkspaceDatabase.open(root)
     if gateway_factory is None:
         gateway_factory = lambda: PlaywrightAcademicGateway(root.parent / "course-progress", root)
     service = ObservationService(database, gateway_factory)
     core = WorkbenchService(
         database,
-        progress_report_path=root.parent / "course-progress" / "progress-report.json",
+        progress_report_path=resolved_login_root / "progress-report.json",
+        login_root=resolved_login_root,
     )
     # The Vite config writes its production bundle here.  Keeping the bundle
     # beside the Python package makes the same Flask entry point work from a
@@ -44,22 +51,80 @@ def create_workbench_app(
         WORKBENCH_FRONTEND=frontend,
         CSRF_TOKEN=secrets.token_urlsafe(24),
         WORKBENCH_URL=workbench_url.rstrip("/"),
+        REQUIRE_LOGIN_CONFIGURATION=require_login_configuration,
     )
     app.extensions["workspace_database"] = database
     app.extensions["observation_service"] = service
     app.extensions["workbench_service"] = core
 
     @app.before_request
-    def protect_state_changes():
+    def protect_local_service():
+        host = urlsplit(f"http://{request.host}")
+        origin = urlsplit(request.headers.get("Origin", ""))
+        loopback = {"127.0.0.1", "localhost", "::1"}
+        if (host.hostname or "").lower() not in loopback:
+            abort(403)
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-            if request.host_url.rstrip("/") != request.headers.get("Origin", ""):
+            if (
+                origin.scheme != "http"
+                or (origin.hostname or "").lower() not in loopback
+                or origin.port != host.port
+            ):
                 abort(403)
             if request.headers.get("X-CSRF-Token") != app.config["CSRF_TOKEN"]:
                 abort(403)
 
+    @app.after_request
+    def harden_local_responses(response):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
+            "form-action 'self'; base-uri 'none'"
+        )
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        if request.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.get("/api/state")
     def state():
         return jsonify(core.state(session_state=service.session_state, csrf_token=app.config["CSRF_TOKEN"]))
+
+    @app.post("/api/login-configuration")
+    def configure_login():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        try:
+            def configure_and_restart():
+                result = core.configure_login(
+                    str(body.get("username", "")),
+                    str(body.get("password", "")),
+                )
+                service.submit("reset-login")
+                service.submit("launch-shell", {"workbench_url": app.config["WORKBENCH_URL"]})
+                connection = service.submit("connect", core.refresh_context())
+                return {**result, "connection_task": {"id": connection.id, "state": connection.state}}
+
+            result = service.run_when_idle(configure_and_restart)
+        except (OSError, RuntimeError, ValueError) as error:
+            return jsonify({"error": str(error)}), 400
+        return jsonify(result), 201
+
+    @app.delete("/api/login-configuration")
+    def clear_login():
+        try:
+            def clear_and_restart():
+                core.clear_login()
+                service.submit("reset-login")
+                service.submit("launch-shell", {"workbench_url": app.config["WORKBENCH_URL"]})
+
+            service.run_when_idle(clear_and_restart)
+        except (OSError, RuntimeError) as error:
+            return jsonify({"error": str(error)}), 409
+        return "", 204
 
     @app.post("/api/tasks")
     def submit_task():
@@ -67,14 +132,18 @@ def create_workbench_app(
         if not isinstance(body, dict):
             return jsonify({"error": "JSON object required"}), 400
         operation = body.get("operation", "")
-        if operation not in {"connect", "refresh-selection", "refresh-timetable", "observe-navigation"}:
+        if operation not in {"connect", "refresh-selection", "refresh-timetable", "refresh-progress", "observe-navigation"}:
             return jsonify({"error": "unsupported observation operation"}), 400
+        if app.config["REQUIRE_LOGIN_CONFIGURATION"] and not core.login_configuration().get("configured"):
+            return jsonify({"error": "请先配置本机自动登录"}), 409
         raw_context = body.get("context", {})
         if not isinstance(raw_context, dict):
             return jsonify({"error": "context must be an object"}), 400
         context = dict(raw_context)
         if operation in {"connect", "refresh-selection", "refresh-timetable"}:
             context = core.refresh_context()
+        elif operation == "refresh-progress":
+            context = core.progress_context()
         task = service.submit(operation, context)
         return jsonify({"id": task.id, "operation": operation, "state": task.state}), 202
 

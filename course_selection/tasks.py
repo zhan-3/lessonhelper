@@ -44,6 +44,7 @@ class ObservationService:
         self._cancelled: set[str] = set()
         self._finished: set[str] = set()
         self._shutdown = threading.Event()
+        self._login_reset_error = ""
         self._done: dict[str, threading.Event] = {}
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
@@ -57,7 +58,7 @@ class ObservationService:
         self._thread.start()
 
     def submit(self, operation: str, context: dict[str, Any] | None = None) -> SubmittedTask:
-        if operation not in {"launch-shell", "connect", "refresh-selection", "refresh-timetable", "observe-navigation"}:
+        if operation not in {"launch-shell", "reset-login", "connect", "refresh-selection", "refresh-timetable", "refresh-progress", "observe-navigation"}:
             raise ValueError("unsupported observation operation")
         context = sanitize_for_storage(context or {})
         key = hashlib.sha256(json.dumps([operation, context], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -76,6 +77,16 @@ class ObservationService:
             self._done[identity] = threading.Event()
             self._queue.put(identity)
             return SubmittedTask(identity, TaskState.QUEUED.value)
+
+    def run_when_idle(self, action: Callable[[], Any]) -> Any:
+        """Serialize login/workspace changes against every academic task."""
+        with self._lock:
+            active = self.database.connection.execute(
+                "select 1 from observation_tasks where state in ('queued','connecting','waiting_for_authentication','reading','observing','cancel_requested') limit 1"
+            ).fetchone()
+            if active:
+                raise RuntimeError("请等待当前教务任务结束后再更改登录")
+            return action()
 
     def inspect(self, identity: str) -> dict[str, Any] | None:
         with self._lock:
@@ -143,9 +154,9 @@ class ObservationService:
                 self._execute(identity)
             except Exception as error:
                 task = self.inspect(identity)
-                if task and task["operation"] in {"refresh-selection", "refresh-timetable"}:
+                if task and task["operation"] in {"refresh-selection", "refresh-timetable", "refresh-progress"}:
                     self.database.record_failed_attempt(
-                        "selection" if task["operation"] == "refresh-selection" else "timetable",
+                        {"refresh-selection": "selection", "refresh-timetable": "timetable", "refresh-progress": "progress"}[task["operation"]],
                         str(error),
                     )
                 self._update(identity, TaskState.FAILED.value, error=str(error))
@@ -159,6 +170,8 @@ class ObservationService:
         if identity in self._cancelled:
             self._update(identity, TaskState.CANCELLED.value)
             return
+        if self._login_reset_error and operation != "reset-login":
+            raise RuntimeError(self._login_reset_error)
         if self.gateway is None:
             self.gateway = self.gateway_factory()
         def cancelled() -> bool:
@@ -170,6 +183,24 @@ class ObservationService:
             elif mapped == TaskState.CONNECTING.value:
                 self.session_state = TaskState.CONNECTING.value
             self._update(identity, mapped, details)
+        if operation == "reset-login":
+            self._update(identity, TaskState.CONNECTING.value, {"message": "resetting academic login"})
+            reset = getattr(self.gateway, "reset_login", None)
+            try:
+                if reset is None:
+                    self.gateway.close()
+                else:
+                    reset()
+            except Exception as error:
+                self.gateway = None
+                self.session_state = "disconnected"
+                self._login_reset_error = f"登录重置失败：{str(error)[:300]}"
+                raise RuntimeError(self._login_reset_error) from error
+            self.gateway = None
+            self._login_reset_error = ""
+            self.session_state = "disconnected"
+            self._update(identity, TaskState.SUCCEEDED.value, {"status": "complete"})
+            return
         if operation == "launch-shell":
             self._update(identity, TaskState.CONNECTING.value)
             launcher = getattr(self.gateway, "launch_shell", None)
@@ -224,8 +255,11 @@ class ObservationService:
                 self._update(identity, TaskState.FAILED.value, result, str(result.get("status", "incomplete")))
             return
         self._update(identity, TaskState.READING.value)
-        kind = "selection" if operation == "refresh-selection" else "timetable"
-        reader = self.gateway.refresh_selection if kind == "selection" else self.gateway.refresh_timetable
+        kind = {"refresh-selection": "selection", "refresh-timetable": "timetable", "refresh-progress": "progress"}[operation]
+        reader = getattr(
+            self.gateway,
+            {"selection": "refresh_selection", "timetable": "refresh_timetable", "progress": "refresh_progress"}[kind],
+        )
         result = reader(context, progress, cancelled)
         if cancelled():
             self._update(identity, TaskState.CANCELLED.value)

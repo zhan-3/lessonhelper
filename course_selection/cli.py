@@ -59,6 +59,15 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("--academic-level", default="", help="培养层次；未知时可省略")
     profile.add_argument("--campus", default="", help="校区；未知时可省略")
     profile.add_argument("--profile", type=Path, default=DEFAULT_STUDENT_PROFILE_PATH)
+    analyze = subparsers.add_parser(
+        "analyze-interface", help="只读分析学校页面提供的接口契约"
+    )
+    analyze.add_argument("--target", choices=("student-profile",), required=True)
+    analyze.add_argument("--url", default=DEFAULT_PORTAL_URL, help="WebVPN 门户入口")
+    analyze.add_argument("--profile-root", type=Path, default=Path(".private/course-progress"))
+    analyze.add_argument("--output-root", type=Path, default=Path(".private/interface-analysis"))
+    analyze.add_argument("--login-timeout-seconds", type=int, default=600)
+    analyze.add_argument("--wait-seconds", type=int, default=60)
     explore = subparsers.add_parser(
         "explore-entry", help="只读观察已确认通知对应的教务选课入口"
     )
@@ -105,6 +114,21 @@ def build_parser() -> argparse.ArgumentParser:
                 help="本地学生画像",
             )
     return parser
+
+
+def run_interface_analysis(args: argparse.Namespace) -> int:
+    from .student_profile_observation import StudentProfileInterfaceAnalyzer
+
+    analyzer = StudentProfileInterfaceAnalyzer(
+        profile_root=args.profile_root.resolve(),
+        output_root=args.output_root.resolve(),
+        portal_url=args.url,
+        login_timeout_seconds=args.login_timeout_seconds,
+        wait_seconds=args.wait_seconds,
+    )
+    output = analyzer.run()
+    print(f"候选学生画像接口：{output}")
+    return 0
 
 
 def run_discovery(args: argparse.Namespace) -> int:
@@ -247,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_configure_login(args)
     if args.command == "configure-profile":
         return run_configure_profile(args)
+    if args.command == "analyze-interface":
+        return run_interface_analysis(args)
     if args.command == "explore-entry":
         return run_explore_entry(args)
     if args.command in {"discover-timetable", "discover-selection"}:

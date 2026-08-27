@@ -30,6 +30,46 @@ class WorkbenchServiceTests(unittest.TestCase):
             self.assertEqual("missing", service.graduation_progress()["status"])
             database.close()
 
+    def test_progress_snapshot_must_match_current_profile_and_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            with database.connection:
+                current_profile = database._insert_profile({"grade": "2025"})
+            database.publish_snapshot(
+                "progress",
+                "",
+                {
+                    "report": {
+                        "data_complete": True,
+                        "baseline_version": "guide-2026",
+                        "progress": [],
+                    }
+                },
+                source="test",
+                profile_id="another-profile",
+            )
+            service = WorkbenchService(database)
+            self.assertEqual("not_applicable", service.graduation_progress()["status"])
+            with database.connection:
+                database.connection.execute("update refresh_attempts set snapshot_id=null")
+                database.connection.execute("delete from snapshot_changes")
+                database.connection.execute("delete from snapshots")
+            database.publish_snapshot(
+                "progress",
+                "",
+                {
+                    "report": {
+                        "data_complete": True,
+                        "baseline_version": "wrong-baseline",
+                        "progress": [],
+                    }
+                },
+                source="test",
+                profile_id=current_profile,
+            )
+            self.assertEqual("not_applicable", service.graduation_progress()["status"])
+            database.close()
+
     def test_refresh_context_is_computed_without_flask(self):
         with tempfile.TemporaryDirectory() as directory:
             database = WorkspaceDatabase.open(Path(directory))

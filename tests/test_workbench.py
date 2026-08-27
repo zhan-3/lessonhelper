@@ -20,6 +20,9 @@ class FakeGateway:
         self.selection_count = 0
         self.closed = False
 
+    def launch_shell(self, url, progress, cancelled):
+        progress("connecting", {"message": "shell opened"})
+
     def connect(self, progress, cancelled):
         self.connect_count += 1
         progress("connecting", {})
@@ -34,6 +37,33 @@ class FakeGateway:
 
     def close(self):
         self.closed = True
+
+
+class ProgressGateway(FakeGateway):
+    def refresh_progress(self, context, progress, cancelled):
+        progress("reading", {"target": "progress", "semester": "2026春", "page": 1, "page_count": 1})
+        return {
+            "status": "complete",
+            "source_kind": "academic",
+            "term": "2026年春季学期",
+            "report": {
+                "data_complete": True,
+                "baseline_version": "guide-2026",
+                "progress": [{
+                    "key": "major_elective",
+                    "label": "本专业选修",
+                    "required_credits": 12,
+                    "completed_credits": 3,
+                    "remaining_credits": 9,
+                    "courses": [{"code": "CS1", "name": "课程", "credits": 3}],
+                }],
+            },
+        }
+
+
+class ResetFailureGateway(FakeGateway):
+    def reset_login(self):
+        raise OSError("profile remains locked")
 
 
 class ShellGateway(FakeGateway):
@@ -179,6 +209,45 @@ class WorkspaceDatabaseTests(unittest.TestCase):
 
 
 class ObservationServiceTests(unittest.TestCase):
+    def test_login_changes_require_an_idle_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            service = ObservationService(database, FakeGateway, autostart=False)
+            service.submit("connect")
+            with self.assertRaisesRegex(RuntimeError, "当前教务任务"):
+                service.run_when_idle(lambda: None)
+            service.close()
+            database.close()
+
+    def test_failed_login_reset_blocks_following_academic_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            service = ObservationService(database, ResetFailureGateway)
+            reset = service.submit("reset-login")
+            self.assertTrue(service.wait(reset.id, 2))
+            self.assertEqual(TaskState.FAILED.value, service.inspect(reset.id)["state"])
+            connect = service.submit("connect")
+            self.assertTrue(service.wait(connect.id, 2))
+            self.assertEqual(TaskState.FAILED.value, service.inspect(connect.id)["state"])
+            self.assertIn("登录重置失败", service.inspect(connect.id)["error"])
+            service.close()
+            database.close()
+
+    def test_progress_refresh_publishes_score_free_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            gateway = ProgressGateway()
+            service = ObservationService(database, lambda: gateway)
+            task = service.submit("refresh-progress")
+            self.assertTrue(service.wait(task.id, 2))
+            self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(task.id)["state"])
+            snapshot = database.latest_snapshot("progress")
+            self.assertEqual("academic", snapshot["source"])
+            self.assertEqual(3, snapshot["payload"]["report"]["progress"][0]["completed_credits"])
+            self.assertNotIn("score", json.dumps(snapshot, ensure_ascii=False).lower())
+            service.close()
+            database.close()
+
     def test_shell_launch_opens_workbench_without_authenticating(self):
         with tempfile.TemporaryDirectory() as directory:
             database = WorkspaceDatabase.open(Path(directory))
@@ -271,6 +340,66 @@ class ObservationServiceTests(unittest.TestCase):
 
 
 class WorkbenchApiTests(unittest.TestCase):
+    def test_local_login_configuration_is_dpapi_protected_and_never_returned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_workbench_app(
+                Path(directory),
+                gateway_factory=FakeGateway,
+                require_login_configuration=True,
+            )
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            self.assertFalse(state["login_configuration"]["configured"])
+            headers = {
+                "Origin": "http://localhost",
+                "Host": "localhost",
+                "X-CSRF-Token": state["csrf_token"],
+            }
+            blocked = client.post(
+                "/api/tasks",
+                json={"operation": "connect"},
+                headers=headers,
+            )
+            self.assertEqual(409, blocked.status_code)
+            response = client.post(
+                "/api/login-configuration",
+                json={"username": "2025000000", "password": "local-secret"},
+                headers=headers,
+            )
+            self.assertEqual(201, response.status_code)
+            payload = response.get_json()
+            self.assertTrue(payload["configured"])
+            service = app.extensions["observation_service"]
+            self.assertTrue(service.wait(payload["connection_task"]["id"], 2))
+            self.assertEqual("2025******", payload["masked_username"])
+            self.assertNotIn("local-secret", json.dumps(payload))
+            encrypted = Path(directory) / "course-progress" / "webvpn-login.dpapi"
+            self.assertTrue(encrypted.is_file())
+            self.assertNotIn(b"local-secret", encrypted.read_bytes())
+            changed = client.post(
+                "/api/login-configuration",
+                json={"username": "2025999999", "password": "other-secret"},
+                headers=headers,
+            )
+            self.assertEqual(400, changed.status_code)
+            database = app.extensions["workspace_database"]
+            with database.connection:
+                database._insert_profile({"grade": "2025"})
+            database.publish_snapshot("timetable", "2026-1", {"entries": []}, source="test")
+            report = Path(directory) / "course-progress" / "progress-report.json"
+            checkpoint = Path(directory) / "course-progress" / "collection-checkpoint.json"
+            report.write_text("{}", encoding="utf-8")
+            checkpoint.write_text("{}", encoding="utf-8")
+            self.assertEqual(204, client.delete("/api/login-configuration", headers=headers).status_code)
+            cleared = client.get("/api/state").get_json()
+            self.assertFalse(cleared["login_configuration"]["configured"])
+            self.assertIsNone(cleared["profile"])
+            self.assertIsNone(cleared["snapshots"]["timetable"])
+            self.assertFalse(report.exists())
+            self.assertFalse(checkpoint.exists())
+            app.extensions["observation_service"].close()
+            app.extensions["workspace_database"].close()
+
     def test_production_frontend_is_served_from_configured_build_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             frontend = Path(directory) / "frontend"
@@ -368,7 +497,11 @@ class WorkbenchApiTests(unittest.TestCase):
             app = create_workbench_app(Path(directory), gateway_factory=FakeGateway)
             client = app.test_client()
             self.assertEqual(403, client.post("/api/tasks", json={"operation": "connect"}).status_code)
-            state = client.get("/api/state").get_json()
+            self.assertEqual(403, client.get("/api/state", headers={"Host": "attacker.example"}).status_code)
+            state_response = client.get("/api/state")
+            self.assertEqual("no-store", state_response.headers["Cache-Control"])
+            self.assertIn("frame-ancestors 'none'", state_response.headers["Content-Security-Policy"])
+            state = state_response.get_json()
             response = client.post("/api/tasks", json={"operation": "connect"}, headers={"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]})
             self.assertEqual(202, response.status_code)
             app.extensions["observation_service"].close()

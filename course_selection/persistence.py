@@ -272,6 +272,15 @@ class WorkspaceDatabase:
     def _snapshot_dict(row: sqlite3.Row) -> dict[str, Any]:
         return {"id": row["id"], "kind": row["kind"], "term": row["term"], "profile_id": row["profile_id"], "notice_id": row["notice_id"], "source": row["source"], "source_at": row["source_at"], "created_at": row["created_at"], "payload": json.loads(row["payload"])}
 
+    def reset_personal_workspace(self) -> None:
+        """Remove identity-bound facts before another student can use the workspace."""
+        with self.connection:
+            self.connection.execute("delete from snapshot_changes")
+            self.connection.execute("delete from refresh_attempts")
+            self.connection.execute("delete from plans")
+            self.connection.execute("delete from snapshots")
+            self.connection.execute("delete from profiles")
+
     def close(self) -> None:
         self.connection.close()
 

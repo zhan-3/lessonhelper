@@ -53,6 +53,7 @@ def run_workbench_application(root: Path, port: int) -> int:
         root,
         gateway_factory=gateway_factory,
         workbench_url=url,
+        require_login_configuration=True,
     )
     service = app.extensions["observation_service"]
     database = app.extensions["workspace_database"]

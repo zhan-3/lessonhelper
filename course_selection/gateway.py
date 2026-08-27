@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
@@ -16,7 +19,9 @@ class AcademicGateway(Protocol):
     def connect(self, progress: Progress, cancelled: Cancelled) -> None: ...
     def refresh_selection(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
+    def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]: ...
+    def reset_login(self) -> None: ...
     def close(self) -> None: ...
     def poll(self) -> None: ...
 
@@ -37,8 +42,15 @@ class UnconfirmedAcademicGateway:
         progress("interface_unconfirmed", {"target": "timetable", "message": "timetable read interface is not configured"})
         return {"status": "interface_unconfirmed", "entries": []}
 
+    def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
+        progress("interface_unconfirmed", {"target": "progress", "message": "grade read interface is not configured"})
+        return {"status": "interface_unconfirmed", "report": None}
+
     def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]:
         return {"status": "interface_unconfirmed", "report": {"events": [], "blocked_requests": []}}
+
+    def reset_login(self) -> None:
+        self.close()
 
     def close(self) -> None:
         return None
@@ -146,19 +158,68 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
         from types import SimpleNamespace
-        from .discovery import InterfaceDiscovery, TARGET_SELECTION
+
+        from .discovery import TARGET_SELECTION, InterfaceDiscovery
+        from .selection_query import (
+            SelectionContractError,
+            VerifiedSelectionQueryAdapter,
+        )
+
         categories = tuple(context.get("allowed_categories", ()))
-        if not categories or not context.get("semester_label"):
+        semester_label = str(context.get("semester_label", ""))
+        if not categories or not semester_label:
             return {"status": "no_matching_round", "sections": []}
+        raw_windows = context.get("allowed_windows", {})
+
+        # Normal refreshes use the versioned, verified read contract directly.
+        # The browser is retained for authentication, cookies, dynamic form
+        # state and same-origin fetch; no selection-menu controls are clicked.
+        page = getattr(self, "_academic_page", None)
+        if page is None:
+            try:
+                pages = self._academic_pages()
+            except (AttributeError, TypeError):
+                pages = []
+            page = pages[-1] if pages else None
+        if page is not None and not self._page_is_closed(page):
+            try:
+                result = VerifiedSelectionQueryAdapter().read(
+                    page,
+                    categories=categories,
+                    semester_label=semester_label,
+                    allowed_windows=raw_windows,
+                    progress=progress,
+                    cancelled=cancelled,
+                    authenticate=lambda url, target_page: self._session.open_authenticated(
+                        url,
+                        timeout_seconds=int(context.get("login_timeout_seconds", 600)),
+                        page=target_page,
+                    ),
+                )
+                result.setdefault("source_kind", "verified-selection-api")
+                return result
+            except SelectionContractError as error:
+                progress(
+                    "reading",
+                    {
+                        "target": "selection",
+                        "mode": "contract-discovery",
+                        "message": str(error),
+                    },
+                )
+
+        # Only a missing or changed verified contract enters discovery.  A
+        # transient category/page failure returned by the adapter remains an
+        # incomplete attempt and is never repeated through another path.
         windows = {
             code: tuple(SimpleNamespace(**item) for item in items)
-            for code, items in context.get("allowed_windows", {}).items()
+            for code, items in raw_windows.items()
         }
         navigator = InterfaceDiscovery(
             target=TARGET_SELECTION, output_root=self.workspace_root,
             allowed_selection_categories=categories,
             allowed_selection_windows=windows,
-            notice_semester=context["semester_label"],
+            notice_semester=semester_label,
         )
         browser_context = self._session.context
         response_handler = navigator._handle_response
@@ -166,11 +227,17 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         browser_context.on("response", response_handler)
         browser_context.route("**/*", route_handler)
         try:
-            progress("reading", {"category": categories[0], "page": 1})
+            progress("reading", {"target": "selection", "mode": "contract-discovery"})
             report = navigator.run(browser_context, max_clicks=8, wait_seconds=30)
         finally:
-            browser_context.unroute("**/*", route_handler)
-            browser_context.remove_listener("response", response_handler)
+            # Lightweight test and embedding contexts may not expose unroute;
+            # real Playwright BrowserContext instances do.
+            unroute = getattr(browser_context, "unroute", None)
+            if unroute is not None:
+                unroute("**/*", route_handler)
+            remove_listener = getattr(browser_context, "remove_listener", None)
+            if remove_listener is not None:
+                remove_listener("response", response_handler)
         if not report.selection_query_payload:
             return {"status": "interface_unconfirmed", "sections": []}
         # Discovery keeps a JSON artifact for read-only diagnostics, but the
@@ -181,7 +248,89 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         queries = payload.get("queries", [])
         complete = bool(queries) and all(item.get("complete") for item in queries)
         sections = [section for query in queries for section in query.get("sections", [])]
-        return {"status": "complete" if complete else "incomplete", "sections": sections, "queries": queries}
+        return {
+            "status": "complete" if complete else "incomplete",
+            "source_kind": "discovered-selection-api",
+            "sections": sections,
+            "queries": queries,
+        }
+
+    def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
+        """Collect grade records and return only a score-free progress report."""
+        if self._session is None or self._session.context is None:
+            raise RuntimeError("academic session is disconnected")
+        from course_progress.collector import PlaywrightGradeCollector, wait_for_reauthentication
+        from course_progress.progress import RequirementBaseline, evaluate_progress, parse_requirements
+
+        page = getattr(self, "_academic_page", None)
+        if page is None:
+            pages = self._academic_pages()
+            page = pages[-1] if pages else None
+        if page is None or self._page_is_closed(page):
+            return {"status": "entry_unreachable", "report": None}
+
+        requirements_path = Path(__file__).resolve().parents[1] / "docs" / "校园培养方案解读（2026年版）.md"
+        if not requirements_path.is_file():
+            return {"status": "interface_unconfirmed", "report": None}
+        baseline = RequirementBaseline(
+            version=str(context.get("baseline_version", "guide-2026")),
+            requirements=parse_requirements(requirements_path),
+            category_mapping={
+                "本专业选修": "major_elective",
+                "外专业选修": "outside_major_elective",
+                "文理通识-文化素质教育课": "cultural_quality",
+                "创新研修课": "innovation",
+                "社会实践": "social_practice",
+            },
+        )
+        timeout = int(context.get("login_timeout_seconds", 600))
+
+        def on_page_data(semester, page_number, page_count, records):
+            progress("reading", {
+                "target": "progress",
+                "semester": semester.label,
+                "page": page_number,
+                "page_count": page_count,
+                "records": len(records),
+            })
+
+        collection = PlaywrightGradeCollector(
+            page_size=int(context.get("page_size", 20))
+        ).collect(
+            page,
+            frame_timeout_seconds=timeout,
+            on_session_expired=lambda: wait_for_reauthentication(page, timeout),
+            on_page_data=on_page_data,
+            is_cancelled=cancelled,
+        )
+        report = evaluate_progress(collection.records, baseline)
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return {
+            "status": "complete" if collection.complete else "incomplete",
+            "source_kind": "academic",
+            "source_at": now,
+            "term": str(context.get("term", "")),
+            "report": {
+                "generated_at": now,
+                "baseline_version": report.baseline_version,
+                "data_complete": collection.complete,
+                "semesters": [asdict(item) for item in collection.semesters],
+                "collection_failures": [asdict(item) for item in collection.failures],
+                "progress": [
+                    {
+                        "key": item.requirement.key,
+                        "label": item.requirement.label,
+                        "required_credits": item.requirement.minimum_credits,
+                        "completed_credits": item.completed_credits,
+                        "remaining_credits": item.remaining_credits,
+                        "courses": [asdict(course) for course in item.courses],
+                    }
+                    for item in report.progress
+                ],
+                "conflicts": [asdict(item) for item in report.conflicts],
+                "unclassified_courses": [asdict(course) for course in report.unclassified_courses],
+            },
+        }
 
     def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         if self._session is None or self._session.context is None:
@@ -330,6 +479,24 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                 "timed_out": time.monotonic() - started >= timeout_seconds,
             },
         }
+
+    def reset_login(self) -> None:
+        """Close the owned browser and remove authentication-bearing profile state."""
+        import shutil
+
+        from course_progress.explorer import resolve_profile_dir
+
+        self.close()
+        profile_dir = resolve_profile_dir(self.profile_root)
+        if profile_dir.exists():
+            shutil.rmtree(profile_dir)
+        if profile_dir.exists():
+            raise RuntimeError("无法清除旧教务浏览器会话；已阻止重新连接")
+        (self.profile_root / "webvpn-auth-state.json").unlink(missing_ok=True)
+        self._academic_page = None
+        self._shell_page = None
+        self._closing = False
+        self._browser_closed_notified = False
 
     def close(self) -> None:
         self._closing = True
