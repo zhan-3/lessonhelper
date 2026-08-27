@@ -1,0 +1,70 @@
+openapi: 3.0.3
+info: {title: Academic Selection Workbench, version: 0.1.0}
+paths:
+  /api/state:
+    get:
+      responses:
+        '200':
+          description: Local persisted workbench state
+          content: {application/json: {schema: {$ref: '#/components/schemas/WorkbenchState'}}}
+  /api/tasks:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TaskRequest'}}}}
+      responses: {'202': {description: Accepted}}
+  /api/plans:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlanRequest'}}}}
+      responses: {'201': {description: Persisted read-only plan}}
+  /api/plans/latest:
+    get:
+      responses: {'200': {description: Latest persisted read-only plan}, '404': {description: No plan}}
+  /api/tasks/{identity}:
+    get:
+      parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Task state}, '404': {description: Task not found}}
+    delete:
+      parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
+      responses: {'202': {description: Cancellation requested}, '409': {description: Task cannot be cancelled}}
+  /api/tasks/{identity}/finish:
+    post:
+      parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
+      responses: {'202': {description: Observation finish requested}, '409': {description: Task cannot be finished}}
+  /api/notices/candidates:
+    get:
+      responses: {'200': {description: Candidate notice versions}}
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: true}}}}
+      responses: {'201': {description: Candidate notice saved}}
+  /api/notices/{identity}/confirm:
+    post:
+      parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Notice confirmed}, '409': {description: Notice cannot be confirmed}}
+  /api/timetable/import:
+    post:
+      requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, properties: {timetable: {type: string, format: binary}, term: {type: string}}}}}}
+      responses: {'201': {description: Timetable snapshot imported}}
+components:
+  schemas:
+    TaskRequest:
+      type: object
+      required: [operation]
+      properties:
+        operation: {type: string, enum: [connect, refresh-selection, refresh-timetable, observe-navigation]}
+        context: {type: object, additionalProperties: true}
+    PlanRequest:
+      type: object
+      required: [goals]
+      properties:
+        goals: {type: array, items: {type: object, additionalProperties: true}}
+    WorkbenchState:
+      type: object
+      required: [snapshots, stale, academic_session, csrf_token]
+      properties:
+        profile: {type: object, nullable: true, additionalProperties: true}
+        confirmed_notice: {type: object, nullable: true, additionalProperties: true}
+        snapshots: {type: object, additionalProperties: true}
+        latest_plan: {type: object, nullable: true, additionalProperties: true}
+        graduation_progress: {type: object, additionalProperties: true}
+        stale: {type: object, additionalProperties: {type: boolean}}
+        academic_session: {type: object, properties: {state: {type: string}}}
+        csrf_token: {type: string}

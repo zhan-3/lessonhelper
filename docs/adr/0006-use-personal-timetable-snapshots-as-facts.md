@@ -1,0 +1,3 @@
+# Use personal timetable snapshots as facts
+
+The workbench will treat the read-only personal timetable interface as the authoritative source for a student's current timetable. Each complete response is sanitized into a structured local snapshot, and updates are recorded as a diff from the previous complete snapshot in the same profile, term, and notice context. A class timetable may be retained only as a labelled reference baseline and cannot overwrite or silently fill personal timetable facts. Timetable export endpoints and controls remain outside the allowlist because they are unnecessary for observation and broaden the data-retention surface.
