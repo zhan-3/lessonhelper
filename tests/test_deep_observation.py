@@ -6,6 +6,7 @@ from pathlib import Path
 from course_selection.deep_observation import (
     AcademicRequestTrace,
     ReplayAcademicObserver,
+    SelectionDiscoveryDiagnostic,
     TimetableObservationRequest,
     TimetableObservationResult,
     TraceStore,
@@ -87,6 +88,26 @@ class DeepObservationTests(unittest.TestCase):
             self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(task.id)["state"])
             self.assertEqual("TASK-1", database.latest_snapshot("selection")["payload"]["sections"][0]["identity"])
             self.assertTrue((Path(directory) / "request-traces" / f"{task.id}.jsonl").is_file())
+            service.close()
+            database.close()
+
+    def test_discovery_diagnostic_is_interface_unconfirmed_and_never_published(self):
+        observer = ReplayAcademicObserver(SelectionDiscoveryDiagnostic(
+            diagnostic={"target_found": True, "captures": 2},
+        ))
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            existing = database.publish_snapshot(
+                "selection", "2026-1", {"sections": [{"identity": "OLD"}]}, source="test"
+            )
+            service = ObservationService(database, lambda: observer)
+            task = service.submit("refresh-selection", {"term": "2026-1"})
+            self.assertTrue(service.wait(task.id, 2))
+
+            inspected = service.inspect(task.id)
+            self.assertEqual(TaskState.INTERFACE_UNCONFIRMED.value, inspected["state"])
+            self.assertEqual({"target_found": True, "captures": 2}, inspected["progress"]["diagnostic"])
+            self.assertEqual(existing["id"], database.latest_snapshot("selection")["id"])
             service.close()
             database.close()
 

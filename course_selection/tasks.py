@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from .deep_observation import (
+    SelectionDiscoveryDiagnostic,
     SelectionObservationRequest,
     SelectionObservationResult,
     TimetableObservationRequest,
@@ -295,6 +296,10 @@ class ObservationService:
                 trace_progress["trace_error"] = str(error)[:300]
             if cancelled() or observed.status == "cancelled":
                 self._update(identity, TaskState.CANCELLED.value, trace_progress)
+            elif isinstance(observed, SelectionDiscoveryDiagnostic):
+                details = {**trace_progress, "diagnostic": observed.diagnostic}
+                self.database.record_failed_attempt(kind, observed.status)
+                self._update(identity, TaskState.INTERFACE_UNCONFIRMED.value, details, observed.status)
             elif observed.status == "complete":
                 self.database.publish_snapshot(
                     kind, str(observed.payload.get("term", context.get("term", ""))), observed.payload,

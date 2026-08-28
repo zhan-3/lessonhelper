@@ -271,31 +271,33 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             remove_listener = getattr(browser_context, "remove_listener", None)
             if remove_listener is not None:
                 remove_listener("response", response_handler)
-        if not report.selection_query_payload:
-            return {"status": "interface_unconfirmed", "sections": []}
-        # Discovery keeps a JSON artifact for read-only diagnostics, but the
-        # refresh path consumes its structured result directly.  SQLite is
-        # written by ObservationService after this method returns, so a stale
-        # diagnostic file cannot be published as a snapshot.
-        payload = report.selection_query_payload
-        queries = payload.get("queries", [])
-        complete = bool(queries) and all(item.get("complete") for item in queries)
-        sections = [section for query in queries for section in query.get("sections", [])]
+        # Discovery is diagnostic-only: even a plausible response must be
+        # independently contracted before it can become a selection snapshot.
         return {
-            "status": "complete" if complete else "incomplete",
-            "source_kind": "discovered-selection-api",
-            "sections": sections,
-            "queries": queries,
+            "status": "interface_unconfirmed",
+            "diagnostic": {
+                "target_found": bool(getattr(report, "target_found", False)),
+                "captures": int(getattr(report, "captures", 0)),
+                "candidates_path": str(getattr(report, "candidates_path", "")),
+            },
         }
 
     def observe_selection(self, request, progress: Progress, cancelled: Cancelled):
         """Run the verified selection reader behind the typed observation seam."""
-        from .deep_observation import AcademicRequestTrace, SelectionObservationResult
+        from .deep_observation import (
+            AcademicRequestTrace,
+            SelectionDiscoveryDiagnostic,
+            SelectionObservationResult,
+        )
 
         result = self.refresh_selection(request.context, progress, cancelled)
         trace = AcademicRequestTrace.from_requests(result.pop("_trace_requests", ()))
         if cancelled():
             return SelectionObservationResult.incomplete("cancelled", trace=trace)
+        if result.get("status") == "interface_unconfirmed":
+            return SelectionDiscoveryDiagnostic(
+                diagnostic=dict(result.get("diagnostic") or {}), trace=trace,
+            )
         if result.get("status") != "complete":
             return SelectionObservationResult.incomplete(str(result.get("status", "incomplete")), trace=trace)
         return SelectionObservationResult.complete(result, trace=trace)

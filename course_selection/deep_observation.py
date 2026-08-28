@@ -128,12 +128,24 @@ class SelectionObservationResult:
         return cls(status="incomplete", trace=trace or AcademicRequestTrace.empty(), error=error)
 
 
+@dataclass(frozen=True)
+class SelectionDiscoveryDiagnostic:
+    """Non-publishable evidence produced when the verified contract is absent."""
+
+    status: str = "interface_unconfirmed"
+    diagnostic: dict[str, Any] = field(default_factory=dict)
+    trace: AcademicRequestTrace = field(default_factory=AcademicRequestTrace.empty)
+    error: str = ""
+
+
 class TimetableObserver(Protocol):
     def observe_timetable(self, request: TimetableObservationRequest, progress, cancelled) -> TimetableObservationResult: ...
 
 
 class SelectionObserver(Protocol):
-    def observe_selection(self, request: SelectionObservationRequest, progress, cancelled) -> SelectionObservationResult: ...
+    def observe_selection(
+        self, request: SelectionObservationRequest, progress, cancelled
+    ) -> SelectionObservationResult | SelectionDiscoveryDiagnostic: ...
 
 
 class TraceStore:
@@ -169,7 +181,7 @@ class TraceStore:
 class ReplayAcademicObserver:
     """Deterministic adapter used to validate publication without Playwright."""
 
-    def __init__(self, result: TimetableObservationResult):
+    def __init__(self, result: TimetableObservationResult | SelectionObservationResult | SelectionDiscoveryDiagnostic):
         self.result = result
         self.requests: list[TimetableObservationRequest] = []
         self.closed = False
@@ -181,9 +193,9 @@ class ReplayAcademicObserver:
         self.requests.append(request)
         return self.result
 
-    def observe_selection(self, request: SelectionObservationRequest, progress, cancelled) -> SelectionObservationResult:
+    def observe_selection(self, request: SelectionObservationRequest, progress, cancelled):
         self.requests.append(request)
-        if isinstance(self.result, SelectionObservationResult):
+        if isinstance(self.result, (SelectionObservationResult, SelectionDiscoveryDiagnostic)):
             return self.result
         return SelectionObservationResult.incomplete("replay has no selection result")
 
