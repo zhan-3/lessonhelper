@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
 
+from .deep_observation import (
+    TimetableObservationRequest,
+    TimetableObservationResult,
+    TraceStore,
+)
 from .gateway import AcademicGateway
 from .persistence import WorkspaceDatabase, sanitize_for_storage, utc_now
 
@@ -35,9 +40,10 @@ class SubmittedTask:
 
 
 class ObservationService:
-    def __init__(self, database: WorkspaceDatabase, gateway_factory: Callable[[], AcademicGateway], *, autostart: bool = True):
+    def __init__(self, database: WorkspaceDatabase, gateway_factory: Callable[[], AcademicGateway], *, autostart: bool = True, trace_store: TraceStore | None = None):
         self.database = database
         self.gateway_factory = gateway_factory
+        self.trace_store = trace_store or TraceStore(database.root / "request-traces")
         self.gateway: AcademicGateway | None = None
         self.session_state = "disconnected"
         self._queue: queue.Queue[str | None] = queue.Queue()
@@ -219,6 +225,7 @@ class ObservationService:
         self.session_state = "connected"
         if operation == "connect":
             refreshes: dict[str, str] = {}
+            trace_details: dict[str, Any] = {}
             for kind, reader in (
                 ("timetable", self.gateway.refresh_timetable),
                 ("selection", self.gateway.refresh_selection),
@@ -227,7 +234,25 @@ class ObservationService:
                     refreshes[kind] = "skipped_no_confirmed_categories"
                     continue
                 self._update(identity, TaskState.READING.value, {"target": kind})
-                result = reader(context, progress, cancelled)
+                if kind == "timetable" and hasattr(self.gateway, "observe_timetable"):
+                    observed: TimetableObservationResult = self.gateway.observe_timetable(
+                        TimetableObservationRequest(term=str(context.get("term", "")), context=context),
+                        progress,
+                        cancelled,
+                    )
+                    try:
+                        trace_details["trace_path"] = str(self.trace_store.write(identity, observed.trace))
+                        trace_details["trace_incomplete"] = False
+                    except OSError as error:
+                        trace_details["trace_incomplete"] = True
+                        trace_details["trace_error"] = str(error)[:300]
+                    if cancelled() or observed.status == "cancelled":
+                        self._update(identity, TaskState.CANCELLED.value, trace_details)
+                        return
+                    result = observed.snapshot_payload()
+                    result["term"] = observed.term or str(context.get("term", ""))
+                else:
+                    result = reader(context, progress, cancelled)
                 status = str(result.get("status", "incomplete"))
                 refreshes[kind] = status
                 if status == "complete":
@@ -241,7 +266,7 @@ class ObservationService:
                     )
                 else:
                     self.database.record_failed_attempt(kind, status)
-            self._update(identity, TaskState.SUCCEEDED.value, {"status": "complete", "refreshes": refreshes})
+            self._update(identity, TaskState.SUCCEEDED.value, {"status": "complete", "refreshes": refreshes, **trace_details})
             return
         if operation == "observe-navigation":
             result = self.gateway.observe_navigation(
@@ -256,6 +281,33 @@ class ObservationService:
             return
         self._update(identity, TaskState.READING.value)
         kind = {"refresh-selection": "selection", "refresh-timetable": "timetable", "refresh-progress": "progress"}[operation]
+        if kind == "timetable" and hasattr(self.gateway, "observe_timetable"):
+            observed: TimetableObservationResult = self.gateway.observe_timetable(
+                TimetableObservationRequest(term=str(context.get("term", "")), context=context),
+                progress,
+                cancelled,
+            )
+            trace_progress: dict[str, Any] = {"trace_incomplete": False}
+            try:
+                trace_progress["trace_path"] = str(self.trace_store.write(identity, observed.trace))
+            except OSError as error:
+                trace_progress["trace_incomplete"] = True
+                trace_progress["trace_error"] = str(error)[:300]
+            result = observed.snapshot_payload()
+            if cancelled() or observed.status == "cancelled":
+                self._update(identity, TaskState.CANCELLED.value, trace_progress)
+            elif observed.status == "complete":
+                self.database.publish_snapshot(
+                    kind, observed.term or str(context.get("term", "")), result,
+                    source=observed.source_kind, profile_id=context.get("profile_id"),
+                    notice_id=context.get("notice_id"),
+                )
+                self._update(identity, TaskState.SUCCEEDED.value, trace_progress)
+            else:
+                error = observed.error or observed.status
+                self.database.record_failed_attempt(kind, error)
+                self._update(identity, TaskState.FAILED.value, trace_progress, error)
+            return
         reader = getattr(
             self.gateway,
             {"selection": "refresh_selection", "timetable": "refresh_timetable", "progress": "refresh_progress"}[kind],

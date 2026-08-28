@@ -13,12 +13,17 @@ from urllib.parse import urlsplit
 Progress = Callable[[str, dict[str, Any]], None]
 Cancelled = Callable[[], bool]
 
+_ACADEMIC_PROXY_PATH = (
+    "/http/77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/"
+)
+
 
 class AcademicGateway(Protocol):
     def launch_shell(self, url: str, progress: Progress, cancelled: Cancelled) -> None: ...
     def connect(self, progress: Progress, cancelled: Cancelled) -> None: ...
     def refresh_selection(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
+    def observe_timetable(self, request, progress: Progress, cancelled: Cancelled): ...
     def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]: ...
     def reset_login(self) -> None: ...
@@ -41,6 +46,11 @@ class UnconfirmedAcademicGateway:
     def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         progress("interface_unconfirmed", {"target": "timetable", "message": "timetable read interface is not configured"})
         return {"status": "interface_unconfirmed", "entries": []}
+
+    def observe_timetable(self, request, progress: Progress, cancelled: Cancelled):
+        from .deep_observation import TimetableObservationResult
+        result = self.refresh_timetable(request.context, progress, cancelled)
+        return TimetableObservationResult.incomplete(str(result.get("status", "interface_unconfirmed")))
 
     def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         progress("interface_unconfirmed", {"target": "progress", "message": "grade read interface is not configured"})
@@ -332,7 +342,8 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             },
         }
 
-    def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
+    def _refresh_timetable_payload(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
+        trace_requests: list[dict[str, Any]] = []
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
         from .personal_timetable import parse_personal_timetable_html, personal_timetable_parameters
@@ -343,7 +354,8 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             candidates = self._academic_pages()
             page = candidates[-1] if candidates else None
         if page is None or self._page_is_closed(page):
-            return {"status": "entry_unreachable", "entries": []}
+            return {"status": "entry_unreachable", "entries": [], "_trace_requests": trace_requests}
+        trace_requests.append({"method": "GET", "url": page.url, "resource_type": "document"})
 
         def value(name: str) -> str:
             locator = page.locator(f"[name='{name}']").first
@@ -358,25 +370,51 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             parameters = personal_timetable_parameters(fhlj=value("fhlj"), xnxq=value("xnxq"))
         except ValueError as error:
             progress("interface_unconfirmed", {"target": "timetable", "message": str(error)})
-            return {"status": "interface_unconfirmed", "entries": [], "reason": str(error)}
+            return {"status": "interface_unconfirmed", "entries": [], "reason": str(error), "_trace_requests": trace_requests}
 
         endpoint = resolve_academic_url(page.url, "/kbcx/queryXszkb")
+        trace_requests.append({
+            "method": "POST", "url": endpoint, "resource_type": "fetch",
+            "post_data": "&".join(f"{name}={value}" for name, value in parameters.items()),
+        })
         progress("reading", {"target": "timetable", "endpoint": "/kbcx/queryXszkb"})
         response = self._session.context.request.post(endpoint, form=parameters, timeout=60_000)
         if response.status != 200:
-            return {"status": "entry_unreachable", "entries": [], "http_status": response.status}
+            return {"status": "entry_unreachable", "entries": [], "http_status": response.status, "_trace_requests": trace_requests}
         html = response.text()
         term = str(context.get("term") or parameters["xnxq"])
         try:
             entries = parse_personal_timetable_html(html, term=term)
         except ValueError as error:
             progress("interface_unconfirmed", {"target": "timetable", "message": str(error)})
-            return {"status": "interface_unconfirmed", "entries": [], "reason": str(error)}
+            return {"status": "interface_unconfirmed", "entries": [], "reason": str(error), "_trace_requests": trace_requests}
         from .timetable import timetable_snapshot_payload
         payload = timetable_snapshot_payload(
             entries, source_name="/kbcx/queryXszkb", source_kind="personal-timetable-api",
         )
-        return {"status": "complete", "term": term, "source_kind": "personal-timetable-api", **payload}
+        return {"status": "complete", "term": term, "source_kind": "personal-timetable-api", "_trace_requests": trace_requests, **payload}
+
+    def observe_timetable(self, request, progress: Progress, cancelled: Cancelled):
+        """Perform one typed personal-timetable observation with a safe trace."""
+        from .deep_observation import AcademicRequestTrace, TimetableObservationResult
+
+        context = request.context
+        result = self._refresh_timetable_payload(context, progress, cancelled)
+        # BrowserContext.request does not emit page-level request events. The
+        # verified adapter records each request at the exact call site, before
+        # it is sent, including failed attempts and the resolved proxy URL.
+        trace = AcademicRequestTrace.from_requests(result.pop("_trace_requests", ()))
+        if cancelled():
+            return TimetableObservationResult.cancelled(trace=trace)
+        if result.get("status") != "complete":
+            return TimetableObservationResult.incomplete(str(result.get("reason") or result.get("status")), trace=trace)
+        return TimetableObservationResult.complete(
+            term=str(result.get("term") or request.term), entries=list(result.get("entries", ())), trace=trace,
+        )
+
+    def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
+        """Compatibility adapter for callers not yet on the typed seam."""
+        return self._refresh_timetable_payload(context, progress, cancelled)
 
     def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]:
         """Observe user-directed navigation in the existing browser session."""
