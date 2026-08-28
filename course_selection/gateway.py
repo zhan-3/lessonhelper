@@ -87,7 +87,7 @@ class UnconfirmedAcademicGateway:
 class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
     """Long-lived bundled-Chromium session, owned by the observation worker."""
 
-    def __init__(self, profile_root=".private/course-progress", workspace_root=".private/academic-selection", portal_url: str | None = None, on_browser_closed: Callable[[], None] | None = None):
+    def __init__(self, profile_root=".private/course-progress", workspace_root=".private/academic-selection", portal_url: str | None = None, on_browser_closed: Callable[[], None] | None = None, cdp_url: str | None = None):
         from pathlib import Path
         from course_progress.explorer import DEFAULT_PORTAL_URL
         self.profile_root = Path(profile_root)
@@ -95,6 +95,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         self.portal_url = portal_url or DEFAULT_PORTAL_URL
         self._playwright = None
         self._session = None
+        self.cdp_url = cdp_url
         self._shell_url = ""
         self._shell_page = None
         self._academic_page = None
@@ -153,10 +154,11 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         self._playwright = sync_playwright().start()
         self._session = AcademicBrowserSession(
             self._playwright, browser_name="chromium", profile_root=self.profile_root,
-            persistent=True,
+            persistent=True, cdp_url=self.cdp_url,
         )
         self._session.__enter__()
-        self.browser_launches += 1
+        if not self.cdp_url:
+            self.browser_launches += 1
         self._session.context.on("close", self._browser_closed)
 
     def _browser_closed(self, *_args) -> None:

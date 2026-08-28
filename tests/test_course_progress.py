@@ -113,6 +113,35 @@ class AcademicBrowserSessionTests(unittest.TestCase):
         self.assertEqual(2, len(attempts))
         self.assertIn("/http/academic/", result.url)
 
+    def test_cdp_attached_session_detaches_without_closing_browser_context(self):
+        class Context:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        class Browser:
+            def __init__(self):
+                self.contexts = [Context()]
+
+        class Chromium:
+            def connect_over_cdp(self, url):
+                self.url = url
+                return Browser()
+
+        session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+        session.playwright = type("Playwright", (), {"chromium": Chromium()})()
+        session.cdp_url = "http://127.0.0.1:9222"
+        session._attached_over_cdp = False
+        session.context = None
+        session.browser = None
+        session.__enter__()
+        context = session.context
+        session.__exit__(None, None, None)
+
+        self.assertFalse(context.closed)
+        self.assertIsNone(session.context)
+
     def test_portal_application_uses_rendered_resource_and_new_page(self):
         class TargetPage:
             url = "about:blank"

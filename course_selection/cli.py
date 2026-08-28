@@ -46,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     workbench = subparsers.add_parser("workbench", help="启动本地只读选课规划工作台")
     workbench.add_argument("--private-root", type=Path, default=Path(".private/academic-selection"))
     workbench.add_argument("--port", type=int, default=5000)
+    development = subparsers.add_parser(
+        "dev-workbench", help="开发模式：持久 Chromium + CDP + Python 热重启"
+    )
+    development.add_argument("--private-root", type=Path, default=Path(".private/academic-selection"))
+    development.add_argument("--port", type=int, default=5000)
+    development.add_argument("--debug-port", type=int, default=9222)
     configure = subparsers.add_parser(
         "configure-login", help="使用 Windows DPAPI 加密保存 WebVPN 登录信息"
     )
@@ -265,6 +271,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "workbench":
         from .application import run_workbench_application
         return run_workbench_application(args.private_root, args.port)
+    if args.command == "dev-workbench":
+        from .dev_workbench import run_dev_workbench
+        return run_dev_workbench(Path.cwd(), args.private_root, args.port, args.debug_port)
     if args.command == "configure-login":
         return run_configure_login(args)
     if args.command == "configure-profile":

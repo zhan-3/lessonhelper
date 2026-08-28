@@ -46,6 +46,7 @@ class AcademicBrowserSession:
         browser_name: str,
         profile_root: Path,
         persistent: bool = True,
+        cdp_url: str | None = None,
     ):
         self.playwright = playwright
         if browser_name != "chromium":
@@ -56,11 +57,21 @@ class AcademicBrowserSession:
         self.auth_state_path = self.private_root / AUTH_STATE_FILE_NAME
         self.credentials = credential_store(self.private_root)
         self.persistent = persistent
+        self.cdp_url = cdp_url
         self.browser: Browser | None = None
+        self._attached_over_cdp = False
         self.context: BrowserContext | None = None
         self.actual_browser_name = "chromium"
 
     def __enter__(self) -> "AcademicBrowserSession":
+        if self.cdp_url:
+            browser = self.playwright.chromium.connect_over_cdp(self.cdp_url)
+            if not browser.contexts:
+                raise RuntimeError("CDP browser has no persistent context")
+            self.browser = browser
+            self.context = browser.contexts[0]
+            self._attached_over_cdp = True
+            return self
         if not self.persistent:
             options = {"headless": False}
             if self.browser_name == "chrome":
@@ -87,6 +98,13 @@ class AcademicBrowserSession:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
+        if self._attached_over_cdp:
+            # The development Browser Host owns the context and browser.  An
+            # attached workbench must only detach so hot reload preserves tabs.
+            self.context = None
+            self.browser = None
+            self._attached_over_cdp = False
+            return
         if self.context is not None:
             self.context.close()
             self.context = None

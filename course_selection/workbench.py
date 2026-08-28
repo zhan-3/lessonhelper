@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 import tempfile
 from collections.abc import Callable
@@ -32,7 +33,10 @@ def create_workbench_app(
     )
     database = WorkspaceDatabase.open(root)
     if gateway_factory is None:
-        gateway_factory = lambda: PlaywrightAcademicGateway(root.parent / "course-progress", root)
+        cdp_url = os.environ.get("ACADEMIC_BROWSER_CDP_URL") or None
+        gateway_factory = lambda: PlaywrightAcademicGateway(
+            root.parent / "course-progress", root, cdp_url=cdp_url,
+        )
     service = ObservationService(database, gateway_factory)
     core = WorkbenchService(
         database,

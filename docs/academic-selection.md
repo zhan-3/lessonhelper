@@ -8,6 +8,26 @@
 uv run python -m course_selection
 ```
 
+## 开发时保持浏览器与实时监控
+
+开发时使用以下命令。它启动一个长期持有 profile 的 Chromium，并在 Python 源码变化后只重启工作台进程；浏览器标签页、登录状态和 DevTools 连接不会重启：
+
+```powershell
+uv run python -m course_selection dev-workbench
+```
+
+DevTools/CDP 仅监听本机 `127.0.0.1:9222`，可在另一终端实时附加：
+
+```powershell
+playwright-cli -s=academic-live attach --cdp=http://127.0.0.1:9222
+playwright-cli -s=academic-live tab-list
+playwright-cli -s=academic-live snapshot
+playwright-cli -s=academic-live console
+playwright-cli -s=academic-live requests
+```
+
+开发监督进程只监控 `course_selection/` 与 `course_progress/` 下的 Python 文件。正在进行的教务任务完成前不会触发重启；按 `Ctrl+C` 会关闭工作台和 Chromium，但保留本地 profile 与凭据。
+
 首次使用可配置统一身份认证自动登录：
 
 ```powershell

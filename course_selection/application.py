@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -48,6 +49,7 @@ def run_workbench_application(root: Path, port: int) -> int:
         root.parent / "course-progress",
         root,
         on_browser_closed=browser_closed.set,
+        cdp_url=os.environ.get("ACADEMIC_BROWSER_CDP_URL") or None,
     )
     app = create_workbench_app(
         root,
