@@ -102,7 +102,7 @@ def _parse_parity(value: str) -> str:
     return "all"
 
 
-def _normalize_term(value: str) -> str:
+def normalize_timetable_term(value: str) -> str:
     match = re.search(r"(20\d{2})\s*(春季|夏季|秋季|冬季)学期", value)
     if match:
         return f"{match.group(1)}年{match.group(2)}学期"
@@ -140,31 +140,50 @@ def _is_grid_timetable(rows: list[list[object]]) -> bool:
     return weekday_headers >= 2
 
 
-def _grid_entry_text(value: str) -> tuple[str, str, str]:
+def _grid_entry_text(value: str) -> tuple[str, str, str, str]:
     lines = [line.strip() for line in re.split(r"</?br>|\n", value) if line.strip()]
     if not lines:
         raise ValueError("课表单元格没有课程内容")
     first = lines[0]
+    combined = " ".join(lines)
     if "◇" in first:
         parts = [part.strip() for part in first.split("◇")]
         course_name = parts[0]
         week_text = next((part for part in parts if "周" in part or re.search(r"\d", part)), "")
+        teacher = re.sub(r"\[.*", "", week_text).strip() if "[" in week_text else ""
         location = parts[-1] if len(parts) >= 3 and parts[-1] != week_text else ""
     else:
         course_name = first
-        combined = " ".join(lines)
-        week_match = re.search(r"\[([^]]+)\]", combined)
-        week_text = week_match.group(1) if week_match else ""
-        location = combined[week_match.end():].replace("周", "").strip() if week_match else ""
-    if not week_text and _is_unknown_time(combined if 'combined' in locals() else value):
+        schedule_text = " ".join(lines[1:])
+        # 收集所有 [周次] 区间,支持多教师/多区间(如 [1-5，7-9]周，[16]周)。
+        week_parts = re.findall(r"\[([^]]+)\]", schedule_text)
+        week_text = "，".join(part for part in week_parts)
+        teacher_parts = re.findall(
+            r"(?:^|周[，,、；;\s]*)([^][，,、；;]+?)\s*\[", schedule_text
+        )
+        teacher = "，".join(part.strip() for part in teacher_parts if part.strip())
+        location = ""
+        if week_parts:
+            if len(lines) >= 3 and not re.search(r"\[", lines[-1]):
+                # 地点独占最后一行: "课程名<br>教师[周次]...<br>地点"
+                location = lines[-1].replace("周", "").strip()
+            else:
+                # 地点紧跟最后一个周次: "课程名<br>教师[周次]周地点"
+                matches = list(re.finditer(r"\[[^\]]*\]\s*周", schedule_text))
+                if matches:
+                    location = schedule_text[matches[-1].end():].strip()
+    if not week_text and _is_unknown_time(value):
         week_text = "待定"
     if not week_text:
         raise ValueError(f"课程缺少教学周：{value}")
-    return course_name, week_text, location
+    return course_name, week_text, teacher, location
 
 
-def _import_grid_timetable(rows: list[list[object]], expected_term: str | None) -> tuple[TimetableEntry, ...]:
-    term = _normalize_term(_clean(rows[0][0]) if rows and rows[0] else "")
+def import_grid_timetable_rows(
+    rows: list[list[object]], expected_term: str | None = None
+) -> tuple[TimetableEntry, ...]:
+    """Adapt normalized grid rows from HTML or workbook sources."""
+    term = normalize_timetable_term(_clean(rows[0][0]) if rows and rows[0] else "")
     if expected_term and term != expected_term:
         raise ValueError(f"课表学期不匹配：发现 {term!r}，期望 {expected_term!r}")
     weekdays = {
@@ -188,7 +207,7 @@ def _import_grid_timetable(rows: list[list[object]], expected_term: str | None) 
             for raw_line in re.split(r"</?br>", _clean(row[column])):
                 if not raw_line.strip():
                     continue
-                course_name, week_text, location = _grid_entry_text(raw_line)
+                course_name, week_text, teacher, location = _grid_entry_text(raw_line)
                 week_numbers = _parse_week_numbers(week_text)
                 unknown_time = unknown_period or _is_unknown_time(week_text) or not week_numbers
                 if unknown_time:
@@ -203,7 +222,8 @@ def _import_grid_timetable(rows: list[list[object]], expected_term: str | None) 
                         end_period=period_end,
                         week_start=min(week_numbers) if week_numbers else None,
                         week_end=max(week_numbers) if week_numbers else None,
-                        week_parity="all",
+                        week_parity=_parse_parity(week_text),
+                        teacher=teacher,
                         location=location,
                         week_numbers=week_numbers,
                         conflict_status="unknown" if unknown_time else "known",
@@ -217,7 +237,7 @@ def _import_grid_timetable(rows: list[list[object]], expected_term: str | None) 
 def import_timetable(path: Path, *, expected_term: str | None = None) -> tuple[TimetableEntry, ...]:
     rows = _rows_from_workbook(path)
     if _is_grid_timetable(rows):
-        return _import_grid_timetable(rows, expected_term)
+        return import_grid_timetable_rows(rows, expected_term)
     header_index = next(
         (index for index, row in enumerate(rows) if "course_name" in _header_map(row)),
         None,
@@ -234,7 +254,7 @@ def import_timetable(path: Path, *, expected_term: str | None = None) -> tuple[T
     for row in rows[header_index + 1 :]:
         if not any(_clean(value) for value in row):
             continue
-        term = _normalize_term(_value(row, headers, "term"))
+        term = normalize_timetable_term(_value(row, headers, "term"))
         course_name = _value(row, headers, "course_name")
         if not term and not course_name:
             continue

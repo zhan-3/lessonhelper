@@ -21,7 +21,7 @@ class DeepObservationTests(unittest.TestCase):
     def test_replay_complete_timetable_observation_publishes_snapshot_and_trace(self):
         trace = AcademicRequestTrace.from_requests([
             {"method": "GET", "url": "https://academic.test/home?ticket=secret", "resource_type": "document"},
-            {"method": "POST", "url": "https://academic.test/kbcx/queryXszkb", "resource_type": "fetch", "post_data": "xnxq=2026-1&studentNo=2025000000"},
+            {"method": "POST", "url": "https://academic.test/kbcx/queryGrkb", "resource_type": "fetch", "post_data": "xnxq=2026-1&studentNo=2025000000"},
         ])
         observer = ReplayAcademicObserver(TimetableObservationResult.complete(
             term="2026-1", entries=[{"course_name": "程序设计"}], trace=trace,

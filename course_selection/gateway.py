@@ -456,8 +456,12 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         trace_requests: list[dict[str, Any]] = []
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
-        from .personal_timetable import parse_personal_timetable_html, personal_timetable_parameters
+        from playwright.sync_api import Error as PlaywrightError
         from course_progress.collector import resolve_academic_url
+        from .personal_timetable import (
+            FETCH_TIMETABLE_PAGE_SCRIPT,
+            parse_timetable_grid_html,
+        )
 
         page = getattr(self, "_academic_page", None)
         if page is None:
@@ -465,42 +469,50 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             page = candidates[-1] if candidates else None
         if page is None or self._page_is_closed(page):
             return {"status": "entry_unreachable", "entries": [], "_trace_requests": trace_requests}
-        trace_requests.append({"method": "GET", "url": page.url, "resource_type": "document"})
+        endpoint = resolve_academic_url(page.url, "/kbcx/queryGrkb")
+        trace_requests.append({"method": "GET", "url": endpoint, "resource_type": "document"})
 
-        def value(name: str) -> str:
-            locator = page.locator(f"[name='{name}']").first
-            if locator.count() == 0:
-                return ""
+        timeout = int(context.get("login_timeout_seconds", 600))
+        try:
+            page = self._session.open_authenticated(endpoint, timeout_seconds=timeout, page=page)
+        except (PlaywrightError, TimeoutError) as error:
+            progress("interface_unconfirmed", {"target": "timetable", "message": str(error)[:160]})
+            return {"status": "interface_unconfirmed", "entries": [], "reason": str(error)[:160], "_trace_requests": trace_requests}
+
+        progress("reading", {"target": "timetable", "endpoint": "/kbcx/queryGrkb"})
+        result: dict[str, Any] = {}
+        try:
+            result = page.evaluate(FETCH_TIMETABLE_PAGE_SCRIPT, {"url": endpoint})
+        except PlaywrightError:
+            # 会话重登后可能停在门户而非查询页;再导航一次后重试同源请求。
             try:
-                return str(locator.input_value() or "")
-            except Exception:
-                return ""
+                trace_requests.append(
+                    {"method": "GET", "url": endpoint, "resource_type": "document"}
+                )
+                page = self._session.open_authenticated(endpoint, timeout_seconds=timeout, page=page)
+                result = page.evaluate(FETCH_TIMETABLE_PAGE_SCRIPT, {"url": endpoint})
+            except (PlaywrightError, TimeoutError) as error:
+                progress("interface_unconfirmed", {"target": "timetable", "message": str(error)[:160]})
+                return {"status": "interface_unconfirmed", "entries": [], "reason": str(error)[:160], "_trace_requests": trace_requests}
 
-        try:
-            parameters = personal_timetable_parameters(fhlj=value("fhlj"), xnxq=value("xnxq"))
-        except ValueError as error:
-            progress("interface_unconfirmed", {"target": "timetable", "message": str(error)})
-            return {"status": "interface_unconfirmed", "entries": [], "reason": str(error), "_trace_requests": trace_requests}
-
-        endpoint = resolve_academic_url(page.url, "/kbcx/queryXszkb")
         trace_requests.append({
-            "method": "POST", "url": endpoint, "resource_type": "fetch",
-            "post_data": "&".join(f"{name}={value}" for name, value in parameters.items()),
+            "method": "POST", "url": str(result.get("url") or endpoint), "resource_type": "fetch",
+            "post_data": str(result.get("requestBody") or ""),
         })
-        progress("reading", {"target": "timetable", "endpoint": "/kbcx/queryXszkb"})
-        response = self._session.context.request.post(endpoint, form=parameters, timeout=60_000)
-        if response.status != 200:
-            return {"status": "entry_unreachable", "entries": [], "http_status": response.status, "_trace_requests": trace_requests}
-        html = response.text()
-        term = str(context.get("term") or parameters["xnxq"])
+        if int(result.get("status") or 0) != 200:
+            return {"status": "entry_unreachable", "entries": [], "http_status": result.get("status"), "_trace_requests": trace_requests}
+        html = str(result.get("body") or "")
         try:
-            entries = parse_personal_timetable_html(html, term=term)
+            entries = parse_timetable_grid_html(
+                html, expected_term=str(context.get("term") or "") or None
+            )
         except ValueError as error:
             progress("interface_unconfirmed", {"target": "timetable", "message": str(error)})
             return {"status": "interface_unconfirmed", "entries": [], "reason": str(error), "_trace_requests": trace_requests}
+        term = entries[0].term if entries else str(context.get("term") or "")
         from .timetable import timetable_snapshot_payload
         payload = timetable_snapshot_payload(
-            entries, source_name="/kbcx/queryXszkb", source_kind="personal-timetable-api",
+            entries, source_name="/kbcx/queryGrkb", source_kind="personal-timetable-api",
         )
         return {"status": "complete", "term": term, "source_kind": "personal-timetable-api", "_trace_requests": trace_requests, **payload}
 
