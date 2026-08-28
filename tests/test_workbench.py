@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from playwright.sync_api import Error
+
 from course_selection.gateway import PlaywrightAcademicGateway
 from course_selection.persistence import WorkspaceDatabase
 from course_selection.notice_discovery import candidate_from_text
@@ -166,6 +168,106 @@ class PlaywrightGatewayRouteTests(unittest.TestCase):
         self.assertEqual("interface_unconfirmed", result["status"])
         self.assertEqual(context.routes, context.unroutes)
         self.assertEqual(context.listeners, context.removed_listeners)
+
+
+    def test_manual_diagnostic_removes_handlers_between_consecutive_tasks(self):
+        class FakePage:
+            url = "https://academic.test/home"
+
+        class FakeContext:
+            def __init__(self):
+                self.pages = [FakePage()]
+                self.routes = []
+                self.unroutes = []
+                self.listeners = []
+                self.removed_listeners = []
+
+            def route(self, pattern, handler):
+                self.routes.append((pattern, handler))
+
+            def unroute(self, pattern, handler):
+                self.unroutes.append((pattern, handler))
+
+            def on(self, event, handler):
+                self.listeners.append((event, handler))
+
+            def remove_listener(self, event, handler):
+                self.removed_listeners.append((event, handler))
+
+        from course_selection.deep_observation import ManualObservationRequest
+
+        context = FakeContext()
+        gateway = PlaywrightAcademicGateway(Path("profile"), Path("workspace"))
+        gateway._session = SimpleNamespace(context=context)
+        for _ in range(2):
+            result = gateway.observe_manual(
+                ManualObservationRequest({}),
+                lambda _state, _details: None,
+                lambda: False,
+                lambda: True,
+            )
+            self.assertEqual("complete", result.status)
+
+        self.assertEqual(context.routes, context.unroutes)
+        self.assertEqual(context.listeners, context.removed_listeners)
+        self.assertEqual(2, len(context.routes))
+
+        class FakeRoute:
+            def __init__(self):
+                self.request = SimpleNamespace(
+                    method="POST",
+                    url="https://academic.test/selection/save",
+                    post_data="action=save",
+                    headers={"content-type": "application/x-www-form-urlencoded"},
+                    resource_type="other",
+                )
+                self.aborted = False
+
+            def continue_(self):
+                raise AssertionError("mutating non-XHR request must not continue")
+
+            def abort(self, _reason):
+                self.aborted = True
+
+        route = FakeRoute()
+        context.routes[0][1](route)
+        self.assertTrue(route.aborted)
+
+
+    def test_manual_diagnostic_reports_browser_close_from_playwright_wait(self):
+        class ClosedPage:
+            url = "https://academic.test/home"
+
+            def wait_for_timeout(self, _milliseconds):
+                raise Error("Target page has been closed")
+
+        class FakeContext:
+            def __init__(self):
+                self.pages = [ClosedPage()]
+
+            def route(self, _pattern, _handler):
+                pass
+
+            def unroute(self, _pattern, _handler):
+                pass
+
+            def on(self, _event, _handler):
+                pass
+
+            def remove_listener(self, _event, _handler):
+                pass
+
+        from course_selection.deep_observation import ManualObservationRequest
+
+        gateway = PlaywrightAcademicGateway(Path("profile"), Path("workspace"))
+        gateway._session = SimpleNamespace(context=FakeContext())
+        result = gateway.observe_manual(
+            ManualObservationRequest({"timeout_seconds": 30}),
+            lambda _state, _details: None,
+            lambda: False,
+            lambda: False,
+        )
+        self.assertEqual("browser_closed", result.status)
 
 
 class PollFailureGateway(FakeGateway):

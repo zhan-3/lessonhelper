@@ -27,6 +27,7 @@ class AcademicGateway(Protocol):
     def observe_timetable(self, request, progress: Progress, cancelled: Cancelled): ...
     def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def observe_progress(self, request, progress: Progress, cancelled: Cancelled): ...
+    def observe_manual(self, request, progress: Progress, cancelled: Cancelled, finished: Cancelled): ...
     def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]: ...
     def reset_login(self) -> None: ...
     def close(self) -> None: ...
@@ -68,8 +69,14 @@ class UnconfirmedAcademicGateway:
         result = self.refresh_progress(request.context, progress, cancelled)
         return ProgressObservationResult.incomplete(str(result.get("status", "interface_unconfirmed")))
 
+    def observe_manual(self, request, progress: Progress, cancelled: Cancelled, finished: Cancelled):
+        from .deep_observation import ManualObservationResult
+        return ManualObservationResult(status="interface_unconfirmed", error="manual observation is not configured")
+
     def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]:
-        return {"status": "interface_unconfirmed", "report": {"events": [], "blocked_requests": []}}
+        from .deep_observation import ManualObservationRequest
+        result = self.observe_manual(ManualObservationRequest(context), progress, cancelled, finished)
+        return {"status": result.status, "report": result.diagnostic}
 
     def reset_login(self) -> None:
         self.close()
@@ -497,8 +504,12 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         """Compatibility adapter for callers not yet on the typed seam."""
         return self._refresh_timetable_payload(context, progress, cancelled)
 
-    def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]:
-        """Observe user-directed navigation in the existing browser session."""
+    def observe_manual(self, request, progress: Progress, cancelled: Cancelled, finished: Cancelled):
+        """Observe user-directed navigation as diagnostic-only evidence."""
+        from .deep_observation import AcademicRequestTrace, ManualObservationResult
+
+        context = request.context
+        trace_requests: list[dict[str, Any]] = []
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
         from playwright.sync_api import Error
@@ -510,6 +521,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         blocked_requests: list[dict[str, Any]] = []
         maximum_events = min(max(int(context.get("maximum_events", 300)), 1), 1000)
         timeout_seconds = min(max(int(context.get("timeout_seconds", 1800)), 30), 7200)
+        browser_was_closed = False
 
         def append(event: dict[str, Any]) -> None:
             if len(events) < maximum_events:
@@ -523,9 +535,6 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             if self._is_loopback(request.url):
                 route.continue_()
                 return
-            if request.resource_type not in {"document", "xhr", "fetch"}:
-                route.continue_()
-                return
             allowed, evidence = policy.inspect_request(
                 request.method,
                 request.url,
@@ -534,6 +543,13 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                 request.resource_type,
             )
             append({"kind": "request", **evidence})
+            if request.resource_type in {"document", "xhr", "fetch"} and len(trace_requests) < maximum_events:
+                trace_requests.append({
+                    "method": request.method,
+                    "url": request.url,
+                    "resource_type": request.resource_type,
+                    "post_data": request.post_data,
+                })
             if allowed:
                 route.continue_()
             else:
@@ -572,9 +588,16 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             while not cancelled() and not finished() and time.monotonic() - started < timeout_seconds:
                 pages = self._academic_pages()
                 if pages:
-                    pages[-1].wait_for_timeout(250)
+                    try:
+                        pages[-1].wait_for_timeout(250)
+                    except Error as error:
+                        if "closed" not in str(error).lower():
+                            raise
+                        browser_was_closed = True
+                        break
                 else:
-                    time.sleep(0.25)
+                    browser_was_closed = True
+                    break
                 elapsed = time.monotonic() - started
                 if elapsed - last_progress >= 1:
                     progress("observing", {
@@ -587,17 +610,41 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         finally:
             browser_context.unroute("**/*", guard)
             browser_context.remove_listener("response", record_response)
-        return {
-            "status": "complete",
-            "report": {
+        timed_out = time.monotonic() - started >= timeout_seconds
+        try:
+            pages_remaining = bool(self._academic_pages())
+        except Exception:
+            pages_remaining = False
+            browser_was_closed = True
+        if cancelled():
+            status = "cancelled"
+        elif finished():
+            status = "complete"
+        elif browser_was_closed or not pages_remaining:
+            status = "browser_closed"
+        elif timed_out:
+            status = "timed_out"
+        else:
+            status = "incomplete"
+        return ManualObservationResult(
+            status=status,
+            diagnostic={
                 "browser_instances": 1,
                 "browser_launches": self.browser_launches,
                 "events": events,
                 "blocked_requests": blocked_requests,
                 "finished_by_user": finished(),
-                "timed_out": time.monotonic() - started >= timeout_seconds,
+                "timed_out": timed_out,
             },
-        }
+            trace=AcademicRequestTrace.from_requests(trace_requests),
+            error="" if status == "complete" else status,
+        )
+
+    def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]:
+        """Compatibility adapter for callers not yet on the typed seam."""
+        from .deep_observation import ManualObservationRequest
+        result = self.observe_manual(ManualObservationRequest(context), progress, cancelled, finished)
+        return {"status": result.status, "report": result.diagnostic}
 
     def reset_login(self) -> None:
         """Close the owned browser and remove authentication-bearing profile state."""

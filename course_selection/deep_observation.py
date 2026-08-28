@@ -163,6 +163,21 @@ class ProgressObservationResult:
         return cls(status="cancelled", trace=trace or AcademicRequestTrace.empty())
 
 
+@dataclass(frozen=True)
+class ManualObservationRequest:
+    context: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ManualObservationResult:
+    """Diagnostic-only result; deliberately has no publishable payload."""
+
+    status: str
+    diagnostic: dict[str, Any] = field(default_factory=dict)
+    trace: AcademicRequestTrace = field(default_factory=AcademicRequestTrace.empty)
+    error: str = ""
+
+
 class TimetableObserver(Protocol):
     def observe_timetable(self, request: TimetableObservationRequest, progress, cancelled) -> TimetableObservationResult: ...
 
@@ -206,7 +221,7 @@ class TraceStore:
 class ReplayAcademicObserver:
     """Deterministic adapter used to validate publication without Playwright."""
 
-    def __init__(self, result: TimetableObservationResult | SelectionObservationResult | SelectionDiscoveryDiagnostic | ProgressObservationResult):
+    def __init__(self, result: TimetableObservationResult | SelectionObservationResult | SelectionDiscoveryDiagnostic | ProgressObservationResult | ManualObservationResult):
         self.result = result
         self.requests: list[TimetableObservationRequest] = []
         self.closed = False
@@ -229,6 +244,12 @@ class ReplayAcademicObserver:
         if isinstance(self.result, ProgressObservationResult):
             return self.result
         return ProgressObservationResult.incomplete("replay has no progress result")
+
+    def observe_manual(self, request: ManualObservationRequest, progress, cancelled, finished) -> ManualObservationResult:
+        self.requests.append(request)
+        if isinstance(self.result, ManualObservationResult):
+            return self.result
+        return ManualObservationResult(status="incomplete", error="replay has no manual result")
 
     def close(self) -> None:
         self.closed = True

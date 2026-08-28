@@ -5,6 +5,7 @@ from pathlib import Path
 
 from course_selection.deep_observation import (
     AcademicRequestTrace,
+    ManualObservationResult,
     ProgressObservationResult,
     ReplayAcademicObserver,
     SelectionDiscoveryDiagnostic,
@@ -172,6 +173,42 @@ class DeepObservationTests(unittest.TestCase):
                 self.assertTrue(service.wait(task.id, 2))
                 self.assertEqual(TaskState.FAILED.value, service.inspect(task.id)["state"])
                 self.assertEqual(existing["id"], database.latest_snapshot("progress")["id"])
+                service.close()
+                database.close()
+
+    def test_manual_diagnostic_writes_trace_without_publishing_snapshot(self):
+        trace = AcademicRequestTrace.from_requests([
+            {"method": "GET", "url": "https://academic.test/home?ticket=secret", "resource_type": "document"},
+        ])
+        result = ManualObservationResult(
+            status="complete", diagnostic={"finished_by_user": True}, trace=trace,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            service = ObservationService(database, lambda: ReplayAcademicObserver(result))
+            task = service.submit("observe-navigation")
+            self.assertTrue(service.wait(task.id, 2))
+            self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(task.id)["state"])
+            self.assertIsNone(database.latest_snapshot("selection"))
+            self.assertIsNone(database.latest_snapshot("timetable"))
+            raw_trace = (Path(directory) / "request-traces" / f"{task.id}.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn("secret", raw_trace)
+            service.close()
+            database.close()
+
+    def test_manual_cancel_timeout_and_browser_close_have_explicit_task_outcomes(self):
+        for status, expected in (
+            ("cancelled", TaskState.CANCELLED.value),
+            ("timed_out", TaskState.FAILED.value),
+            ("browser_closed", TaskState.FAILED.value),
+        ):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                database = WorkspaceDatabase.open(Path(directory))
+                result = ManualObservationResult(status=status, error=status)
+                service = ObservationService(database, lambda: ReplayAcademicObserver(result))
+                task = service.submit("observe-navigation")
+                self.assertTrue(service.wait(task.id, 2))
+                self.assertEqual(expected, service.inspect(task.id)["state"])
                 service.close()
                 database.close()
 

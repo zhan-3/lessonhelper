@@ -14,6 +14,7 @@ from typing import Any, Callable
 from .deep_observation import (
     AcademicRequestTrace,
     AcademicRequestTraceEvent,
+    ManualObservationRequest,
     ProgressObservationRequest,
     ProgressObservationResult,
     SelectionDiscoveryDiagnostic,
@@ -310,9 +311,25 @@ class ObservationService:
             self._update(identity, TaskState.SUCCEEDED.value, {"status": "complete", "refreshes": refreshes, **trace_details})
             return
         if operation == "observe-navigation":
-            result = self.gateway.observe_navigation(
-                context, progress, cancelled, lambda: identity in self._finished
-            )
+            finished = lambda: identity in self._finished
+            if hasattr(self.gateway, "observe_manual"):
+                observed = self.gateway.observe_manual(
+                    ManualObservationRequest(context), progress, cancelled, finished,
+                )
+                trace_progress: dict[str, Any] = {"report": observed.diagnostic, "trace_incomplete": False}
+                try:
+                    trace_progress["trace_path"] = str(self.trace_store.write(identity, observed.trace))
+                except OSError as error:
+                    trace_progress["trace_incomplete"] = True
+                    trace_progress["trace_error"] = str(error)[:300]
+                if cancelled() or observed.status == "cancelled":
+                    self._update(identity, TaskState.CANCELLED.value, trace_progress)
+                elif observed.status == "complete":
+                    self._update(identity, TaskState.SUCCEEDED.value, trace_progress)
+                else:
+                    self._update(identity, TaskState.FAILED.value, trace_progress, observed.error or observed.status)
+                return
+            result = self.gateway.observe_navigation(context, progress, cancelled, finished)
             if cancelled():
                 self._update(identity, TaskState.CANCELLED.value)
             elif result.get("status") == "complete":
