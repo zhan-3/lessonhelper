@@ -12,6 +12,8 @@ from enum import Enum
 from typing import Any, Callable
 
 from .deep_observation import (
+    AcademicRequestTrace,
+    AcademicRequestTraceEvent,
     ProgressObservationRequest,
     ProgressObservationResult,
     SelectionDiscoveryDiagnostic,
@@ -150,7 +152,13 @@ class ObservationService:
                         try:
                             poll()
                         except Exception:
+                            failed_gateway = self.gateway
+                            self.gateway = None
                             self.session_state = "disconnected"
+                            try:
+                                failed_gateway.close()
+                            except Exception:
+                                pass
                 continue
             if identity is None:
                 if self.gateway:
@@ -231,6 +239,7 @@ class ObservationService:
         if operation == "connect":
             refreshes: dict[str, str] = {}
             trace_details: dict[str, Any] = {}
+            trace_events = []
             for kind, reader in (
                 ("timetable", self.gateway.refresh_timetable),
                 ("selection", self.gateway.refresh_selection),
@@ -245,17 +254,26 @@ class ObservationService:
                         progress,
                         cancelled,
                     )
-                    try:
-                        trace_details["trace_path"] = str(self.trace_store.write(identity, observed.trace))
-                        trace_details["trace_incomplete"] = False
-                    except OSError as error:
-                        trace_details["trace_incomplete"] = True
-                        trace_details["trace_error"] = str(error)[:300]
+                    trace_events.extend(observed.trace.events)
                     if cancelled() or observed.status == "cancelled":
                         self._update(identity, TaskState.CANCELLED.value, trace_details)
                         return
                     result = observed.snapshot_payload()
                     result["term"] = observed.term or str(context.get("term", ""))
+                elif kind == "selection" and hasattr(self.gateway, "observe_selection"):
+                    observed_selection = self.gateway.observe_selection(
+                        SelectionObservationRequest(context=context), progress, cancelled,
+                    )
+                    trace_events.extend(observed_selection.trace.events)
+                    if cancelled() or observed_selection.status == "cancelled":
+                        self._update(identity, TaskState.CANCELLED.value, trace_details)
+                        return
+                    if isinstance(observed_selection, SelectionDiscoveryDiagnostic):
+                        result = {"status": observed_selection.status}
+                    elif observed_selection.status == "complete":
+                        result = observed_selection.payload
+                    else:
+                        result = {"status": observed_selection.status}
                 else:
                     result = reader(context, progress, cancelled)
                 status = str(result.get("status", "incomplete"))
@@ -271,6 +289,24 @@ class ObservationService:
                     )
                 else:
                     self.database.record_failed_attempt(kind, status)
+            if trace_events:
+                combined_trace = AcademicRequestTrace(tuple(
+                    AcademicRequestTraceEvent(
+                        sequence=index,
+                        occurred_at=event.occurred_at,
+                        method=event.method,
+                        url=event.url,
+                        resource_type=event.resource_type,
+                        field_names=event.field_names,
+                    )
+                    for index, event in enumerate(trace_events, start=1)
+                ))
+                try:
+                    trace_details["trace_path"] = str(self.trace_store.write(identity, combined_trace))
+                    trace_details["trace_incomplete"] = False
+                except OSError as error:
+                    trace_details["trace_incomplete"] = True
+                    trace_details["trace_error"] = str(error)[:300]
             self._update(identity, TaskState.SUCCEEDED.value, {"status": "complete", "refreshes": refreshes, **trace_details})
             return
         if operation == "observe-navigation":

@@ -168,6 +168,16 @@ class PlaywrightGatewayRouteTests(unittest.TestCase):
         self.assertEqual(context.listeners, context.removed_listeners)
 
 
+class PollFailureGateway(FakeGateway):
+    def __init__(self):
+        super().__init__()
+        self.polled = threading.Event()
+
+    def poll(self):
+        self.polled.set()
+        raise RuntimeError("browser context failed")
+
+
 class TimedOutAuthenticationGateway(FakeGateway):
     def connect(self, progress, cancelled):
         self.connect_count += 1
@@ -302,6 +312,58 @@ class ObservationServiceTests(unittest.TestCase):
             self.assertTrue(service.wait(first.id, 2))
             self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(first.id)["state"])
             self.assertEqual(1, gateway.selection_count)
+            service.close()
+            database.close()
+
+    def test_connection_and_consecutive_reads_reuse_one_gateway_until_shutdown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            gateways = []
+
+            def factory():
+                gateway = ShellGateway()
+                gateways.append(gateway)
+                return gateway
+
+            service = ObservationService(database, factory)
+            tasks = (
+                service.submit("launch-shell", {"workbench_url": "http://127.0.0.1:5000"}),
+                service.submit("connect", {"term": "2026-1", "allowed_categories": ["szhx"]}),
+                service.submit("refresh-timetable", {"term": "2026-1"}),
+                service.submit("refresh-selection", {"term": "2026-1"}),
+            )
+            for task in tasks:
+                self.assertTrue(service.wait(task.id, 2))
+
+            self.assertEqual(1, len(gateways))
+            self.assertFalse(gateways[0].closed)
+            self.assertEqual(1, len(gateways[0].shell_urls))
+            service.close()
+            self.assertTrue(gateways[0].closed)
+            database.close()
+
+    def test_unrecoverable_poll_failure_closes_gateway_before_next_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            gateways = []
+
+            def factory():
+                gateway = PollFailureGateway()
+                gateways.append(gateway)
+                return gateway
+
+            service = ObservationService(database, factory)
+            first = service.submit("connect")
+            self.assertTrue(service.wait(first.id, 2))
+            self.assertTrue(gateways[0].polled.wait(2))
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and not gateways[0].closed:
+                time.sleep(0.01)
+            self.assertTrue(gateways[0].closed)
+
+            second = service.submit("connect")
+            self.assertTrue(service.wait(second.id, 2))
+            self.assertEqual(2, len(gateways))
             service.close()
             database.close()
 

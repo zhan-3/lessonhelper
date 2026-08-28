@@ -131,6 +131,8 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             except Exception:
                 self.close()
         progress("connecting", {"message": "starting bundled Chromium"})
+        self._closing = False
+        self._browser_closed_notified = False
         from playwright.sync_api import sync_playwright
         from course_progress.session import AcademicBrowserSession
         self._playwright = sync_playwright().start()
