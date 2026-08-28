@@ -26,6 +26,7 @@ class AcademicGateway(Protocol):
     def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def observe_timetable(self, request, progress: Progress, cancelled: Cancelled): ...
     def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
+    def observe_progress(self, request, progress: Progress, cancelled: Cancelled): ...
     def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]: ...
     def reset_login(self) -> None: ...
     def close(self) -> None: ...
@@ -61,6 +62,11 @@ class UnconfirmedAcademicGateway:
     def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         progress("interface_unconfirmed", {"target": "progress", "message": "grade read interface is not configured"})
         return {"status": "interface_unconfirmed", "report": None}
+
+    def observe_progress(self, request, progress: Progress, cancelled: Cancelled):
+        from .deep_observation import ProgressObservationResult
+        result = self.refresh_progress(request.context, progress, cancelled)
+        return ProgressObservationResult.incomplete(str(result.get("status", "interface_unconfirmed")))
 
     def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]:
         return {"status": "interface_unconfirmed", "report": {"events": [], "blocked_requests": []}}
@@ -302,11 +308,16 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             return SelectionObservationResult.incomplete(str(result.get("status", "incomplete")), trace=trace)
         return SelectionObservationResult.complete(result, trace=trace)
 
-    def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
+    def _refresh_progress_payload(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         """Collect grade records and return only a score-free progress report."""
+        trace_requests: list[dict[str, Any]] = []
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
-        from course_progress.collector import PlaywrightGradeCollector, wait_for_reauthentication
+        from course_progress.collector import (
+            PlaywrightGradeCollector,
+            grade_query_parameters,
+            wait_for_reauthentication,
+        )
         from course_progress.progress import RequirementBaseline, evaluate_progress, parse_requirements
 
         page = getattr(self, "_academic_page", None)
@@ -317,10 +328,11 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             return {"status": "entry_unreachable", "report": None}
 
         requirements_path = Path(__file__).resolve().parents[1] / "docs" / "校园培养方案解读（2026年版）.md"
-        if not requirements_path.is_file():
-            return {"status": "interface_unconfirmed", "report": None}
+        baseline_version = str(context.get("baseline_version", "guide-2026"))
+        if not requirements_path.is_file() or baseline_version != "guide-2026":
+            return {"status": "interface_unconfirmed", "report": None, "_trace_requests": trace_requests}
         baseline = RequirementBaseline(
-            version=str(context.get("baseline_version", "guide-2026")),
+            version=baseline_version,
             requirements=parse_requirements(requirements_path),
             category_mapping={
                 "本专业选修": "major_elective",
@@ -331,6 +343,18 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             },
         )
         timeout = int(context.get("login_timeout_seconds", 600))
+
+        def on_request(url: str, semester: str, page_number: int) -> None:
+            if page_number == 0:
+                trace_requests.append({"method": "GET", "url": url, "resource_type": "document"})
+                return
+            parameters = grade_query_parameters(
+                semester, page_number, page_size=int(context.get("page_size", 20))
+            )
+            trace_requests.append({
+                "method": "POST", "url": url, "resource_type": "fetch",
+                "post_data": "&".join(f"{name}={value}" for name, value in parameters.items()),
+            })
 
         def on_page_data(semester, page_number, page_count, records):
             progress("reading", {
@@ -349,6 +373,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             on_session_expired=lambda: wait_for_reauthentication(page, timeout),
             on_page_data=on_page_data,
             is_cancelled=cancelled,
+            on_request=on_request,
         )
         report = evaluate_progress(collection.records, baseline)
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -357,6 +382,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             "source_kind": "academic",
             "source_at": now,
             "term": str(context.get("term", "")),
+            "_trace_requests": trace_requests,
             "report": {
                 "generated_at": now,
                 "baseline_version": report.baseline_version,
@@ -378,6 +404,22 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                 "unclassified_courses": [asdict(course) for course in report.unclassified_courses],
             },
         }
+
+    def observe_progress(self, request, progress: Progress, cancelled: Cancelled):
+        """Perform one typed, score-free graduation-progress observation."""
+        from .deep_observation import AcademicRequestTrace, ProgressObservationResult
+
+        result = self._refresh_progress_payload(request.context, progress, cancelled)
+        trace = AcademicRequestTrace.from_requests(result.pop("_trace_requests", ()))
+        if cancelled():
+            return ProgressObservationResult.cancelled(trace=trace)
+        if result.get("status") != "complete":
+            return ProgressObservationResult.incomplete(str(result.get("status", "incomplete")), trace=trace)
+        return ProgressObservationResult.complete(result, trace=trace)
+
+    def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
+        """Compatibility adapter for callers not yet on the typed seam."""
+        return self._refresh_progress_payload(context, progress, cancelled)
 
     def _refresh_timetable_payload(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         trace_requests: list[dict[str, Any]] = []

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from course_selection.deep_observation import (
     AcademicRequestTrace,
+    ProgressObservationResult,
     ReplayAcademicObserver,
     SelectionDiscoveryDiagnostic,
     TimetableObservationRequest,
@@ -110,6 +111,69 @@ class DeepObservationTests(unittest.TestCase):
             self.assertEqual(existing["id"], database.latest_snapshot("selection")["id"])
             service.close()
             database.close()
+
+    def test_replay_complete_progress_observation_publishes_score_free_snapshot_and_trace(self):
+        trace = AcademicRequestTrace.from_requests([
+            {"method": "GET", "url": "https://academic.test/cjcx/queryQmcj", "resource_type": "document"},
+            {"method": "POST", "url": "https://academic.test/cjcx/queryQmcj", "resource_type": "fetch", "post_data": "pageXnxq=2025-20261&pageNo=1"},
+            # A repeated page request represents recovery through the same session.
+            {"method": "POST", "url": "https://academic.test/cjcx/queryQmcj", "resource_type": "fetch", "post_data": "pageXnxq=2025-20261&pageNo=1"},
+        ])
+        payload = {
+            "term": "2026-1", "source_kind": "academic", "status": "complete",
+            "report": {"baseline_version": "guide-2026", "data_complete": True,
+                       "progress": [{"key": "cultural_quality", "courses": [{"name": "四史专题"}]}]},
+        }
+        observer = ReplayAcademicObserver(ProgressObservationResult.complete(payload, trace=trace))
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            service = ObservationService(database, lambda: observer)
+            task = service.submit("refresh-progress", {"term": "2026-1", "baseline_version": "guide-2026"})
+            self.assertTrue(service.wait(task.id, 2))
+
+            snapshot = database.latest_snapshot("progress")
+            self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(task.id)["state"])
+            self.assertEqual("guide-2026", snapshot["payload"]["report"]["baseline_version"])
+            self.assertNotIn("score", json.dumps(snapshot).lower())
+            trace_path = Path(directory) / "request-traces" / f"{task.id}.jsonl"
+            self.assertEqual(3, len(trace_path.read_text(encoding="utf-8").splitlines()))
+            service.close()
+            database.close()
+
+    def test_cancelled_incomplete_or_unconfirmed_progress_keeps_existing_snapshot(self):
+        for result in (
+            ProgressObservationResult.cancelled(),
+            ProgressObservationResult.incomplete("page 2 failed"),
+            ProgressObservationResult.incomplete("interface_unconfirmed"),
+        ):
+            with self.subTest(error=result.error), tempfile.TemporaryDirectory() as directory:
+                database = WorkspaceDatabase.open(Path(directory))
+                existing = database.publish_snapshot("progress", "2026-1", {"report": {"data_complete": True}}, source="test")
+                service = ObservationService(database, lambda: ReplayAcademicObserver(result))
+                task = service.submit("refresh-progress", {"term": "2026-1"})
+                self.assertTrue(service.wait(task.id, 2))
+                self.assertEqual(existing["id"], database.latest_snapshot("progress")["id"])
+                self.assertNotEqual(TaskState.SUCCEEDED.value, service.inspect(task.id)["state"])
+                service.close()
+                database.close()
+
+    def test_complete_progress_with_wrong_baseline_or_incomplete_data_is_not_published(self):
+        payloads = (
+            {"report": {"baseline_version": "unexpected", "data_complete": True}},
+            {"report": {"baseline_version": "guide-2026", "data_complete": False}},
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as directory:
+                database = WorkspaceDatabase.open(Path(directory))
+                existing = database.publish_snapshot("progress", "2026-1", {"report": {"data_complete": True}}, source="test")
+                result = ProgressObservationResult.complete(payload, trace=AcademicRequestTrace.empty())
+                service = ObservationService(database, lambda: ReplayAcademicObserver(result))
+                task = service.submit("refresh-progress", {"baseline_version": "guide-2026"})
+                self.assertTrue(service.wait(task.id, 2))
+                self.assertEqual(TaskState.FAILED.value, service.inspect(task.id)["state"])
+                self.assertEqual(existing["id"], database.latest_snapshot("progress")["id"])
+                service.close()
+                database.close()
 
     def test_trace_store_keeps_only_twenty_ended_task_traces(self):
         with tempfile.TemporaryDirectory() as directory:

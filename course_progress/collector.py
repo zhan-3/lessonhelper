@@ -391,6 +391,7 @@ class PlaywrightGradeCollector:
         | None = None,
         checkpoint: CollectionCheckpoint | None = None,
         is_cancelled: Callable[[], bool] | None = None,
+        on_request: Callable[[str, str, int], None] | None = None,
     ) -> GradeCollection:
         print("正在等待教务系统标签页和课程 iframe……")
         frame = wait_for_academic_frame(page, frame_timeout_seconds)
@@ -408,6 +409,8 @@ class PlaywrightGradeCollector:
                     needs_reauthentication = False
                 frame = wait_for_academic_frame(page, frame_timeout_seconds)
                 grade_url = resolve_academic_url(frame.url, GRADE_ENDPOINT)
+                if on_request is not None:
+                    on_request(grade_url, "", 0)
                 frame.goto(grade_url, wait_until="domcontentloaded", timeout=60_000)
                 if _is_login_url(frame.url):
                     needs_reauthentication = True
@@ -424,6 +427,8 @@ class PlaywrightGradeCollector:
             load_grade_page(reauthenticate=True)
 
         def fetch_page(semester: str, page_number: int) -> str:
+            if on_request is not None:
+                on_request(grade_url, semester, page_number)
             result = frame.evaluate(
                 _FETCH_GRADE_PAGE,
                 {

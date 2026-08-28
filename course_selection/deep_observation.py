@@ -138,6 +138,31 @@ class SelectionDiscoveryDiagnostic:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class ProgressObservationRequest:
+    context: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ProgressObservationResult:
+    status: str
+    payload: dict[str, Any] = field(default_factory=dict)
+    trace: AcademicRequestTrace = field(default_factory=AcademicRequestTrace.empty)
+    error: str = ""
+
+    @classmethod
+    def complete(cls, payload: dict[str, Any], *, trace: AcademicRequestTrace) -> "ProgressObservationResult":
+        return cls(status="complete", payload=payload, trace=trace)
+
+    @classmethod
+    def incomplete(cls, error: str, *, trace: AcademicRequestTrace | None = None) -> "ProgressObservationResult":
+        return cls(status="incomplete", trace=trace or AcademicRequestTrace.empty(), error=error)
+
+    @classmethod
+    def cancelled(cls, *, trace: AcademicRequestTrace | None = None) -> "ProgressObservationResult":
+        return cls(status="cancelled", trace=trace or AcademicRequestTrace.empty())
+
+
 class TimetableObserver(Protocol):
     def observe_timetable(self, request: TimetableObservationRequest, progress, cancelled) -> TimetableObservationResult: ...
 
@@ -181,7 +206,7 @@ class TraceStore:
 class ReplayAcademicObserver:
     """Deterministic adapter used to validate publication without Playwright."""
 
-    def __init__(self, result: TimetableObservationResult | SelectionObservationResult | SelectionDiscoveryDiagnostic):
+    def __init__(self, result: TimetableObservationResult | SelectionObservationResult | SelectionDiscoveryDiagnostic | ProgressObservationResult):
         self.result = result
         self.requests: list[TimetableObservationRequest] = []
         self.closed = False
@@ -198,6 +223,12 @@ class ReplayAcademicObserver:
         if isinstance(self.result, (SelectionObservationResult, SelectionDiscoveryDiagnostic)):
             return self.result
         return SelectionObservationResult.incomplete("replay has no selection result")
+
+    def observe_progress(self, request: ProgressObservationRequest, progress, cancelled) -> ProgressObservationResult:
+        self.requests.append(request)
+        if isinstance(self.result, ProgressObservationResult):
+            return self.result
+        return ProgressObservationResult.incomplete("replay has no progress result")
 
     def close(self) -> None:
         self.closed = True
