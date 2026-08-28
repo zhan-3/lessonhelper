@@ -36,11 +36,24 @@ def _is_profile_lock_error(error: Error) -> bool:
 
 def _is_login_url(url: str) -> bool:
     lowered = url.lower()
-    return (
+    if (
         "authserver/login" in lowered
         or "logincas" in lowered
         or "loginnocas" in lowered
         or "#!/login" in lowered
+        or "logoutbyipchange" in lowered
+    ):
+        return True
+    # The WebVPN server answers unauthenticated or IP-kicked sessions with
+    # "302 -> /login" (sometimes /login?logoutByIpChange=true).  Recognise that
+    # login page for the host we authenticate against, and nothing else.
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    return (
+        parsed.hostname == "webvpn.hitwh.edu.cn"
+        and parsed.path.rstrip("/").lower() == "/login"
     )
 
 

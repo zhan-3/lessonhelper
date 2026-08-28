@@ -15,7 +15,7 @@ from playwright.sync_api import Error, Response, sync_playwright
 
 from course_progress.explorer import DEFAULT_PORTAL_URL
 from course_progress.sanitizer import sanitize_url
-from course_progress.session import AcademicBrowserSession
+from course_progress.session import AcademicBrowserSession, webvpn_api_get
 
 from .discovery import find_academic_portal_redirect
 from .manual_observation import ManualObservationPolicy
@@ -224,11 +224,11 @@ class StudentProfileInterfaceAnalyzer:
                         self.portal_url,
                         timeout_seconds=self.login_timeout_seconds,
                     )
-                    info_response = context.request.get(
-                        "https://webvpn.hitwh.edu.cn/user/info", timeout=30_000
+                    info_response = webvpn_api_get(
+                        context, "https://webvpn.hitwh.edu.cn/user/info"
                     )
-                    portal_response = context.request.get(
-                        "https://webvpn.hitwh.edu.cn/user/portal_groups", timeout=30_000
+                    portal_response = webvpn_api_get(
+                        context, "https://webvpn.hitwh.edu.cn/user/portal_groups"
                     )
                     if info_response.status != 200 or portal_response.status != 200:
                         raise RuntimeError("WebVPN capability verification failed")

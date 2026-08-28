@@ -8,6 +8,7 @@ from course_progress.cli import build_parser
 from course_progress.credentials import CredentialStore, LoginCredentials
 from course_progress.explorer import (
     DEFAULT_PORTAL_URL,
+    _is_login_url,
     _is_relevant_control,
     _is_safe_navigation,
     _is_safe_portal_fallback,
@@ -22,8 +23,13 @@ from course_progress.sanitizer import (
 from course_progress.session import (
     AcademicBrowserSession,
     WebVpnSessionExpiredError,
+    _PORTAL_OPEN_CAPTURE,
+    _PORTAL_OPEN_READ,
+    _PORTAL_OPEN_RESTORE,
     _is_legacy_webvpn_login,
     _is_webvpn_credential_page,
+    webvpn_api_get,
+    WEBVPN_USER_INFO_URL,
 )
 
 
@@ -91,6 +97,9 @@ class AcademicBrowserSessionTests(unittest.TestCase):
             def storage_state(self, **_kwargs):
                 return None
 
+            def clear_cookies(self):
+                return None
+
         with tempfile.TemporaryDirectory() as directory:
             session = AcademicBrowserSession.__new__(AcademicBrowserSession)
             session.context = Context()
@@ -114,6 +123,56 @@ class AcademicBrowserSessionTests(unittest.TestCase):
         self.assertEqual(2, len(attempts))
         self.assertIn("/http/academic/", result.url)
 
+    def test_open_authenticated_counts_self_healed_ip_kick_as_stable(self):
+        class Response:
+            status = 200
+            url = "https://webvpn.hitwh.edu.cn/user/info"
+
+        class Context:
+            def __init__(self):
+                self.pages = []
+                self.request = type(
+                    "Request", (), {"get": lambda *a, **kw: Response()}
+                )()
+
+            def storage_state(self, **_kwargs):
+                return None
+
+            def clear_cookies(self):
+                return None
+
+        class Page:
+            def __init__(self):
+                self.url = "https://webvpn.hitwh.edu.cn/#!/service"
+                self.ticks = 0
+
+            def goto(self, url, **_kwargs):
+                self.url = url
+                return None
+
+            def wait_for_timeout(self, *_args):
+                # The kick arrives during the poll loop, after the pre-loop
+                # settle wait (tick 1) and one stable check (tick 2).
+                self.ticks += 1
+                if self.ticks == 2:
+                    self.url = "https://webvpn.hitwh.edu.cn/login?logoutByIpChange=true"
+
+        with tempfile.TemporaryDirectory() as directory:
+            session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+            session.context = Context()
+            session.private_root = Path(directory)
+            session.auth_state_path = Path(directory) / "state.json"
+            attempts = []
+            session._fill_and_submit_login = lambda page: attempts.append(1) or True
+            result = session.open_authenticated(
+                "https://webvpn.hitwh.edu.cn/#!/service",
+                timeout_seconds=10,
+                page=Page(),
+            )
+
+        self.assertEqual(0, len(attempts))  # kick never consumed an auto-login
+        self.assertEqual("https://webvpn.hitwh.edu.cn/#!/service", result.url)
+
     def test_webvpn_health_check_rejects_ip_change_redirect(self):
         class Context:
             request = type(
@@ -125,6 +184,67 @@ class AcademicBrowserSessionTests(unittest.TestCase):
         session.context = Context()
         with self.assertRaisesRegex(WebVpnSessionExpiredError, "网络/IP"):
             session.assert_webvpn_session()
+
+    def test_webvpn_health_check_survives_one_shot_ip_change_kick(self):
+        calls = []
+
+        class Response:
+            def __init__(self, status):
+                self.status = status
+                self.url = "https://webvpn.hitwh.edu.cn/user/info"
+
+        class Context:
+            def __init__(self):
+                self.request = type(
+                    "Request", (),
+                    {"get": lambda *a, **kw: (calls.append(kw), Response(302 if len(calls) == 1 else 200))[1]},
+                )()
+
+        session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+        session.context = Context()
+        session.assert_webvpn_session()  # must not raise after the settle retry
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(c["headers"] == {"X-Requested-With": "XMLHttpRequest"} for c in calls))
+
+    def test_webvpn_health_check_rejects_persistent_redirect(self):
+        calls = []
+
+        class Response:
+            status = 302
+            url = "https://webvpn.hitwh.edu.cn/login?logoutByIpChange=true"
+
+        class Context:
+            def __init__(self):
+                self.request = type(
+                    "Request", (),
+                    {"get": lambda *a, **kw: (calls.append(1), Response())[1]},
+                )()
+
+        session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+        session.context = Context()
+        with self.assertRaisesRegex(WebVpnSessionExpiredError, "网络/IP"):
+            webvpn_api_get(session.context, WEBVPN_USER_INFO_URL, attempts=1)
+        self.assertEqual(len(calls), 1)
+
+    def test_webvpn_health_check_sends_spa_xhr_header_and_accepts_200(self):
+        seen = {}
+
+        class Response:
+            status = 200
+            url = "https://webvpn.hitwh.edu.cn/user/info"
+
+        class Context:
+            def __init__(self):
+                self.request = type(
+                    "Request", (),
+                    {"get": lambda *a, **kw: (seen.update(kw), Response())[1]},
+                )()
+
+        session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+        session.context = Context()
+        session.assert_webvpn_session()  # must not raise
+        self.assertEqual(seen["headers"], {"X-Requested-With": "XMLHttpRequest"})
+        self.assertTrue(seen.get("max_redirects") == 0)
 
     def test_cdp_attached_session_detaches_without_closing_browser_context(self):
         class Context:
@@ -155,22 +275,13 @@ class AcademicBrowserSessionTests(unittest.TestCase):
         self.assertFalse(context.closed)
         self.assertIsNone(session.context)
 
-    def test_portal_application_uses_rendered_resource_and_new_page(self):
-        class TargetPage:
-            url = "about:blank"
-
-            def wait_for_timeout(self, *_args):
-                return None
-
-        target = TargetPage()
-
+    def test_portal_application_captures_window_open_and_navigates_directly(self):
         class Resource:
             def is_visible(self):
                 return True
 
             def click(self, **_kwargs):
-                target.url = "https://webvpn.hitwh.edu.cn/http/academic/"
-                context.page_handler(target)
+                portal.captured = "/http/academic/"
 
         class Locator:
             def count(self):
@@ -181,6 +292,10 @@ class AcademicBrowserSessionTests(unittest.TestCase):
 
         class PortalPage:
             url = "https://webvpn.hitwh.edu.cn/"
+            captured = None
+
+            def goto(self, url, **_kwargs):
+                self.url = url
 
             def get_by_text(self, text, *, exact):
                 self.requested = (text, exact)
@@ -189,28 +304,31 @@ class AcademicBrowserSessionTests(unittest.TestCase):
             def wait_for_timeout(self, *_args):
                 return None
 
+            def evaluate(self, script):
+                if script == _PORTAL_OPEN_CAPTURE:
+                    self.captured = None
+                elif script == _PORTAL_OPEN_READ:
+                    return self.captured
+                return None
+
         class Context:
-            page_handler = None
             request = type(
                 "Request", (),
                 {"get": lambda *_args, **_kwargs: type("Response", (), {"status": 200, "url": "https://webvpn.hitwh.edu.cn/user/info"})()}
             )()
 
-            def on(self, event, handler):
-                self.page_handler = handler
-
-            def remove_listener(self, event, handler):
-                if self.page_handler is handler:
-                    self.page_handler = None
+            def new_page(self):
+                raise AssertionError("open_portal_application 不应另开选项卡")
 
         portal = PortalPage()
         context = Context()
         session = AcademicBrowserSession.__new__(AcademicBrowserSession)
         session.context = context
-        opened = []
+        reauth = []
 
         def authenticate(url, *, timeout_seconds, page=None):
-            opened.append((url, page))
+            if url != "https://webvpn.hitwh.edu.cn/":
+                reauth.append(url)
             return page or portal
 
         session.open_authenticated = authenticate
@@ -218,11 +336,78 @@ class AcademicBrowserSessionTests(unittest.TestCase):
             "https://webvpn.hitwh.edu.cn/", "新教务系统", timeout_seconds=1
         )
 
-        self.assertIs(target, result)
+        self.assertEqual("https://webvpn.hitwh.edu.cn/http/academic/", result.url)
         self.assertEqual(("新教务系统", True), portal.requested)
-        self.assertEqual(
-            "https://webvpn.hitwh.edu.cn/http/academic/", opened[-1][0]
+        self.assertEqual([], reauth)  # 会话健康,无需重登
+
+    def test_portal_application_reauthenticates_when_resource_redirects_to_cas(self):
+        class Resource:
+            def is_visible(self):
+                return True
+
+            def click(self, **_kwargs):
+                portal.captured = "/http/academic/"
+
+        class Locator:
+            def count(self):
+                return 1
+
+            def nth(self, _index):
+                return Resource()
+
+        class PortalPage:
+            url = "https://webvpn.hitwh.edu.cn/"
+            captured = None
+            goto_count = 0
+
+            def goto(self, url, **_kwargs):
+                self.goto_count += 1
+                if self.goto_count == 1:
+                    self.url = "https://webvpn.hitwh.edu.cn/https/7772/authserver/login?service=academic"
+                else:
+                    self.url = "https://webvpn.hitwh.edu.cn/http/academic/"
+
+            def get_by_text(self, text, *, exact):
+                return Locator()
+
+            def wait_for_timeout(self, *_args):
+                return None
+
+            def evaluate(self, script):
+                if script == _PORTAL_OPEN_CAPTURE:
+                    self.captured = None
+                elif script == _PORTAL_OPEN_READ:
+                    return self.captured
+                return None
+
+        class Context:
+            request = type(
+                "Request", (),
+                {"get": lambda *_args, **_kwargs: type("Response", (), {"status": 200, "url": "https://webvpn.hitwh.edu.cn/user/info"})()}
+            )()
+
+            def new_page(self):
+                raise AssertionError("open_portal_application 不应另开选项卡")
+
+        portal = PortalPage()
+        context = Context()
+        session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+        session.context = context
+        reauth = []
+
+        def authenticate(url, *, timeout_seconds, page=None):
+            if url != "https://webvpn.hitwh.edu.cn/":
+                reauth.append(url)
+            return page or portal
+
+        session.open_authenticated = authenticate
+        result = session.open_portal_application(
+            "https://webvpn.hitwh.edu.cn/", "新教务系统", timeout_seconds=1
         )
+
+        self.assertEqual("https://webvpn.hitwh.edu.cn/http/academic/", result.url)
+        self.assertEqual(["https://webvpn.hitwh.edu.cn/http/academic/"], reauth)
+        self.assertEqual(2, portal.goto_count)
 
 
 class SanitizerTests(unittest.TestCase):
@@ -321,6 +506,30 @@ class CredentialTests(unittest.TestCase):
         )
         self.assertFalse(
             _is_legacy_webvpn_login("https://evil.example/portal/#!/login")
+        )
+
+    def test_webvpn_plain_login_and_ip_kick_pages_are_login_urls(self):
+        # The WebVPN server redirects unauthenticated sessions to /login and
+        # IP-kicked sessions to /login?logoutByIpChange=true; both must be
+        # recognised so auto-login can recover instead of declaring a
+        # false-positive "stable" session.
+        self.assertTrue(_is_login_url("https://webvpn.hitwh.edu.cn/login"))
+        self.assertTrue(
+            _is_login_url("https://webvpn.hitwh.edu.cn/login?logoutByIpChange=true")
+        )
+        self.assertTrue(
+            _is_login_url("https://webvpn.hitwh.edu.cn/login?next=/http/portal")
+        )
+        self.assertTrue(
+            _is_login_url(
+                "https://webvpn.hitwh.edu.cn/https/hash/authserver/login?service=x"
+            )
+        )
+        self.assertFalse(_is_login_url("https://webvpn.hitwh.edu.cn/"))
+        self.assertFalse(_is_login_url("https://evil.example/login"))
+        self.assertFalse(_is_login_url("https://webvpn.hitwh.edu.cn/logs"))
+        self.assertFalse(
+            _is_login_url("https://webvpn.hitwh.edu.cn/http/proxy/app/login")
         )
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from playwright.sync_api import Browser, BrowserContext, Error, Playwright
 
@@ -16,6 +16,33 @@ WEBVPN_CAS_ENTRY_URL = (
     "https://webvpn.hitwh.edu.cn/login?cas_login=true#!/service"
 )
 WEBVPN_USER_INFO_URL = "https://webvpn.hitwh.edu.cn/user/info"
+
+# WebVPN 门户点击资源 tile 时用 window.open(url, "_blank", "noopener,noreferrer")
+# 打开代理资源。该 popup 在门户渲染器不健康(未认证时 CPU 空转)时会把新标签
+# 僵死在空 URL——连重定向目标都不落地。这里 hook window.open 捕获目标 URL 并
+# 阻止真正开窗,由调用方拿到 URL 后自己导航,彻底绕开不可靠的 popup。
+_PORTAL_OPEN_CAPTURE = """
+() => {
+    if (!window.__pi_portal_open_hooked) {
+        window.__pi_portal_open_native = window.open;
+        window.__pi_portal_open_hooked = true;
+    }
+    window.__pi_portal_open_url = null;
+    window.open = function (url) {
+        window.__pi_portal_open_url = String(url);
+        return null;
+    };
+}
+"""
+_PORTAL_OPEN_READ = "() => window.__pi_portal_open_url"
+_PORTAL_OPEN_RESTORE = """
+() => {
+    if (window.__pi_portal_open_native) {
+        window.open = window.__pi_portal_open_native;
+        window.__pi_portal_open_hooked = false;
+    }
+}
+"""
 
 
 class WebVpnSessionExpiredError(RuntimeError):
@@ -117,15 +144,36 @@ class AcademicBrowserSession:
             self.browser.close()
             self.browser = None
 
+    @staticmethod
+    def _is_loopback_url(url: str) -> bool:
+        return (urlsplit(url).hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}
+
+    def _default_academic_page(self):
+        """复用已存在的非 loopback 选项卡；没有才新建（保持选项卡单例）。"""
+        if self.context is None:
+            raise RuntimeError("浏览器会话尚未启动")
+        for candidate in self.context.pages:
+            checker = getattr(candidate, "is_closed", None)
+            if checker is not None and checker():
+                continue
+            if self._is_loopback_url(getattr(candidate, "url", "") or ""):
+                continue
+            return candidate
+        return self.context.new_page()
+
     def open_authenticated(self, url: str, *, timeout_seconds: int = 600, page=None):
         if self.context is None:
             raise RuntimeError("浏览器会话尚未启动")
         if timeout_seconds <= 0:
             raise ValueError("认证等待时间必须大于 0")
-        page = page or (self.context.pages[0] if self.context.pages else self.context.new_page())
+        page = page or self._default_academic_page()
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         page.wait_for_timeout(3_000)
-        if _is_legacy_webvpn_login(page.url):
+        if _is_login_url(page.url) and "logincas" not in page.url.lower():
+            # Any WebVPN login page (legacy "#!/login", plain "/login", or the
+            # logoutByIpChange kick page) means this context's cookies no longer
+            # map to a session this egress can use.  Drop them and start the
+            # unified-authentication flow with a clean ticket.
             print("登录状态：WebVPN 会话已失效，切换到统一身份认证。")
             self.context.clear_cookies()
             page.goto(
@@ -146,18 +194,39 @@ class AcademicBrowserSession:
             # successful academic login and leave the real tab on CAS.
             current = page
             if _is_login_url(current.url):
-                stable_checks = 0
-                now = time.monotonic()
-                if (
-                    auto_login_attempts < 2
-                    and now >= next_auto_login_at
-                    and self._fill_and_submit_login(current)
-                ):
-                    # Some CAS pages accept the DOM interaction before their
-                    # client-side handlers are ready and silently ignore it.
-                    # Permit one delayed retry, never an unbounded submit loop.
-                    auto_login_attempts += 1
-                    next_auto_login_at = now + 3.0
+                healed = False
+                if "logoutbyipchange" in current.url.lower():
+                    # The kick is a one-shot IP-binding check that self-heals
+                    # within a second or two (the SPA re-establishes the token
+                    # session).  If the request layer already accepts /user/info
+                    # again, don't treat the transient navigation as a real
+                    # logout. Resume the originally requested URL in the same
+                    # tab instead of returning a healthy session on a login page.
+                    try:
+                        webvpn_api_get(self.context, WEBVPN_USER_INFO_URL, attempts=1)
+                    except WebVpnSessionExpiredError:
+                        pass
+                    else:
+                        current.goto(
+                            url,
+                            wait_until="domcontentloaded",
+                            timeout=60_000,
+                        )
+                        stable_checks = 0
+                        healed = True
+                if not healed:
+                    stable_checks = 0
+                    now = time.monotonic()
+                    if (
+                        auto_login_attempts < 2
+                        and now >= next_auto_login_at
+                        and self._fill_and_submit_login(current)
+                    ):
+                        # Some CAS pages accept the DOM interaction before their
+                        # client-side handlers are ready and silently ignore it.
+                        # Permit one delayed retry, never an unbounded submit loop.
+                        auto_login_attempts += 1
+                        next_auto_login_at = now + 3.0
             else:
                 stable_checks += 1
                 if stable_checks >= 4:
@@ -172,16 +241,7 @@ class AcademicBrowserSession:
         """Verify that WebVPN accepts this context before entering an app tile."""
         if self.context is None:
             raise RuntimeError("浏览器会话尚未启动")
-        try:
-            response = self.context.request.get(
-                WEBVPN_USER_INFO_URL, timeout=30_000, max_redirects=0
-            )
-        except Error as error:
-            raise WebVpnSessionExpiredError("WebVPN 会话健康检查无法完成") from error
-        if response.status != 200 or _is_login_url(response.url):
-            raise WebVpnSessionExpiredError(
-                "WebVPN 会话已失效（可能因网络/IP 变化）；请在浏览器中重新认证"
-            )
+        webvpn_api_get(self.context, WEBVPN_USER_INFO_URL)
 
     def open_portal_application(
         self,
@@ -213,27 +273,35 @@ class AcademicBrowserSession:
                 page.wait_for_timeout(250)
                 continue
 
-            opened: list[object] = []
-
-            def remember_opened(candidate) -> None:
-                opened.append(candidate)
-
-            before_url = page.url
-            self.context.on("page", remember_opened)
+            # 门户 tile 用 window.open(url, "_blank", "noopener,noreferrer")
+            # 打开代理资源。该 popup 在门户渲染器不健康时会僵死在空 URL。
+            # hook 捕获 window.open 的目标 URL 并阻止真正开窗,再由我们
+            # 主动导航,绕开不可靠的 popup。
+            page.evaluate(_PORTAL_OPEN_CAPTURE)
             try:
                 visible.click(timeout=10_000)
-                while time.monotonic() < deadline:
-                    target = opened[-1] if opened else page
-                    if target.url not in {"", "about:blank", before_url}:
-                        return self.open_authenticated(
-                            target.url,
-                            timeout_seconds=max(1, int(deadline - time.monotonic())),
-                            page=target,
-                        )
-                    target.wait_for_timeout(250)
+                captured = page.evaluate(_PORTAL_OPEN_READ)
             finally:
-                self.context.remove_listener("page", remember_opened)
-            break
+                page.evaluate(_PORTAL_OPEN_RESTORE)
+            if not captured:
+                page.wait_for_timeout(250)
+                continue
+
+            target_url = urljoin(page.url, captured)
+            # 复用当前选项卡直接导航到资源,不再另开标签;会话失效时也在
+            # 同一选项卡刷新重登,保持「工作台 + 学术页」两个选项卡。
+            remaining = max(1, int(deadline - time.monotonic()))
+            for _attempt in range(2):
+                page.goto(target_url, wait_until="domcontentloaded", timeout=60_000)
+                if not _is_login_url(page.url):
+                    break
+                page = self.open_authenticated(
+                    target_url,
+                    timeout_seconds=remaining,
+                    page=page,
+                )
+                remaining = max(1, int(deadline - time.monotonic()))
+            return page
         raise TimeoutError(f"等待 WebVPN 应用入口超时：{application_name}")
 
     def _fill_and_submit_login(self, page) -> bool:
@@ -255,6 +323,20 @@ class AcademicBrowserSession:
         ).first
         try:
             if not username.is_visible() or not password.is_visible():
+                # HITWH CAS defaults to the QR-code tab, which hides the
+                # account form entirely.  Switch to the account-login tab
+                # (an anchor that reloads with ?type=userNameLogin) first.
+                account_tab = page.get_by_role("link", name="账号登录")
+                if account_tab.count() == 0:
+                    account_tab = page.get_by_text("账号登录", exact=True).first
+                if account_tab.count():
+                    account_tab.first.click()
+                    page.wait_for_timeout(2_000)
+                if not username.is_visible():
+                    return False
+            captcha = page.locator("input[name='captcha']").first
+            if captcha.count() and captcha.is_visible() and not captcha.input_value():
+                print("自动登录：需要人工输入验证码，请在浏览器中完成登录。")
                 return False
             username.fill(credentials.username)
             password.fill(credentials.password)
@@ -273,3 +355,35 @@ class AcademicBrowserSession:
         except Error as error:
             print(f"自动登录：页面控件不匹配（{str(error)[:100]}）")
             return False
+
+
+def webvpn_api_get(context, url, *, attempts: int = 3, settle_delay: float = 2.5):
+    """GET a WebVPN API endpoint through the shared context request layer.
+
+    Wengine requires the SPA-XHR header (plain requests are treated as page
+    navigations and 302 to /login even for a healthy session) and fires a
+    one-shot ``logoutByIpChange`` kick on the first request right after a
+    fresh login, self-healing within a second or two.  Bounded retries absorb
+    that settle window; a persistently redirected session still surfaces as a
+    typed ``WebVpnSessionExpiredError``.
+    """
+    last_error: Error | None = None
+    for attempt in range(attempts):
+        try:
+            response = context.request.get(
+                url,
+                timeout=30_000,
+                max_redirects=0,
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+        except Error as error:
+            last_error = error
+        else:
+            if response.status == 200 and not _is_login_url(response.url):
+                return response
+            last_error = None
+        if attempt < attempts - 1:
+            time.sleep(settle_delay)
+    raise WebVpnSessionExpiredError(
+        "WebVPN 会话已失效（可能因网络/IP 变化）；请在浏览器中重新认证"
+    ) from last_error
