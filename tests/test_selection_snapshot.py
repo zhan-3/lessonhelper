@@ -119,6 +119,46 @@ class SelectionSnapshotTests(unittest.TestCase):
         self.assertEqual("新教务系统", gateway._session.calls[0][1])
         self.assertIs(portal, gateway._session.calls[0][2])
 
+    def test_gateway_continues_from_academic_landing_through_cas_login(self):
+        landing_url = (
+            "https://webvpn.hitwh.edu.cn/http/"
+            "77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/"
+            "?wrdrecordvisit=1787895847000"
+        )
+
+        class Page:
+            url = landing_url
+
+            def is_closed(self):
+                return False
+
+            def bring_to_front(self):
+                return None
+
+        page = Page()
+
+        class Session:
+            context = SimpleNamespace(pages=[page])
+
+            def __init__(self):
+                self.urls = []
+
+            def open_authenticated(self, url, *, timeout_seconds, page):
+                self.urls.append(url)
+                page.url = url
+                return page
+
+        gateway = PlaywrightAcademicGateway()
+        gateway._session = Session()
+        gateway._academic_page = page
+        gateway.connect(lambda *_args: None, lambda: False)
+
+        self.assertEqual(
+            "https://webvpn.hitwh.edu.cn/http/"
+            "77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/loginCAS",
+            gateway._session.urls[0],
+        )
+
     def test_verified_adapter_authenticates_direct_entry_without_running_discovery(self):
         page = _Page(self.COURSE_HTML)
 

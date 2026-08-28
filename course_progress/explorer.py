@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,11 +137,20 @@ def launch_browser_context(
     playwright: Playwright, browser_name: str, profile_dir: Path
 ) -> BrowserContext:
     profile_dir.mkdir(parents=True, exist_ok=True)
+    browser_args = ["--start-maximized"]
+    debug_port = os.environ.get("ACADEMIC_BROWSER_DEBUG_PORT", "").strip()
+    if debug_port:
+        if not debug_port.isdigit() or not 1024 <= int(debug_port) <= 65535:
+            raise ValueError("ACADEMIC_BROWSER_DEBUG_PORT must be a port from 1024 to 65535")
+        browser_args.extend([
+            "--remote-debugging-address=127.0.0.1",
+            f"--remote-debugging-port={debug_port}",
+        ])
     options: dict[str, Any] = {
         "user_data_dir": str(profile_dir),
         "headless": False,
         "no_viewport": True,
-        "args": ["--start-maximized"],
+        "args": browser_args,
     }
     if browser_name == "chrome":
         options["channel"] = "chrome"

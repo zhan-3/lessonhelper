@@ -114,7 +114,8 @@ class AcademicBrowserSession:
 
         deadline = time.monotonic() + timeout_seconds
         stable_checks = 0
-        auto_login_attempted = False
+        next_auto_login_at = 0.0
+        auto_login_attempts = 0
         while time.monotonic() < deadline:
             # Authentication belongs to the requested academic tab.  The
             # persistent context also contains the loopback workbench shell;
@@ -123,8 +124,17 @@ class AcademicBrowserSession:
             current = page
             if _is_login_url(current.url):
                 stable_checks = 0
-                if not auto_login_attempted and self._fill_and_submit_login(current):
-                    auto_login_attempted = True
+                now = time.monotonic()
+                if (
+                    auto_login_attempts < 2
+                    and now >= next_auto_login_at
+                    and self._fill_and_submit_login(current)
+                ):
+                    # Some CAS pages accept the DOM interaction before their
+                    # client-side handlers are ready and silently ignore it.
+                    # Permit one delayed retry, never an unbounded submit loop.
+                    auto_login_attempts += 1
+                    next_auto_login_at = now + 3.0
             else:
                 stable_checks += 1
                 if stable_checks >= 4:

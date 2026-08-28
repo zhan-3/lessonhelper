@@ -116,6 +116,18 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             and path.startswith(_ACADEMIC_PROXY_PATH)
         )
 
+    @staticmethod
+    def _academic_cas_url(url: str) -> str | None:
+        """Return the verified CAS continuation for the academic landing page."""
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme.lower() == "https"
+            and (parsed.hostname or "").lower() == "webvpn.hitwh.edu.cn"
+            and parsed.path.rstrip("/").lower() == _ACADEMIC_PROXY_PATH.rstrip("/")
+        ):
+            return f"https://webvpn.hitwh.edu.cn{_ACADEMIC_PROXY_PATH}loginCAS"
+        return None
+
     def _academic_pages(self) -> list[Any]:
         if self._session is None or self._session.context is None:
             return []
@@ -185,14 +197,22 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             # can render the state while the user operates the browser.
             progress("waiting_for_authentication", {"message": "waiting for authentication in the bundled browser"})
             if self._is_academic_application(page.url):
-                self._academic_page = page
+                academic_page = page
             else:
-                self._academic_page = self._session.open_portal_application(
+                academic_page = self._session.open_portal_application(
                     self.portal_url,
                     "新教务系统",
                     timeout_seconds=600,
                     page=page,
                 )
+            cas_url = self._academic_cas_url(academic_page.url)
+            if cas_url:
+                academic_page = self._session.open_authenticated(
+                    cas_url,
+                    timeout_seconds=600,
+                    page=academic_page,
+                )
+            self._academic_page = academic_page
             self._academic_page.bring_to_front()
         except TimeoutError:
             progress("waiting_for_authentication", {"message": "authentication timed out; browser remains available"})

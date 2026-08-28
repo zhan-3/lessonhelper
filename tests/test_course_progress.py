@@ -74,6 +74,45 @@ class AcademicBrowserSessionTests(unittest.TestCase):
         self.assertIs(target, result)
         self.assertEqual(1, len(attempts))
 
+    def test_authentication_retries_when_first_submitted_credentials_are_ignored(self):
+        class Page:
+            url = "https://webvpn.hitwh.edu.cn/https/hash/authserver/login?service=academic"
+
+            def goto(self, *_args, **_kwargs):
+                return None
+
+            def wait_for_timeout(self, *_args):
+                return None
+
+        class Context:
+            pages = []
+
+            def storage_state(self, **_kwargs):
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+            session.context = Context()
+            session.private_root = Path(directory)
+            session.auth_state_path = Path(directory) / "state.json"
+            attempts = []
+
+            def login(page):
+                attempts.append(True)
+                if len(attempts) == 2:
+                    page.url = "https://webvpn.hitwh.edu.cn/http/academic/home"
+                return True
+
+            session._fill_and_submit_login = login
+            result = session.open_authenticated(
+                "https://webvpn.hitwh.edu.cn/http/academic/home",
+                timeout_seconds=4,
+                page=Page(),
+            )
+
+        self.assertEqual(2, len(attempts))
+        self.assertIn("/http/academic/", result.url)
+
     def test_portal_application_uses_rendered_resource_and_new_page(self):
         class TargetPage:
             url = "about:blank"
