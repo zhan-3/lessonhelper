@@ -21,6 +21,7 @@ from course_progress.sanitizer import (
 )
 from course_progress.session import (
     AcademicBrowserSession,
+    WebVpnSessionExpiredError,
     _is_legacy_webvpn_login,
     _is_webvpn_credential_page,
 )
@@ -113,6 +114,18 @@ class AcademicBrowserSessionTests(unittest.TestCase):
         self.assertEqual(2, len(attempts))
         self.assertIn("/http/academic/", result.url)
 
+    def test_webvpn_health_check_rejects_ip_change_redirect(self):
+        class Context:
+            request = type(
+                "Request", (),
+                {"get": lambda *_args, **_kwargs: type("Response", (), {"status": 302, "url": "https://webvpn.hitwh.edu.cn/login?logoutByIpChange=true"})()}
+            )()
+
+        session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+        session.context = Context()
+        with self.assertRaisesRegex(WebVpnSessionExpiredError, "网络/IP"):
+            session.assert_webvpn_session()
+
     def test_cdp_attached_session_detaches_without_closing_browser_context(self):
         class Context:
             closed = False
@@ -178,6 +191,10 @@ class AcademicBrowserSessionTests(unittest.TestCase):
 
         class Context:
             page_handler = None
+            request = type(
+                "Request", (),
+                {"get": lambda *_args, **_kwargs: type("Response", (), {"status": 200, "url": "https://webvpn.hitwh.edu.cn/user/info"})()}
+            )()
 
             def on(self, event, handler):
                 self.page_handler = handler

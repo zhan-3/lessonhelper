@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.parse import urlsplit
 
+from course_progress.session import AcademicBrowserSession, WebVpnSessionExpiredError
+
 Progress = Callable[[str, dict[str, Any]], None]
 Cancelled = Callable[[], bool]
 
@@ -216,6 +218,12 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                 )
             self._academic_page = academic_page
             self._academic_page.bring_to_front()
+        except WebVpnSessionExpiredError as error:
+            progress(
+                "waiting_for_authentication",
+                {"message": f"{error} 请在弹出的浏览器中重新认证后重试"},
+            )
+            raise
         except TimeoutError:
             progress("waiting_for_authentication", {"message": "authentication timed out; browser remains available"})
             raise

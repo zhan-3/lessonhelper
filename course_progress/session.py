@@ -15,6 +15,11 @@ from .credentials import AUTH_STATE_FILE_NAME, credential_store
 WEBVPN_CAS_ENTRY_URL = (
     "https://webvpn.hitwh.edu.cn/login?cas_login=true#!/service"
 )
+WEBVPN_USER_INFO_URL = "https://webvpn.hitwh.edu.cn/user/info"
+
+
+class WebVpnSessionExpiredError(RuntimeError):
+    """WebVPN rejected the browser session after a seemingly successful login."""
 
 
 def _is_webvpn_credential_page(url: str) -> bool:
@@ -163,6 +168,21 @@ class AcademicBrowserSession:
             current.wait_for_timeout(500)
         raise TimeoutError("等待统一身份认证超时")
 
+    def assert_webvpn_session(self) -> None:
+        """Verify that WebVPN accepts this context before entering an app tile."""
+        if self.context is None:
+            raise RuntimeError("浏览器会话尚未启动")
+        try:
+            response = self.context.request.get(
+                WEBVPN_USER_INFO_URL, timeout=30_000, max_redirects=0
+            )
+        except Error as error:
+            raise WebVpnSessionExpiredError("WebVPN 会话健康检查无法完成") from error
+        if response.status != 200 or _is_login_url(response.url):
+            raise WebVpnSessionExpiredError(
+                "WebVPN 会话已失效（可能因网络/IP 变化）；请在浏览器中重新认证"
+            )
+
     def open_portal_application(
         self,
         portal_url: str,
@@ -179,6 +199,7 @@ class AcademicBrowserSession:
         page = self.open_authenticated(
             portal_url, timeout_seconds=timeout_seconds, page=page
         )
+        self.assert_webvpn_session()
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             locator = page.get_by_text(application_name, exact=True)

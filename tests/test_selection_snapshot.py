@@ -159,6 +159,38 @@ class SelectionSnapshotTests(unittest.TestCase):
             gateway._session.urls[0],
         )
 
+    def test_gateway_maps_webvpn_session_expiry_to_waiting_for_authentication(self):
+        from course_progress.session import WebVpnSessionExpiredError
+
+        class Page:
+            url = "https://webvpn.hitwh.edu.cn/"
+
+            def is_closed(self):
+                return False
+
+            def bring_to_front(self):
+                return None
+
+        page = Page()
+
+        class Session:
+            context = SimpleNamespace(pages=[page])
+
+            def open_portal_application(self, portal_url, name, **kwargs):
+                raise WebVpnSessionExpiredError("会话已失效（网络/IP 变化）")
+
+        events = []
+        gateway = PlaywrightAcademicGateway()
+        gateway._session = Session()
+        with self.assertRaises(WebVpnSessionExpiredError):
+            gateway.connect(
+                lambda state, details: events.append((state, details)), lambda: False
+            )
+
+        self.assertEqual("waiting_for_authentication", events[-1][0])
+        self.assertIn("网络/IP", events[-1][1]["message"])
+        self.assertEqual(page, gateway._academic_page)
+
     def test_verified_adapter_authenticates_direct_entry_without_running_discovery(self):
         page = _Page(self.COURSE_HTML)
 
