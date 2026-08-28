@@ -64,10 +64,9 @@ uv run python -m course_selection discover-selection
 两个命令默认启动 Playwright 自带 Chromium 的临时可见会话，并加载上次保存的
 WebVPN 状态；传入 `--browser chrome` 才会显式使用系统 Chrome。
 
-`discover-selection` 会在确认通知和学生画像后，直接向已验证的
-`POST /xsxk/queryXsxkList` 发起只读查询，自动读取服务端分页并合并课程班、教师、
-上课时间、容量等字段。结果保存在本次运行目录的 `selection-query.json`；不会调用
-`saveXsxk`，也不会执行选课或退课。
+`discover-selection` 仅用于诊断已验证读取契约为何失效。它会记录脱敏的候选接口、
+页面结构和点击证据，但不会把发现响应转换为待选课程班，也不会生成或替换教务快照。
+正常刷新只使用工作台内的版本化只读契约。
 
 维护者可以运行结构化的学生画像接口分析器：
 
@@ -106,3 +105,13 @@ WebVPN storage state 失效时，旧入口可能显示 EasyConnect `#!/login`。
 该页面填写统一认证密码，而是清理失效 Cookie，转到明确的 CAS 入口后再自动
 填写。新教务系统自身还包含一个“统一身份认证登录”中间页，自动发现流程会先
 进入该入口，再展开“学生选课”。
+
+## 长期运行工作台
+
+请在独立终端中运行 `uv run python -m course_selection workbench`，并保持该进程运行。
+工作台进程内只维护一个可见 Chromium，连接、刷新、手动诊断和空闲轮询都会复用它：
+
+- 关闭整个 Chromium 窗口会结束工作台进程；再次运行命令时，会从 `.private/` 的持久化 profile 尝试恢复仍有效的本地教务会话。
+- 退出终端中的工作台进程会幂等关闭 Chromium，但不会删除持久化登录状态。
+- 在页面中“重新配置”或清除登录会执行重置：先关闭 Chromium，再删除认证状态；删除失败时会阻止后续教务任务，避免继续使用不确定会话。
+- 普通刷新失败、取消或认证等待超时不会关闭 Chromium，可以在同一窗口中处理认证后重试。

@@ -249,7 +249,7 @@ class ObservationService:
                     refreshes[kind] = "skipped_no_confirmed_categories"
                     continue
                 self._update(identity, TaskState.READING.value, {"target": kind})
-                if kind == "timetable" and hasattr(self.gateway, "observe_timetable"):
+                if kind == "timetable":
                     observed: TimetableObservationResult = self.gateway.observe_timetable(
                         TimetableObservationRequest(term=str(context.get("term", "")), context=context),
                         progress,
@@ -261,7 +261,7 @@ class ObservationService:
                         return
                     result = observed.snapshot_payload()
                     result["term"] = observed.term or str(context.get("term", ""))
-                elif kind == "selection" and hasattr(self.gateway, "observe_selection"):
+                elif kind == "selection":
                     observed_selection = self.gateway.observe_selection(
                         SelectionObservationRequest(context=context), progress, cancelled,
                     )
@@ -312,34 +312,25 @@ class ObservationService:
             return
         if operation == "observe-navigation":
             finished = lambda: identity in self._finished
-            if hasattr(self.gateway, "observe_manual"):
-                observed = self.gateway.observe_manual(
-                    ManualObservationRequest(context), progress, cancelled, finished,
-                )
-                trace_progress: dict[str, Any] = {"report": observed.diagnostic, "trace_incomplete": False}
-                try:
-                    trace_progress["trace_path"] = str(self.trace_store.write(identity, observed.trace))
-                except OSError as error:
-                    trace_progress["trace_incomplete"] = True
-                    trace_progress["trace_error"] = str(error)[:300]
-                if cancelled() or observed.status == "cancelled":
-                    self._update(identity, TaskState.CANCELLED.value, trace_progress)
-                elif observed.status == "complete":
-                    self._update(identity, TaskState.SUCCEEDED.value, trace_progress)
-                else:
-                    self._update(identity, TaskState.FAILED.value, trace_progress, observed.error or observed.status)
-                return
-            result = self.gateway.observe_navigation(context, progress, cancelled, finished)
-            if cancelled():
-                self._update(identity, TaskState.CANCELLED.value)
-            elif result.get("status") == "complete":
-                self._update(identity, TaskState.SUCCEEDED.value, result)
+            observed = self.gateway.observe_manual(
+                ManualObservationRequest(context), progress, cancelled, finished,
+            )
+            trace_progress: dict[str, Any] = {"report": observed.diagnostic, "trace_incomplete": False}
+            try:
+                trace_progress["trace_path"] = str(self.trace_store.write(identity, observed.trace))
+            except OSError as error:
+                trace_progress["trace_incomplete"] = True
+                trace_progress["trace_error"] = str(error)[:300]
+            if cancelled() or observed.status == "cancelled":
+                self._update(identity, TaskState.CANCELLED.value, trace_progress)
+            elif observed.status == "complete":
+                self._update(identity, TaskState.SUCCEEDED.value, trace_progress)
             else:
-                self._update(identity, TaskState.FAILED.value, result, str(result.get("status", "incomplete")))
+                self._update(identity, TaskState.FAILED.value, trace_progress, observed.error or observed.status)
             return
         self._update(identity, TaskState.READING.value)
         kind = {"refresh-selection": "selection", "refresh-timetable": "timetable", "refresh-progress": "progress"}[operation]
-        if kind == "selection" and hasattr(self.gateway, "observe_selection"):
+        if kind == "selection":
             observed: SelectionObservationResult = self.gateway.observe_selection(
                 SelectionObservationRequest(context=context), progress, cancelled,
             )
@@ -367,7 +358,7 @@ class ObservationService:
                 self.database.record_failed_attempt(kind, error)
                 self._update(identity, TaskState.FAILED.value, trace_progress, error)
             return
-        if kind == "progress" and hasattr(self.gateway, "observe_progress"):
+        if kind == "progress":
             observed: ProgressObservationResult = self.gateway.observe_progress(
                 ProgressObservationRequest(context=context), progress, cancelled,
             )
@@ -398,7 +389,7 @@ class ObservationService:
                 self.database.record_failed_attempt(kind, error)
                 self._update(identity, TaskState.FAILED.value, trace_progress, error)
             return
-        if kind == "timetable" and hasattr(self.gateway, "observe_timetable"):
+        if kind == "timetable":
             observed: TimetableObservationResult = self.gateway.observe_timetable(
                 TimetableObservationRequest(term=str(context.get("term", "")), context=context),
                 progress,
@@ -425,27 +416,6 @@ class ObservationService:
                 self.database.record_failed_attempt(kind, error)
                 self._update(identity, TaskState.FAILED.value, trace_progress, error)
             return
-        reader = getattr(
-            self.gateway,
-            {"selection": "refresh_selection", "timetable": "refresh_timetable", "progress": "refresh_progress"}[kind],
-        )
-        result = reader(context, progress, cancelled)
-        if cancelled():
-            self._update(identity, TaskState.CANCELLED.value)
-        elif result.get("status") == "complete":
-            self.database.publish_snapshot(
-                kind,
-                result.get("term", context.get("term", "")),
-                result,
-                source=result.get("source_kind", "academic"),
-                profile_id=context.get("profile_id"),
-                notice_id=context.get("notice_id"),
-            )
-            self._update(identity, TaskState.SUCCEEDED.value)
-        else:
-            error = result.get("status", "incomplete")
-            self.database.record_failed_attempt(kind, error)
-            self._update(identity, TaskState.FAILED.value, error=error)
 
     def close(self) -> None:
         self._shutdown.set()

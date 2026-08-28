@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from course_selection.discovery import DiscoveryReport
+from course_selection.deep_observation import SelectionObservationRequest
 from course_selection.gateway import PlaywrightAcademicGateway
 
 
@@ -139,35 +140,26 @@ class SelectionSnapshotTests(unittest.TestCase):
             "course_selection.discovery.InterfaceDiscovery",
             side_effect=AssertionError("discovery must not run for a valid contract"),
         ):
-            result = gateway.refresh_selection(
-                {
+            observed = gateway.observe_selection(
+                SelectionObservationRequest({
                     "allowed_categories": ("szhx",),
                     "allowed_windows": {},
                     "semester_label": "2026-1",
-                },
+                }),
                 lambda *_args: None,
                 lambda: False,
             )
 
-        self.assertEqual("complete", result["status"])
-        self.assertEqual("verified-selection-api", result["source_kind"])
-        self.assertEqual("hitwh-jwts-selection-query-v1", result["contract_version"])
-        self.assertEqual("TASK-9", result["sections"][0]["identity"])
+        self.assertEqual("complete", observed.status)
+        self.assertEqual("verified-selection-api", observed.payload["source_kind"])
+        self.assertEqual("hitwh-jwts-selection-query-v1", observed.payload["contract_version"])
+        self.assertEqual("TASK-9", observed.payload["sections"][0]["identity"])
         self.assertEqual([], page.urls)
         self.assertIn("pageXklb=szhx", gateway._session.authenticated_urls[0][0])
         self.assertEqual(600, gateway._session.authenticated_urls[0][1])
         self.assertEqual(1, len(page.main_frame.calls))
 
-    def test_gateway_consumes_in_memory_payload_without_reading_diagnostic_json(self):
-        payload = {
-            "queries": [
-                {
-                    "category": "szhx",
-                    "complete": True,
-                    "sections": [{"identity": "section-1", "name": "Test"}],
-                }
-            ]
-        }
+    def test_gateway_keeps_discovered_payload_diagnostic_only(self):
         report = DiscoveryReport(
             target="selection",
             target_found=True,
@@ -176,10 +168,6 @@ class SelectionSnapshotTests(unittest.TestCase):
             blocked_requests=0,
             candidates_path=Path("candidates.json"),
             click_log_path=Path("clicks.json"),
-            # Deliberately point at a file that does not exist.  The refresh
-            # result must still be produced from the structured payload.
-            selection_query_path=Path("missing-selection-query.json"),
-            selection_query_payload=payload,
         )
 
         class Navigator:
@@ -199,18 +187,18 @@ class SelectionSnapshotTests(unittest.TestCase):
             gateway = PlaywrightAcademicGateway(workspace_root=directory)
             gateway._session = SimpleNamespace(context=_Context())
             with patch("course_selection.discovery.InterfaceDiscovery", Navigator):
-                result = gateway.refresh_selection(
-                    {
+                observed = gateway.observe_selection(
+                    SelectionObservationRequest({
                         "allowed_categories": ("szhx",),
                         "allowed_windows": {},
                         "semester_label": "2026-1",
-                    },
+                    }),
                     lambda *_args: None,
                     lambda: False,
                 )
 
-        self.assertEqual("complete", result["status"])
-        self.assertEqual("section-1", result["sections"][0]["identity"])
+        self.assertEqual("interface_unconfirmed", observed.status)
+        self.assertEqual(0, observed.diagnostic["captures"])
 
 
 if __name__ == "__main__":

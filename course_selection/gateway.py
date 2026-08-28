@@ -21,14 +21,10 @@ _ACADEMIC_PROXY_PATH = (
 class AcademicGateway(Protocol):
     def launch_shell(self, url: str, progress: Progress, cancelled: Cancelled) -> None: ...
     def connect(self, progress: Progress, cancelled: Cancelled) -> None: ...
-    def refresh_selection(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def observe_selection(self, request, progress: Progress, cancelled: Cancelled): ...
-    def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def observe_timetable(self, request, progress: Progress, cancelled: Cancelled): ...
-    def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def observe_progress(self, request, progress: Progress, cancelled: Cancelled): ...
     def observe_manual(self, request, progress: Progress, cancelled: Cancelled, finished: Cancelled): ...
-    def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]: ...
     def reset_login(self) -> None: ...
     def close(self) -> None: ...
     def poll(self) -> None: ...
@@ -202,7 +198,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             progress("waiting_for_authentication", {"message": "authentication timed out; browser remains available"})
             raise
 
-    def refresh_selection(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
+    def _refresh_selection_payload(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
         from types import SimpleNamespace
@@ -305,7 +301,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             SelectionObservationResult,
         )
 
-        result = self.refresh_selection(request.context, progress, cancelled)
+        result = self._refresh_selection_payload(request.context, progress, cancelled)
         trace = AcademicRequestTrace.from_requests(result.pop("_trace_requests", ()))
         if cancelled():
             return SelectionObservationResult.incomplete("cancelled", trace=trace)
@@ -426,10 +422,6 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             return ProgressObservationResult.incomplete(str(result.get("status", "incomplete")), trace=trace)
         return ProgressObservationResult.complete(result, trace=trace)
 
-    def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
-        """Compatibility adapter for callers not yet on the typed seam."""
-        return self._refresh_progress_payload(context, progress, cancelled)
-
     def _refresh_timetable_payload(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         trace_requests: list[dict[str, Any]] = []
         if self._session is None or self._session.context is None:
@@ -499,10 +491,6 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         return TimetableObservationResult.complete(
             term=str(result.get("term") or request.term), entries=list(result.get("entries", ())), trace=trace,
         )
-
-    def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
-        """Compatibility adapter for callers not yet on the typed seam."""
-        return self._refresh_timetable_payload(context, progress, cancelled)
 
     def observe_manual(self, request, progress: Progress, cancelled: Cancelled, finished: Cancelled):
         """Observe user-directed navigation as diagnostic-only evidence."""
@@ -639,12 +627,6 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             trace=AcademicRequestTrace.from_requests(trace_requests),
             error="" if status == "complete" else status,
         )
-
-    def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]:
-        """Compatibility adapter for callers not yet on the typed seam."""
-        from .deep_observation import ManualObservationRequest
-        result = self.observe_manual(ManualObservationRequest(context), progress, cancelled, finished)
-        return {"status": result.status, "report": result.diagnostic}
 
     def reset_login(self) -> None:
         """Close the owned browser and remove authentication-bearing profile state."""

@@ -1,6 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
+from course_selection.deep_observation import TimetableObservationRequest
 from course_selection.gateway import PlaywrightAcademicGateway
 from course_selection.personal_timetable import parse_personal_timetable_html, personal_timetable_parameters
 
@@ -90,11 +91,11 @@ class PersonalTimetableParserTests(unittest.TestCase):
         gateway = PlaywrightAcademicGateway.__new__(PlaywrightAcademicGateway)
         gateway._session = SimpleNamespace(context=context)
 
-        result = gateway.refresh_timetable({"term": "2026-1"}, lambda *_: None, lambda: False)
+        result = gateway.observe_timetable(TimetableObservationRequest("2026-1", {"term": "2026-1"}), lambda *_: None, lambda: False)
 
-        self.assertEqual("complete", result["status"])
-        self.assertEqual("personal-timetable-api", result["source_kind"])
-        self.assertEqual(1, len(result["entries"]))
+        self.assertEqual("complete", result.status)
+        self.assertEqual("personal-timetable-api", result.source_kind)
+        self.assertEqual(1, len(result.entries))
         self.assertEqual("/kbcx/queryXszkb", request.calls[0][0].split("/http/abc123", 1)[1])
         self.assertEqual({"fhlj": "current", "xnxq": "2026-1"}, request.calls[0][1])
 

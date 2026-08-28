@@ -10,6 +10,7 @@ import time
 import unittest
 from pathlib import Path
 
+from course_selection.deep_observation import AcademicRequestTrace, SelectionObservationResult, TimetableObservationResult
 from course_selection.persistence import WorkspaceDatabase
 from course_selection.single_instance import WorkspaceLock
 from course_selection.tasks import TaskState
@@ -43,6 +44,19 @@ class DeterministicGateway:
     def refresh_timetable(self, context, progress, cancelled):
         self.calls.append("refresh-timetable")
         return {"status": "complete", "entries": [{"course_name": "Safe course"}]}
+
+    def observe_selection(self, request, progress, cancelled):
+        result = self.refresh_selection(request.context, progress, cancelled)
+        if result.get("status") != "complete":
+            return SelectionObservationResult.incomplete(result.get("status", "incomplete"))
+        return SelectionObservationResult.complete(result, trace=AcademicRequestTrace.empty())
+
+    def observe_timetable(self, request, progress, cancelled):
+        result = self.refresh_timetable(request.context, progress, cancelled)
+        return TimetableObservationResult.complete(
+            term=str(request.context.get("term", "")), entries=result["entries"],
+            trace=AcademicRequestTrace.empty(),
+        )
 
     def submit_selection(self, *_args, **_kwargs):
         self.mutations += 1

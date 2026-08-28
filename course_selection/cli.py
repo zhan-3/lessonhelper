@@ -182,8 +182,6 @@ def run_discovery(args: argparse.Namespace) -> int:
         f"发现结果：目标页面={'是' if report.target_found else '否'}，"
         f"点击={report.clicks}，接口={report.captures}，拦截={report.blocked_requests}"
     )
-    if report.selection_query_path:
-        print(f"课程查询结果：{report.selection_query_path}")
     return 0
 
 

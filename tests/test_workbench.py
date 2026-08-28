@@ -9,6 +9,13 @@ from unittest.mock import patch
 
 from playwright.sync_api import Error
 
+from course_selection.deep_observation import (
+    AcademicRequestTrace,
+    ManualObservationResult,
+    ProgressObservationResult,
+    SelectionObservationResult,
+    TimetableObservationResult,
+)
 from course_selection.gateway import PlaywrightAcademicGateway
 from course_selection.persistence import WorkspaceDatabase
 from course_selection.notice_discovery import candidate_from_text
@@ -36,6 +43,27 @@ class FakeGateway:
 
     def refresh_timetable(self, context, progress, cancelled):
         return {"status": "interface_unconfirmed", "entries": []}
+
+    def observe_selection(self, request, progress, cancelled):
+        result = self.refresh_selection(request.context, progress, cancelled)
+        return SelectionObservationResult.complete(result, trace=AcademicRequestTrace.empty())
+
+    def observe_timetable(self, request, progress, cancelled):
+        result = self.refresh_timetable(request.context, progress, cancelled)
+        if result.get("status") != "complete":
+            return TimetableObservationResult.incomplete(result.get("status", "incomplete"))
+        return TimetableObservationResult.complete(
+            term=str(request.context.get("term", "")), entries=result.get("entries", []),
+            trace=AcademicRequestTrace.empty(),
+        )
+
+    def observe_progress(self, request, progress, cancelled):
+        result = self.refresh_progress(request.context, progress, cancelled)
+        return ProgressObservationResult.complete(result, trace=AcademicRequestTrace.empty())
+
+    def observe_manual(self, request, progress, cancelled, finished):
+        result = self.observe_navigation(request.context, progress, cancelled, finished)
+        return ManualObservationResult(status=result["status"], diagnostic=result["report"])
 
     def close(self):
         self.closed = True
