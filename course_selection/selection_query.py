@@ -91,6 +91,9 @@ class VerifiedSelectionQueryAdapter:
         if not categories or not semester_label:
             return {"status": "no_matching_round", "sections": [], "queries": []}
 
+        trace_requests: list[dict[str, Any]] = [
+            {"method": "GET", "url": self.entry_url, "resource_type": "document"}
+        ]
         entry = f"{self.entry_url}?{urlencode({'pageXklb': categories[0]})}"
         try:
             if authenticate is None:
@@ -142,6 +145,10 @@ class VerifiedSelectionQueryAdapter:
                             "pageCount": expected_pages,
                         },
                     )
+                    trace_requests.append({
+                        "method": "POST", "url": str(last_result.get("url") or endpoint),
+                        "resource_type": "fetch", "post_data": str(last_result.get("requestBody") or ""),
+                    })
                     html = str(last_result["body"])
                     if page_number == 1:
                         expected_pages = min(selection_page_count(html), 50)
@@ -208,4 +215,5 @@ class VerifiedSelectionQueryAdapter:
             "contract_version": self.version,
             "sections": list(all_sections.values()),
             "queries": queries,
+            "_trace_requests": trace_requests,
         }

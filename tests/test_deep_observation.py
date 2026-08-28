@@ -72,6 +72,24 @@ class DeepObservationTests(unittest.TestCase):
             service.close()
             database.close()
 
+    def test_replay_selection_observation_publishes_complete_sections_and_trace(self):
+        from course_selection.deep_observation import SelectionObservationResult
+
+        observer = ReplayAcademicObserver(SelectionObservationResult.complete(
+            {"term": "2026-1", "source_kind": "verified-selection-api", "sections": [{"identity": "TASK-1"}]},
+            trace=AcademicRequestTrace.from_requests([{"method": "POST", "url": "https://academic.test/query", "resource_type": "fetch"}]),
+        ))
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            service = ObservationService(database, lambda: observer)
+            task = service.submit("refresh-selection", {"term": "2026-1"})
+            self.assertTrue(service.wait(task.id, 2))
+            self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(task.id)["state"])
+            self.assertEqual("TASK-1", database.latest_snapshot("selection")["payload"]["sections"][0]["identity"])
+            self.assertTrue((Path(directory) / "request-traces" / f"{task.id}.jsonl").is_file())
+            service.close()
+            database.close()
+
     def test_trace_store_keeps_only_twenty_ended_task_traces(self):
         with tempfile.TemporaryDirectory() as directory:
             store = TraceStore(Path(directory))

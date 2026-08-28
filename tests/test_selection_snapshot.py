@@ -72,6 +72,52 @@ class SelectionSnapshotTests(unittest.TestCase):
     </table>
     """
 
+    def test_gateway_recognizes_only_the_verified_academic_proxy(self):
+        self.assertTrue(
+            PlaywrightAcademicGateway._is_academic_application(
+                "https://webvpn.hitwh.edu.cn/http/"
+                "77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/"
+                "xsxk/queryXsxk"
+            )
+        )
+        self.assertFalse(
+            PlaywrightAcademicGateway._is_academic_application(
+                "https://webvpn.hitwh.edu.cn/http/unrelated-application/"
+            )
+        )
+
+    def test_gateway_connects_through_rendered_webvpn_application(self):
+        class Page:
+            url = "https://webvpn.hitwh.edu.cn/"
+
+            def is_closed(self):
+                return False
+
+            def bring_to_front(self):
+                return None
+
+        portal = Page()
+        academic = Page()
+        academic.url = "https://webvpn.hitwh.edu.cn/http/academic/home"
+
+        class Session:
+            context = SimpleNamespace(pages=[portal])
+
+            def __init__(self):
+                self.calls = []
+
+            def open_portal_application(self, portal_url, name, **kwargs):
+                self.calls.append((portal_url, name, kwargs["page"]))
+                return academic
+
+        gateway = PlaywrightAcademicGateway()
+        gateway._session = Session()
+        gateway.connect(lambda *_args: None, lambda: False)
+
+        self.assertIs(academic, gateway._academic_page)
+        self.assertEqual("新教务系统", gateway._session.calls[0][1])
+        self.assertIs(portal, gateway._session.calls[0][2])
+
     def test_verified_adapter_authenticates_direct_entry_without_running_discovery(self):
         page = _Page(self.COURSE_HTML)
 

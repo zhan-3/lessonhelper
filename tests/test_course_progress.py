@@ -5,10 +5,10 @@ from pathlib import Path
 
 from course_progress.capture import CaptureStore, score_candidate
 from course_progress.cli import build_parser
+from course_progress.credentials import CredentialStore, LoginCredentials
 from course_progress.explorer import (
     DEFAULT_PORTAL_URL,
     _is_relevant_control,
-    _is_login_url,
     _is_safe_navigation,
     _is_safe_portal_fallback,
     resolve_profile_dir,
@@ -19,7 +19,6 @@ from course_progress.sanitizer import (
     sanitize_request_body,
     sanitize_url,
 )
-from course_progress.credentials import CredentialStore, LoginCredentials
 from course_progress.session import (
     AcademicBrowserSession,
     _is_legacy_webvpn_login,
@@ -74,6 +73,71 @@ class AcademicBrowserSessionTests(unittest.TestCase):
 
         self.assertIs(target, result)
         self.assertEqual(1, len(attempts))
+
+    def test_portal_application_uses_rendered_resource_and_new_page(self):
+        class TargetPage:
+            url = "about:blank"
+
+            def wait_for_timeout(self, *_args):
+                return None
+
+        target = TargetPage()
+
+        class Resource:
+            def is_visible(self):
+                return True
+
+            def click(self, **_kwargs):
+                target.url = "https://webvpn.hitwh.edu.cn/http/academic/"
+                context.page_handler(target)
+
+        class Locator:
+            def count(self):
+                return 1
+
+            def nth(self, _index):
+                return Resource()
+
+        class PortalPage:
+            url = "https://webvpn.hitwh.edu.cn/"
+
+            def get_by_text(self, text, *, exact):
+                self.requested = (text, exact)
+                return Locator()
+
+            def wait_for_timeout(self, *_args):
+                return None
+
+        class Context:
+            page_handler = None
+
+            def on(self, event, handler):
+                self.page_handler = handler
+
+            def remove_listener(self, event, handler):
+                if self.page_handler is handler:
+                    self.page_handler = None
+
+        portal = PortalPage()
+        context = Context()
+        session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+        session.context = context
+        opened = []
+
+        def authenticate(url, *, timeout_seconds, page=None):
+            opened.append((url, page))
+            return page or portal
+
+        session.open_authenticated = authenticate
+        result = session.open_portal_application(
+            "https://webvpn.hitwh.edu.cn/", "新教务系统", timeout_seconds=1
+        )
+
+        self.assertIs(target, result)
+        self.assertEqual(("新教务系统", True), portal.requested)
+        self.assertEqual(
+            "https://webvpn.hitwh.edu.cn/http/academic/", opened[-1][0]
+        )
 
 
 class SanitizerTests(unittest.TestCase):
@@ -222,9 +286,8 @@ class CandidateTests(unittest.TestCase):
 
 
 class AutoNavigationTests(unittest.TestCase):
-    def test_default_entry_uses_undergraduate_login(self):
-        self.assertTrue(DEFAULT_PORTAL_URL.endswith("/portal/#!/service"))
-        self.assertIn("webvpn.hitwh.edu.cn/https/", DEFAULT_PORTAL_URL)
+    def test_default_entry_uses_plain_portal_root(self):
+        self.assertEqual(DEFAULT_PORTAL_URL, "https://webvpn.hitwh.edu.cn/")
 
     def test_official_webvpn_authentication_posts_are_not_treated_as_course_mutations(self):
         from course_selection.discovery import is_mutating_request

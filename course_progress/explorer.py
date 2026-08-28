@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -13,11 +13,7 @@ from playwright.sync_api import BrowserContext, Error, Playwright, Response
 
 from .capture import CaptureStore
 
-DEFAULT_PORTAL_URL = (
-    "https://webvpn.hitwh.edu.cn/https/"
-    "77726476706e69737468656265737421f9e15192693861446900c7a99c406d36e9/"
-    "portal/#!/service"
-)
+DEFAULT_PORTAL_URL = "https://webvpn.hitwh.edu.cn/"
 
 SHARED_PROFILE_NAME = "playwright-chromium-profile"
 PROFILE_LOCK_MARKERS = (
@@ -198,10 +194,9 @@ class PortalExplorer:
 
         content_type = response.headers.get("content-type", "")
         content_length = response.headers.get("content-length")
-        if content_length and content_length.isdigit():
-            if int(content_length) > self.max_response_bytes:
-                self.skipped_large += 1
-                return
+        if content_length and content_length.isdigit() and int(content_length) > self.max_response_bytes:
+            self.skipped_large += 1
+            return
 
         try:
             body = response.body()
@@ -353,5 +348,5 @@ class PortalExplorer:
 
 
 def make_capture_session(root: Path) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return root / stamp

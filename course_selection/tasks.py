@@ -12,6 +12,8 @@ from enum import Enum
 from typing import Any, Callable
 
 from .deep_observation import (
+    SelectionObservationRequest,
+    SelectionObservationResult,
     TimetableObservationRequest,
     TimetableObservationResult,
     TraceStore,
@@ -281,6 +283,30 @@ class ObservationService:
             return
         self._update(identity, TaskState.READING.value)
         kind = {"refresh-selection": "selection", "refresh-timetable": "timetable", "refresh-progress": "progress"}[operation]
+        if kind == "selection" and hasattr(self.gateway, "observe_selection"):
+            observed: SelectionObservationResult = self.gateway.observe_selection(
+                SelectionObservationRequest(context=context), progress, cancelled,
+            )
+            trace_progress: dict[str, Any] = {"trace_incomplete": False}
+            try:
+                trace_progress["trace_path"] = str(self.trace_store.write(identity, observed.trace))
+            except OSError as error:
+                trace_progress["trace_incomplete"] = True
+                trace_progress["trace_error"] = str(error)[:300]
+            if cancelled() or observed.status == "cancelled":
+                self._update(identity, TaskState.CANCELLED.value, trace_progress)
+            elif observed.status == "complete":
+                self.database.publish_snapshot(
+                    kind, str(observed.payload.get("term", context.get("term", ""))), observed.payload,
+                    source=str(observed.payload.get("source_kind", "academic")), profile_id=context.get("profile_id"),
+                    notice_id=context.get("notice_id"),
+                )
+                self._update(identity, TaskState.SUCCEEDED.value, trace_progress)
+            else:
+                error = observed.error or observed.status
+                self.database.record_failed_attempt(kind, error)
+                self._update(identity, TaskState.FAILED.value, trace_progress, error)
+            return
         if kind == "timetable" and hasattr(self.gateway, "observe_timetable"):
             observed: TimetableObservationResult = self.gateway.observe_timetable(
                 TimetableObservationRequest(term=str(context.get("term", "")), context=context),

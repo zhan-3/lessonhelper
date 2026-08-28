@@ -22,6 +22,7 @@ class AcademicGateway(Protocol):
     def launch_shell(self, url: str, progress: Progress, cancelled: Cancelled) -> None: ...
     def connect(self, progress: Progress, cancelled: Cancelled) -> None: ...
     def refresh_selection(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
+    def observe_selection(self, request, progress: Progress, cancelled: Cancelled): ...
     def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def observe_timetable(self, request, progress: Progress, cancelled: Cancelled): ...
     def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
@@ -42,6 +43,11 @@ class UnconfirmedAcademicGateway:
 
     def refresh_selection(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         return {"status": "interface_unconfirmed", "sections": []}
+
+    def observe_selection(self, request, progress: Progress, cancelled: Cancelled):
+        from .deep_observation import SelectionObservationResult
+        result = self.refresh_selection(request.context, progress, cancelled)
+        return SelectionObservationResult.incomplete(str(result.get("status", "interface_unconfirmed")))
 
     def refresh_timetable(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         progress("interface_unconfirmed", {"target": "timetable", "message": "timetable read interface is not configured"})
@@ -91,6 +97,15 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
     @staticmethod
     def _is_loopback(url: str) -> bool:
         return (urlsplit(url).hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}
+
+    @staticmethod
+    def _is_academic_application(url: str) -> bool:
+        parsed = urlsplit(url)
+        path = parsed.path.lower()
+        return (
+            (parsed.hostname or "").lower() == "webvpn.hitwh.edu.cn"
+            and path.startswith(_ACADEMIC_PROXY_PATH)
+        )
 
     def _academic_pages(self) -> list[Any]:
         if self._session is None or self._session.context is None:
@@ -158,8 +173,16 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             # this before entering the blocking browser wait so task observers
             # can render the state while the user operates the browser.
             progress("waiting_for_authentication", {"message": "waiting for authentication in the bundled browser"})
-            self._session.open_authenticated(self.portal_url, timeout_seconds=600, page=page)
-            page.bring_to_front()
+            if self._is_academic_application(page.url):
+                self._academic_page = page
+            else:
+                self._academic_page = self._session.open_portal_application(
+                    self.portal_url,
+                    "新教务系统",
+                    timeout_seconds=600,
+                    page=page,
+                )
+            self._academic_page.bring_to_front()
         except TimeoutError:
             progress("waiting_for_authentication", {"message": "authentication timed out; browser remains available"})
             raise
@@ -264,6 +287,18 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             "sections": sections,
             "queries": queries,
         }
+
+    def observe_selection(self, request, progress: Progress, cancelled: Cancelled):
+        """Run the verified selection reader behind the typed observation seam."""
+        from .deep_observation import AcademicRequestTrace, SelectionObservationResult
+
+        result = self.refresh_selection(request.context, progress, cancelled)
+        trace = AcademicRequestTrace.from_requests(result.pop("_trace_requests", ()))
+        if cancelled():
+            return SelectionObservationResult.incomplete("cancelled", trace=trace)
+        if result.get("status") != "complete":
+            return SelectionObservationResult.incomplete(str(result.get("status", "incomplete")), trace=trace)
+        return SelectionObservationResult.complete(result, trace=trace)
 
     def refresh_progress(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         """Collect grade records and return only a score-free progress report."""

@@ -107,8 +107,33 @@ class TimetableObservationResult:
         }
 
 
+@dataclass(frozen=True)
+class SelectionObservationRequest:
+    context: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SelectionObservationResult:
+    status: str
+    payload: dict[str, Any] = field(default_factory=dict)
+    trace: AcademicRequestTrace = field(default_factory=AcademicRequestTrace.empty)
+    error: str = ""
+
+    @classmethod
+    def complete(cls, payload: dict[str, Any], *, trace: AcademicRequestTrace) -> "SelectionObservationResult":
+        return cls(status="complete", payload=payload, trace=trace)
+
+    @classmethod
+    def incomplete(cls, error: str, *, trace: AcademicRequestTrace | None = None) -> "SelectionObservationResult":
+        return cls(status="incomplete", trace=trace or AcademicRequestTrace.empty(), error=error)
+
+
 class TimetableObserver(Protocol):
     def observe_timetable(self, request: TimetableObservationRequest, progress, cancelled) -> TimetableObservationResult: ...
+
+
+class SelectionObserver(Protocol):
+    def observe_selection(self, request: SelectionObservationRequest, progress, cancelled) -> SelectionObservationResult: ...
 
 
 class TraceStore:
@@ -155,6 +180,12 @@ class ReplayAcademicObserver:
     def observe_timetable(self, request: TimetableObservationRequest, progress, cancelled) -> TimetableObservationResult:
         self.requests.append(request)
         return self.result
+
+    def observe_selection(self, request: SelectionObservationRequest, progress, cancelled) -> SelectionObservationResult:
+        self.requests.append(request)
+        if isinstance(self.result, SelectionObservationResult):
+            return self.result
+        return SelectionObservationResult.incomplete("replay has no selection result")
 
     def close(self) -> None:
         self.closed = True

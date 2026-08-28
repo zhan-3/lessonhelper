@@ -135,6 +135,58 @@ class AcademicBrowserSession:
             current.wait_for_timeout(500)
         raise TimeoutError("等待统一身份认证超时")
 
+    def open_portal_application(
+        self,
+        portal_url: str,
+        application_name: str,
+        *,
+        timeout_seconds: int = 120,
+        page=None,
+    ):
+        """Open one rendered WebVPN resource in the current browser context."""
+        if self.context is None:
+            raise RuntimeError("浏览器会话尚未启动")
+        if timeout_seconds <= 0:
+            raise ValueError("应用入口等待时间必须大于 0")
+        page = self.open_authenticated(
+            portal_url, timeout_seconds=timeout_seconds, page=page
+        )
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            locator = page.get_by_text(application_name, exact=True)
+            visible = None
+            for index in range(locator.count()):
+                candidate = locator.nth(index)
+                if candidate.is_visible():
+                    visible = candidate
+                    break
+            if visible is None:
+                page.wait_for_timeout(250)
+                continue
+
+            opened: list[object] = []
+
+            def remember_opened(candidate) -> None:
+                opened.append(candidate)
+
+            before_url = page.url
+            self.context.on("page", remember_opened)
+            try:
+                visible.click(timeout=10_000)
+                while time.monotonic() < deadline:
+                    target = opened[-1] if opened else page
+                    if target.url not in {"", "about:blank", before_url}:
+                        return self.open_authenticated(
+                            target.url,
+                            timeout_seconds=max(1, int(deadline - time.monotonic())),
+                            page=target,
+                        )
+                    target.wait_for_timeout(250)
+            finally:
+                self.context.remove_listener("page", remember_opened)
+            break
+        raise TimeoutError(f"等待 WebVPN 应用入口超时：{application_name}")
+
     def _fill_and_submit_login(self, page) -> bool:
         if not _is_webvpn_credential_page(page.url):
             return False
