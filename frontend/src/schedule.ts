@@ -19,9 +19,11 @@ export type CandidateOption = Record<string, unknown> & {
   category: string;
   teacher: string;
   courseCode: string;
+  queryCode: string;
   credits: number;
   meetings: ScheduleItem[];
   unknown: boolean;
+  executionReady: boolean;
 };
 
 export type WeekGroup = {
@@ -48,15 +50,69 @@ export type WeekCalibration = {
 export const requirementFilters = ["全部", "创新创业", "文化素质", "跨专业", "体育", "英语"] as const;
 export type RequirementFilter = typeof requirementFilters[number];
 
+/** Map the backend query category code (payload sections' query_code) to the decision-level filter. */
+const queryCodeFilters: Record<string, Exclude<RequirementFilter, "全部">> = {
+  ty: "体育",
+  cxyx: "创新创业",
+  cxsy: "创新创业",
+  cxcy: "创新创业",
+  szhx: "文化素质",
+  xsxk: "跨专业",
+};
+
+export const queryFilterFor = (code: string): Exclude<RequirementFilter, "全部"> | null =>
+  queryCodeFilters[code] ?? null;
+
+/** Graduation-progress requirement keys covered by each selection query code. */
+export const progressKeysByQueryCode: Record<string, string[]> = {
+  szhx: ["cultural_quality"],
+  cxyx: ["innovation"],
+  cxsy: ["innovation"],
+  cxcy: ["innovation_and_practice"],
+  xsxk: ["outside_major_elective"],
+};
+
+/** Which candidate filter each graduation-progress requirement projects onto. */
+export const progressFilterByKey: Record<string, Exclude<RequirementFilter, "全部">> = {
+  cultural_quality: "文化素质",
+  innovation: "创新创业",
+  innovation_and_practice: "创新创业",
+  outside_major_elective: "跨专业",
+};
+
 /** Map volatile source labels to the small set of decisions students make. */
 export function requirementFilterFor(category: string): Exclude<RequirementFilter, "全部"> | null {
   const value = category.replace(/\s/g, "");
   if (/创新创业|创新实验|创新研修|创业课程/.test(value)) return "创新创业";
   if (/文化素质|素质教育|文理通识/.test(value)) return "文化素质";
   if (/外专业|跨专业/.test(value)) return "跨专业";
+  // 选课白名单里没有本专业查询，"专业基础/核心/选修课"标签只可能来自外专业查询。
+  // 这是旧快照（缺 query_code）的兜底；新快照里 query_code 优先，不受此影响。
+  if (/专业(基础|核心|选修|实践|大类)/.test(value)) return "跨专业";
   if (/体育/.test(value)) return "体育";
   if (/英语|外语/.test(value)) return "英语";
   return null;
+}
+
+/** Prefer the query source code (authoritative), then fall back to the raw label. */
+export function planningFilterFor(option: { queryCode?: string; category: string }): Exclude<RequirementFilter, "全部"> | null {
+  return queryFilterFor(option.queryCode ?? "") ?? requirementFilterFor(option.category);
+}
+
+/** 与所选周无关的完整时间+地点描述：同名同师、不同时段的教学班靠它区分。 */
+export function describeOptionMeetings(meetings: ScheduleItem[]): string {
+  const known = meetings.filter(item => !item.unknown);
+  if (!known.length) return "上课时间待定";
+  const unique = new Map<string, string>();
+  for (const item of known) {
+    const day = item.day !== null && chineseWeekdays[item.day - 1] ? chineseWeekdays[item.day - 1] : "?";
+    const slot = `周${day}第${item.start ?? "?"}–${item.end ?? "?"}节`;
+    const place = item.location ? ` ${item.location}` : "";
+    const weeks = item.weeks.length ? `（${formatWeekGroup(item.weeks)}）` : "";
+    const text = `${slot}${place}${weeks}`;
+    if (!unique.has(text)) unique.set(text, text);
+  }
+  return [...unique.values()].join("；");
 }
 
 const chineseWeekdays = "一二三四五六日";
@@ -176,9 +232,11 @@ export function candidateOption(raw: Record<string, unknown>, index: number): Ca
     category: meetings[0].category,
     teacher: meetings[0].teacher,
     courseCode: String(raw.course_code ?? ""),
+    queryCode: String(raw.query_code ?? ""),
     credits: creditMatch ? Number(creditMatch[0]) : 0,
     meetings,
     unknown: meetings.every(meeting => meeting.unknown),
+    executionReady: raw.execution_ready === true && String(raw.action_rwh ?? "") === String(raw.identity ?? ""),
   };
 }
 
@@ -201,7 +259,7 @@ export function projectedCourseCredits(
   const projected = new Map<string, number>();
   for (const option of options) {
     const identity = courseIdentity(option);
-    if (requirementFilterFor(option.category) === filter && !courseAlreadyCompleted(option, completed)) {
+    if (planningFilterFor(option) === filter && !courseAlreadyCompleted(option, completed)) {
       projected.set(identity, option.credits);
     }
   }

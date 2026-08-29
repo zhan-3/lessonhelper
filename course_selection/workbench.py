@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, request, send_from_directory
 
 from .gateway import AcademicGateway, PlaywrightAcademicGateway
+from .notice_discovery import DEFAULT_NOTICE_INDEX_URL
 from .persistence import WorkspaceDatabase
 from .tasks import ObservationService
 from .timetable import import_timetable, timetable_snapshot_payload
@@ -186,6 +187,29 @@ def create_workbench_app(
         plan = database.latest_plan()
         return (jsonify(plan), 200) if plan else (jsonify({"error": "not found"}), 404)
 
+    @app.post("/api/executions/selection")
+    def execute_selection():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        section_id = str(body.get("section_id") or "")
+        snapshot_id = str(body.get("snapshot_id") or "")
+        # Bind the one-time confirmation to the exact concrete teaching section.
+        if not section_id or body.get("confirmation") != section_id:
+            return jsonify({"error": "必须明确确认当前教学班"}), 409
+        try:
+            def validate_and_submit():
+                context = core.prepare_selection_execution(section_id, snapshot_id)
+                return service.submit_execution(context)
+
+            task = service.run_when_idle(validate_and_submit)
+        except (RuntimeError, ValueError) as error:
+            return jsonify({"error": str(error)}), 409
+        return jsonify({
+            "id": task.id, "operation": "execute-selection",
+            "task_kind": "execution", "state": task.state,
+        }), 202
+
     @app.post("/api/notices/candidates")
     def create_notice_candidate():
         body = request.get_json(silent=True)
@@ -205,10 +229,27 @@ def create_workbench_app(
     def list_notice_candidates():
         return jsonify({"notices": core.list_notice_candidates()})
 
+    @app.post("/api/notices/discover")
+    def discover_notice_candidates():
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        index_url = str(body.get("index_url", "")).strip()
+        try:
+            notices = core.discover_notice_candidates(index_url or DEFAULT_NOTICE_INDEX_URL)
+        except NoticeReadError as error:
+            return jsonify({"error": str(error)}), 400
+        return jsonify({"notices": notices}), 201
+
     @app.post("/api/notices/<identity>/confirm")
     def confirm_notice(identity: str):
         try:
-            return jsonify(core.confirm_notice(identity))
+            notice = core.confirm_notice(identity)
+            refresh = None
+            if core.login_configuration().get("configured"):
+                task = service.submit("refresh-selection", core.refresh_context())
+                refresh = {"id": task.id, "state": task.state, "operation": "refresh-selection"}
+            return jsonify({**notice, "refresh_task": refresh})
         except ValueError as error:
             return jsonify({"error": str(error)}), 409
 

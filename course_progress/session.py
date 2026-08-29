@@ -17,6 +17,9 @@ WEBVPN_CAS_ENTRY_URL = (
 )
 WEBVPN_USER_INFO_URL = "https://webvpn.hitwh.edu.cn/user/info"
 
+# CAS 中转页自动重导航的上限：到顶后转入被动等待，不再反复刷新教务系统。
+CAS_RENAVIGATE_LIMIT = 5
+
 # WebVPN 门户点击资源 tile 时用 window.open(url, "_blank", "noopener,noreferrer")
 # 打开代理资源。该 popup 在门户渲染器不健康(未认证时 CPU 空转)时会把新标签
 # 僵死在空 URL——连重定向目标都不落地。这里 hook window.open 捕获目标 URL 并
@@ -187,12 +190,15 @@ class AcademicBrowserSession:
         stable_checks = 0
         next_auto_login_at = 0.0
         auto_login_attempts = 0
+        next_cas_renavigate_at = 0.0
+        cas_renavigate_attempts = 0
         while time.monotonic() < deadline:
             # Authentication belongs to the requested academic tab.  The
             # persistent context also contains the loopback workbench shell;
             # selecting context.pages[-1] can mistake that shell for a
             # successful academic login and leave the real tab on CAS.
             current = page
+            now = time.monotonic()
             if _is_login_url(current.url):
                 healed = False
                 if "logoutbyipchange" in current.url.lower():
@@ -214,6 +220,34 @@ class AcademicBrowserSession:
                         )
                         stable_checks = 0
                         healed = True
+                if (
+                    not healed
+                    and cas_renavigate_attempts < CAS_RENAVIGATE_LIMIT
+                    and "logincas" in current.url.lower()
+                    and now >= next_cas_renavigate_at
+                ):
+                    # loginCAS 是教务系统自己的 CAS 中转页(带或不带 ?ticket=)。
+                    # 带 ticket 时说明统一身份认证已签发成功、后端会话已建立；
+                    # 不带 ticket 也可能是 SSO 跳转被 WebVPN 改写而停滞。该中转页
+                    # 的后续跳转常被改写中断,重新导航到目标 URL 即可验证会话是否
+                    # 已可用,而不是把已登录/卡住的中转页当作仍在登录而无限等待。
+                    # 重导航次数有上限：会话真坏了时反复刷新只会骚扰教务系统,
+                    # 到顶后转入被动等待（用户可手动接管,或等超时）。
+                    cas_renavigate_attempts += 1
+                    next_cas_renavigate_at = now + 5.0
+                    try:
+                        current.goto(
+                            url, wait_until="domcontentloaded", timeout=60_000
+                        )
+                    except (Error, TimeoutError):
+                        pass
+                    stable_checks = 0
+                    healed = True
+                    if cas_renavigate_attempts == CAS_RENAVIGATE_LIMIT:
+                        print(
+                            "登录提示：自动重试教务系统入口已达上限，"
+                            "停止自动刷新；请在浏览器里手动完成登录或稍后重试任务。"
+                        )
                 if not healed:
                     stable_checks = 0
                     now = time.monotonic()

@@ -15,6 +15,33 @@ from course_selection.selection_entry import (
 )
 
 
+
+def _section(identity: str, category: str) -> object:
+    from dataclasses import dataclass
+    from types import SimpleNamespace
+
+    @dataclass
+    class Section:
+        identity: str
+        category: str
+        name: str
+
+    return Section(identity=identity, category=category, name="经济学原理")
+
+
+class SelectionQuerySourceTests(unittest.TestCase):
+    def test_flattened_sections_carry_query_source_for_planning_filters(self):
+        from course_selection.selection_query import _sections_with_query_source
+
+        sections = {"a|b|c": _section("a|b|c", "专业核心课")}
+        stamped = _sections_with_query_source(sections, "xsxk", semester="2026-20271", page=3)
+        self.assertEqual(stamped["a|b|c"]["query_code"], "xsxk")
+        self.assertEqual(stamped["a|b|c"]["query_term"], "2026-20271")
+        self.assertEqual(stamped["a|b|c"]["query_page"], 3)
+        self.assertEqual(stamped["a|b|c"]["query_label"], "外专业课程")
+        self.assertEqual(stamped["a|b|c"]["category"], "专业核心课")
+
+
 class SelectionEntryTests(unittest.TestCase):
     COURSE_HTML = """
     <span>选课时间：2026-08-29 08:30 至 2026-08-29 10:30</span>
@@ -47,6 +74,7 @@ class SelectionEntryTests(unittest.TestCase):
         self.assertEqual(sections[0].teacher, "李老师")
         self.assertEqual(sections[0].selected_count, "18")
         self.assertEqual(sections[0].capacity_count, "30")
+        self.assertEqual(sections[0].meetings, ({"day": 1, "start": 1, "end": 2, "weeks": []},))
 
     def test_parses_teacher_prefix_and_removes_it_from_schedule(self):
         html = self.COURSE_HTML.replace(
@@ -58,6 +86,10 @@ class SelectionEntryTests(unittest.TestCase):
 
         self.assertEqual(section.teacher, "李可欣")
         self.assertEqual(section.time, "[10-17周]星期一第3,4节")
+        self.assertEqual(
+            section.meetings,
+            ({"day": 1, "start": 3, "end": 4, "weeks": list(range(10, 18))},),
+        )
 
     def test_fallback_identity_is_not_marked_executable(self):
         html = self.COURSE_HTML.replace("saveXsxk1('TASK-9')", "showCourse('GE101')")

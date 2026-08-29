@@ -24,6 +24,10 @@ paths:
   /api/plans/latest:
     get:
       responses: {'200': {description: Latest persisted read-only plan}, '404': {description: No plan}}
+  /api/executions/selection:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SelectionExecutionRequest'}}}}
+      responses: {'202': {description: Explicitly confirmed single execution queued}, '409': {description: Confirmation or applicability check failed}}
   /api/tasks/{identity}:
     get:
       parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
@@ -41,6 +45,10 @@ paths:
     post:
       requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: true}}}}
       responses: {'201': {description: Candidate notice saved}}
+  /api/notices/discover:
+    post:
+      requestBody: {required: false, content: {application/json: {schema: {type: object, properties: {index_url: {type: string, format: uri}}}}}}
+      responses: {'201': {description: Matching official notice pages downloaded, parsed, and saved}, '400': {description: Official notice source could not be read}}
   /api/notices/{identity}/confirm:
     post:
       parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
@@ -68,6 +76,13 @@ components:
       required: [goals]
       properties:
         goals: {type: array, items: {type: object, additionalProperties: true}}
+    SelectionExecutionRequest:
+      type: object
+      required: [section_id, snapshot_id, confirmation]
+      properties:
+        section_id: {type: string}
+        snapshot_id: {type: string}
+        confirmation: {type: string, description: Must exactly equal section_id}
     LoginConfiguration:
       type: object
       required: [state, configured]
@@ -82,6 +97,7 @@ components:
       properties:
         id: {type: string}
         operation: {type: string}
+        task_kind: {type: string, enum: [observation, execution]}
         state: {type: string}
         progress: {type: object, additionalProperties: true}
         error: {type: string}

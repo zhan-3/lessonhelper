@@ -62,6 +62,7 @@ class SelectionCourseSection:
     action_rwh: str = ""
     action_name: str = ""
     execution_ready: bool = False
+    meetings: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -220,6 +221,31 @@ def _schedule_from_class_info(value: str) -> str:
     return re.sub(r"^上课信息[:：]\s*", "", value).strip("◇ ")
 
 
+def _schedule_meetings(value: str) -> tuple[dict[str, Any], ...]:
+    """Normalize only explicit Chinese weekday/period facts; ambiguity stays unknown."""
+    weekdays = "一二三四五六日"
+    meetings: list[dict[str, Any]] = []
+    for match in re.finditer(
+        r"(?:\[([^\]]+?)周\])?[^星期周]*?(?:星期|周)\s*([一二三四五六日天1-7])"
+        r"[^第\d]*第?\s*(\d+)\s*[,，\-~至]\s*(\d+)\s*节",
+        value,
+    ):
+        raw_weeks, raw_day, raw_start, raw_end = match.groups()
+        weeks: list[int] = []
+        if raw_weeks:
+            parity = "odd" if "单" in raw_weeks else "even" if "双" in raw_weeks else "all"
+            for token in re.split(r"[,，]", re.sub(r"[单双]", "", raw_weeks)):
+                bounds = re.match(r"\s*(\d+)\s*[-~至]\s*(\d+)\s*$", token)
+                values = range(int(bounds.group(1)), int(bounds.group(2)) + 1) if bounds else ([int(token)] if token.strip().isdigit() else [])
+                weeks.extend(week for week in values if parity == "all" or (week % 2 == 1) == (parity == "odd"))
+        day = 7 if raw_day == "天" else int(raw_day) if raw_day.isdigit() else weekdays.index(raw_day) + 1
+        meetings.append({
+            "day": day, "start": int(raw_start), "end": int(raw_end),
+            "weeks": sorted(set(weeks)),
+        })
+    return tuple(meetings)
+
+
 def selection_page_count(html: str) -> int:
     """Return the server-rendered result page count, defaulting to one."""
     match = re.search(
@@ -300,6 +326,7 @@ def extract_course_sections_from_html(html: str) -> tuple[SelectionCourseSection
                 action_rwh=action_rwh,
                 action_name=action_name,
                 execution_ready=bool(action_rwh),
+                meetings=_schedule_meetings(_schedule_from_class_info(class_info)),
             )
         )
     return tuple(sections)

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from course_selection.discovery import DiscoveryReport
 from course_selection.deep_observation import SelectionObservationRequest
 from course_selection.gateway import PlaywrightAcademicGateway
+from course_selection.selection_query import VerifiedSelectionQueryAdapter
 
 
 class _Context:
@@ -225,11 +226,37 @@ class SelectionSnapshotTests(unittest.TestCase):
         self.assertEqual("complete", observed.status)
         self.assertEqual("verified-selection-api", observed.payload["source_kind"])
         self.assertEqual("hitwh-jwts-selection-query-v1", observed.payload["contract_version"])
-        self.assertEqual("TASK-9", observed.payload["sections"][0]["identity"])
+        section = observed.payload["sections"][0]
+        self.assertEqual("TASK-9", section["identity"])
+        self.assertEqual("TASK-9", section["action_rwh"])
+        self.assertTrue(section["execution_ready"])
+        self.assertEqual("szhx", section["query_code"])
+        self.assertEqual("2026-1", section["query_term"])
+        self.assertEqual(1, section["query_page"])
         self.assertEqual([], page.urls)
         self.assertIn("pageXklb=szhx", gateway._session.authenticated_urls[0][0])
         self.assertEqual(600, gateway._session.authenticated_urls[0][1])
         self.assertEqual(1, len(page.main_frame.calls))
+
+    def test_verified_adapter_reads_every_whitelisted_category_and_page(self):
+        html = self.COURSE_HTML.replace(
+            '<table class="bot_line">',
+            '<input name="pageCount" value="2"><table class="bot_line">',
+        )
+        page = _Page(html)
+        result = VerifiedSelectionQueryAdapter().read(
+            page,
+            categories=("szhx", "xsxk"),
+            semester_label="2026-1",
+            allowed_windows={},
+            progress=lambda *_args: None,
+            cancelled=lambda: False,
+        )
+        self.assertEqual("complete", result["status"])
+        self.assertEqual(4, len(page.main_frame.calls))
+        self.assertEqual([2, 2], [query["pages_fetched"] for query in result["queries"]])
+        self.assertEqual("szhx", result["queries"][0]["sections"][0]["query_code"])
+        self.assertEqual("xsxk", result["queries"][1]["sections"][0]["query_code"])
 
     def test_gateway_keeps_discovered_payload_diagnostic_only(self):
         report = DiscoveryReport(

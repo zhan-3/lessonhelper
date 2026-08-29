@@ -37,8 +37,9 @@ def has_active_tasks(workspace_root: Path) -> bool:
         try:
             placeholders = ",".join("?" for _ in ACTIVE_TASK_STATES)
             return connection.execute(
-                f"select 1 from observation_tasks where state in ({placeholders}) limit 1",
-                ACTIVE_TASK_STATES,
+                f"select 1 from observation_tasks where state in ({placeholders}) "
+                f"union all select 1 from execution_tasks where state in ({placeholders}) limit 1",
+                (*ACTIVE_TASK_STATES, *ACTIVE_TASK_STATES),
             ).fetchone() is not None
         finally:
             connection.close()

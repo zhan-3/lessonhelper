@@ -6,12 +6,13 @@ from collections.abc import Callable
 from dataclasses import asdict
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode
 
 from playwright.sync_api import Error
 
 from course_progress.sanitizer import sanitize_request_body, sanitize_url
 
+from .categories import CATEGORY_LABELS
 from .selection_entry import (
     classify_selection_html,
     observation_to_dict,
@@ -69,6 +70,26 @@ class SelectionContractError(RuntimeError):
     """The verified page or request contract is no longer available."""
 
 
+def _sections_with_query_source(
+    sections: dict[str, Any], category: str, *, semester: str = "", page: int | None = None
+) -> dict[str, dict[str, Any]]:
+    """Stamp each section with its query source.
+
+    原始分类标签（如“专业基础课”）不能表达培养口径：外专业课程的标签
+    与本院课完全同名。打上查询来源，前端据此映射培养要求筛选，而不
+    是猜标签。
+    """
+    stamped: dict[str, dict[str, Any]] = {}
+    for identity, section in sections.items():
+        record = asdict(section)
+        record["query_code"] = category
+        record["query_label"] = CATEGORY_LABELS.get(category, category)
+        record["query_term"] = semester
+        record["query_page"] = page
+        stamped[identity] = record
+    return stamped
+
+
 class VerifiedSelectionQueryAdapter:
     """Open one verified read page, then query every approved category directly."""
 
@@ -119,6 +140,7 @@ class VerifiedSelectionQueryAdapter:
         for category in categories:
             pages: list[dict[str, Any]] = []
             sections: dict[str, Any] = {}
+            stamped_sections: dict[str, dict[str, Any]] = {}
             expected_pages = 1
             last_result: dict[str, Any] = {}
             try:
@@ -162,8 +184,17 @@ class VerifiedSelectionQueryAdapter:
                         request_url=str(last_result.get("url") or endpoint),
                         expected_windows=expected,
                     )
+                    request_values = parse_qs(str(last_result.get("requestBody") or ""))
+                    term_value = str((request_values.get("pageXnxq") or [""])[0])
                     for section in observation.sections:
                         sections.setdefault(section.identity, section)
+                        stamped_sections.setdefault(
+                            section.identity,
+                            _sections_with_query_source(
+                                {section.identity: section}, category,
+                                semester=term_value, page=page_number,
+                            )[section.identity],
+                        )
                     pages.append(
                         {
                             "page": page_number,
@@ -184,12 +215,12 @@ class VerifiedSelectionQueryAdapter:
                     "pages_fetched": len(pages),
                     "complete": complete,
                     "record_count": len(sections),
-                    "sections": [asdict(section) for section in sections.values()],
+                    "sections": list(stamped_sections.values()),
                     "pages": pages,
                 }
                 queries.append(query)
-                for identity, section in sections.items():
-                    all_sections.setdefault(identity, asdict(section))
+                for identity, record in stamped_sections.items():
+                    all_sections.setdefault(identity, record)
             except (Error, KeyError, TypeError, ValueError) as error:
                 # Keep a category-level incomplete result.  The caller will not
                 # publish it as a current snapshot, and a transient page error
@@ -203,7 +234,7 @@ class VerifiedSelectionQueryAdapter:
                         "page_count": expected_pages,
                         "pages_fetched": len(pages),
                         "record_count": len(sections),
-                        "sections": [asdict(section) for section in sections.values()],
+                        "sections": list(stamped_sections.values()),
                         "pages": pages,
                         "error": str(error)[:160],
                     }

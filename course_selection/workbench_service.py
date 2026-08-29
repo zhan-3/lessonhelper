@@ -14,7 +14,12 @@ from typing import Any
 from course_progress.credentials import credential_store
 
 from .notice import fetch_notice_text
-from .notice_discovery import candidate_from_text, notice_diff
+from .notice_discovery import (
+    DEFAULT_NOTICE_INDEX_URL,
+    candidate_from_text,
+    discover_official_notice_candidates,
+    notice_diff,
+)
 from .persistence import WorkspaceDatabase
 from .planning import ReadOnlyPlan, build_read_only_plan
 
@@ -166,9 +171,16 @@ class WorkbenchService:
 
     def refresh_context(self) -> dict[str, Any]:
         profile, notice = self.database.current_profile(), self.database.confirmed_notice()
+        timetable = self.database.latest_snapshot("timetable")
         windows = (notice or {}).get("windows", [])
         grade = str((profile or {}).get("grade", ""))
-        allowed = [item for item in windows if item.get("action") == "selection" and item.get("method") == "academic_system" and grade and grade in item.get("grades", [])]
+        notice_term = str((notice or {}).get("term", ""))
+        timetable_term = str((timetable or {}).get("term", ""))
+        terms_match = not timetable_term or (
+            timetable_term.replace("年", "").replace("学期", "").replace(" ", "")
+            == notice_term.replace("年", "").replace("学期", "").replace(" ", "")
+        )
+        allowed = [item for item in windows if terms_match and item.get("action") == "selection" and item.get("method") == "academic_system" and grade and grade in item.get("grades", [])]
         categories = list(dict.fromkeys(code for item in allowed for code in item.get("category_codes", [])))
         return {
             "term": (notice or {}).get("term", ""),
@@ -191,6 +203,17 @@ class WorkbenchService:
         previous = self.database.confirmed_notice()
         saved = self.database.save_notice(candidate)
         return saved, notice_diff(previous, saved) if previous else ""
+
+    def discover_notice_candidates(
+        self, index_url: str = DEFAULT_NOTICE_INDEX_URL
+    ) -> list[dict[str, Any]]:
+        try:
+            candidates = discover_official_notice_candidates(
+                index_url, official_hosts=self.official_notice_hosts
+            )
+        except (OSError, ValueError) as error:
+            raise NoticeReadError(f"unable to discover official notices: {error}") from error
+        return [self.database.save_notice(candidate) for candidate in candidates]
 
     def list_notice_candidates(self) -> list[dict[str, Any]]:
         rows = self.database.connection.execute("select id,payload,status,created_at from notice_versions order by created_at desc").fetchall()
@@ -225,3 +248,53 @@ class WorkbenchService:
     def save_plan(self, goals: list[dict[str, Any]]) -> dict[str, Any]:
         """Persist a read-only plan; this method has no gateway or write path."""
         return self.database.save_plan(self.build_plan(goals).to_dict())
+
+    def prepare_selection_execution(self, section_id: str, snapshot_id: str) -> dict[str, Any]:
+        """Validate one concrete section against the current applicable snapshots."""
+        profile = self.database.current_profile() or {}
+        notice = self.database.confirmed_notice() or {}
+        selection = self.database.latest_snapshot("selection")
+        timetable = self.database.latest_snapshot("timetable")
+        if not selection or selection.get("id") != snapshot_id:
+            raise ValueError("选课快照已更新，请重新选择教学班")
+        sections = (selection.get("payload") or {}).get("sections", [])
+        matches = [item for item in sections if isinstance(item, dict) and str(item.get("identity")) == section_id]
+        if len(matches) != 1:
+            raise ValueError("当前选课快照中不存在该教学班")
+        section = matches[0]
+        if not section.get("execution_ready") or str(section.get("action_rwh")) != section_id:
+            raise ValueError("该教学班缺少页面提供的可执行身份")
+        term = str(notice.get("term") or selection.get("term") or "")
+        plan = build_read_only_plan(
+            term=term,
+            profile_id=str(profile.get("version_id", "")),
+            notice_id=str(notice.get("version_id", "")),
+            timetable_snapshot=timetable,
+            selection_snapshot=selection,
+            goals=[{
+                "goal_id": section_id,
+                "course_identity": str(section.get("course_code") or section.get("name") or section_id),
+                "rank": 1,
+                "preferences": [{"section_id": section_id, "rank": 1}],
+            }],
+        )
+        reasons = list(plan.blocked_reasons)
+        reasons.extend(conflict.kind for conflict in plan.conflicts)
+        if reasons:
+            raise ValueError("当前教学班不可执行：" + "、".join(dict.fromkeys(reasons)))
+        category = str(section.get("query_code") or "")
+        query_term = str(section.get("query_term") or "")
+        if not category or not query_term:
+            raise ValueError("教学班缺少查询类别或学期来源")
+        if category not in self.refresh_context().get("allowed_categories", []):
+            raise ValueError("教学班类别不在当前通知白名单中")
+        return {
+            "section_id": section_id,
+            "category": category,
+            "term_value": query_term,
+            "source_page": max(1, int(section.get("query_page") or 1)),
+            "snapshot_id": snapshot_id,
+            "profile_id": profile.get("version_id"),
+            "notice_id": notice.get("version_id"),
+            "course_name": str(section.get("name") or ""),
+        }

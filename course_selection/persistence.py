@@ -58,6 +58,7 @@ create table if not exists plans(id text primary key, term text not null, profil
 create index if not exists plans_created on plans(created_at desc);
 create table if not exists refresh_attempts(id text primary key, kind text not null, state text not null, started_at text not null, finished_at text, error text not null default '', snapshot_id text references snapshots(id));
 create table if not exists observation_tasks(id text primary key, operation text not null, coalesce_key text not null, state text not null, created_at text not null, updated_at text not null, progress text not null, context text not null, error text not null default '');
+create table if not exists execution_tasks(id text primary key, operation text not null, state text not null, created_at text not null, updated_at text not null, progress text not null, context text not null, error text not null default '');
 """
 
 
@@ -231,7 +232,7 @@ class WorkspaceDatabase:
         return self._snapshot_dict(row)
 
     def latest_snapshot(self, kind: str) -> dict[str, Any] | None:
-        row = self.connection.execute("select * from snapshots where kind=? and complete=1 order by created_at desc limit 1", (kind,)).fetchone()
+        row = self.connection.execute("select * from snapshots where kind=? and complete=1 order by created_at desc, rowid desc limit 1", (kind,)).fetchone()
         return self._snapshot_dict(row) if row else None
 
     def latest_snapshot_change(self, kind: str) -> dict[str, Any] | None:
@@ -278,6 +279,7 @@ class WorkspaceDatabase:
             self.connection.execute("delete from snapshot_changes")
             self.connection.execute("delete from refresh_attempts")
             self.connection.execute("delete from plans")
+            self.connection.execute("delete from execution_tasks")
             self.connection.execute("delete from snapshots")
             self.connection.execute("delete from profiles")
 

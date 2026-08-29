@@ -27,6 +27,7 @@ class AcademicGateway(Protocol):
     def observe_timetable(self, request, progress: Progress, cancelled: Cancelled): ...
     def observe_progress(self, request, progress: Progress, cancelled: Cancelled): ...
     def observe_manual(self, request, progress: Progress, cancelled: Cancelled, finished: Cancelled): ...
+    def execute_selection(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]: ...
     def reset_login(self) -> None: ...
     def close(self) -> None: ...
     def poll(self) -> None: ...
@@ -70,6 +71,9 @@ class UnconfirmedAcademicGateway:
     def observe_manual(self, request, progress: Progress, cancelled: Cancelled, finished: Cancelled):
         from .deep_observation import ManualObservationResult
         return ManualObservationResult(status="interface_unconfirmed", error="manual observation is not configured")
+
+    def execute_selection(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
+        raise RuntimeError("selection execution is not configured")
 
     def observe_navigation(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled, finished: Cancelled) -> dict[str, Any]:
         from .deep_observation import ManualObservationRequest
@@ -669,6 +673,28 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             trace=AcademicRequestTrace.from_requests(trace_requests),
             error="" if status == "complete" else status,
         )
+
+    def execute_selection(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
+        """Execute one prevalidated section; the adapter performs exactly one POST."""
+        if cancelled():
+            return {"status": "cancelled"}
+        page = getattr(self, "_academic_page", None)
+        if page is None or self._page_is_closed(page):
+            raise RuntimeError("academic session is disconnected")
+        from .selection_execution import VerifiedSelectionExecutionAdapter
+
+        progress("reading", {"target": "selection-execution", "message": "revalidating section"})
+        result = VerifiedSelectionExecutionAdapter().execute(
+            page,
+            section_id=str(context.get("section_id") or ""),
+            category=str(context.get("category") or ""),
+            term_value=str(context.get("term_value") or ""),
+            source_page=int(context.get("source_page") or 1),
+            authenticate=lambda url, target_page: self._session.open_authenticated(
+                url, timeout_seconds=600, page=target_page,
+            ),
+        )
+        return result.to_dict()
 
     def reset_login(self) -> None:
         """Close the owned browser and remove authentication-bearing profile state."""

@@ -87,7 +87,10 @@ class _TableParser(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
-        if tag in {"th", "td"} and self._in_cell and self._row is not None:
+        # 教务系统用非法的 ``</br>`` 结束标签充当换行符(而非 ``<br>``)。
+        if tag == "br" and self._in_cell and self._cell is not None:
+            self._cell.append("\n")
+        elif tag in {"th", "td"} and self._in_cell and self._row is not None:
             self._row.append(_clean_cell("".join(self._cell or [])))
             self._cell = None
             self._in_cell = False

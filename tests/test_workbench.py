@@ -17,8 +17,14 @@ from course_selection.deep_observation import (
     TimetableObservationResult,
 )
 from course_selection.gateway import PlaywrightAcademicGateway
+from course_selection.notice_discovery import (
+    OfficialNoticeLink,
+    candidate_from_text,
+    discover_official_notice_candidates,
+    parse_official_notice_article,
+    parse_official_notice_links,
+)
 from course_selection.persistence import WorkspaceDatabase
-from course_selection.notice_discovery import candidate_from_text
 from course_selection.tasks import ObservationService, TaskState
 from course_selection.workbench import create_workbench_app
 
@@ -349,6 +355,20 @@ class WorkspaceDatabaseTests(unittest.TestCase):
 
 
 class ObservationServiceTests(unittest.TestCase):
+    def test_restart_marks_abandoned_tasks_failed_before_accepting_new_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            abandoned_service = ObservationService(database, FakeGateway, autostart=False)
+            abandoned = abandoned_service.submit("connect")
+
+            restarted_service = ObservationService(database, FakeGateway, autostart=False)
+
+            self.assertEqual(TaskState.FAILED.value, restarted_service.inspect(abandoned.id)["state"])
+            self.assertIn("restarted", restarted_service.inspect(abandoned.id)["error"])
+            restarted_service.close()
+            abandoned_service.close()
+            database.close()
+
     def test_login_changes_require_an_idle_worker(self):
         with tempfile.TemporaryDirectory() as directory:
             database = WorkspaceDatabase.open(Path(directory))
@@ -624,6 +644,29 @@ class WorkbenchApiTests(unittest.TestCase):
             app.extensions["observation_service"].close()
             app.extensions["workspace_database"].close()
 
+    @patch("course_selection.workbench_service.discover_official_notice_candidates")
+    def test_official_notice_discovery_api_saves_static_candidates(self, discover):
+        discover.return_value = [candidate_from_text(
+            "https://jwc.hitwh.edu.cn/2026/notice/page.htm",
+            "关于2026年秋季学期各类课程选课时间安排的通知\n"
+            "2026年8月29日8:30-2026年8月29日11:00\n2025级\n"
+            "文化素质教育课——选课\n新教务系统",
+            official_hosts=("jwc.hitwh.edu.cn",),
+        )]
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_workbench_app(Path(directory), gateway_factory=FakeGateway)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]}
+
+            response = client.post("/api/notices/discover", json={}, headers=headers)
+
+            self.assertEqual(201, response.status_code)
+            self.assertEqual(1, len(response.get_json()["notices"]))
+            self.assertEqual(1, len(client.get("/api/notices/candidates").get_json()["notices"]))
+            app.extensions["observation_service"].close()
+            app.extensions["workspace_database"].close()
+
     def test_task_submission_validates_json(self):
         with tempfile.TemporaryDirectory() as directory:
             app = create_workbench_app(Path(directory), gateway_factory=FakeGateway)
@@ -701,9 +744,67 @@ class WorkbenchApiTests(unittest.TestCase):
 
 
 class NoticeDiscoveryTests(unittest.TestCase):
+    TITLE = "关于2026年秋季学期各类课程选课时间安排的通知"
+
     def test_generic_selection_article_is_not_a_candidate(self):
         with self.assertRaises(ValueError):
             candidate_from_text("https://jwc.hitwh.edu.cn/a", "关于选课的通知", official_hosts=("jwc.hitwh.edu.cn",))
+
+    def test_static_list_parser_keeps_only_arrangement_notice_and_deduplicates_nested_links(self):
+        html = f'''<ul>
+          <li><a href="/other/page.htm" title="关于2026年秋季学期文化素质课程选课的通知">其他</a></li>
+          <li><a href="/notice/page.htm"><a href="/notice/page.htm" title="{self.TITLE}">{self.TITLE}</a></a></li>
+        </ul>'''
+
+        self.assertEqual(
+            (OfficialNoticeLink(self.TITLE, "https://jwc.hitwh.edu.cn/notice/page.htm"),),
+            parse_official_notice_links(html, index_url="https://jwc.hitwh.edu.cn/ks/list.htm"),
+        )
+
+    def test_static_article_parser_preserves_table_cells_and_inline_split_numbers(self):
+        html = '''<html><div class="wp_articlecontent">
+          <p>2026年8月29日8:30-2026年8月29日11:00</p>
+          <p><span>2023级、2024级、</span><span>2</span><span>025级</span></p>
+          <p>创新研修课、创新实验课、创新创业课——选课</p><p>新教务系统</p>
+        </div></html>'''
+
+        text = parse_official_notice_article(html, title=self.TITLE)
+        candidate = candidate_from_text(
+            "https://jwc.hitwh.edu.cn/notice/page.htm",
+            text,
+            official_hosts=("jwc.hitwh.edu.cn",),
+        )
+
+        self.assertEqual(("2023", "2024", "2025"), tuple(candidate["windows"][0]["grades"]))
+        self.assertTrue(candidate["query_eligible"])
+
+    @patch("course_selection.notice_discovery._download_html")
+    def test_discovery_downloads_list_then_matching_static_article(self, download):
+        download.side_effect = [
+            f'<a href="/notice/page.htm" title="{self.TITLE}">{self.TITLE}</a>',
+            '<div class="wp_articlecontent"><p>2026年8月29日8:30-2026年8月29日11:00</p><p>2025级</p><p>文化素质教育课——选课</p><p>新教务系统</p></div>',
+        ]
+
+        candidates = discover_official_notice_candidates()
+
+        self.assertEqual(1, len(candidates))
+        self.assertEqual(self.TITLE, candidates[0]["title"])
+        self.assertEqual("https://jwc.hitwh.edu.cn/notice/page.htm", candidates[0]["source_url"])
+        self.assertEqual(2, download.call_count)
+
+    @patch("course_selection.notice_discovery._download_html")
+    def test_discovery_checks_second_page_when_first_has_no_matching_notice(self, download):
+        download.side_effect = [
+            '<a href="/other.htm" title="普通教务通知">普通通知</a>',
+            f'<a href="/notice/page.htm" title="{self.TITLE}">{self.TITLE}</a>',
+            '<div class="wp_articlecontent"><p>2026年8月29日8:30-2026年8月29日11:00</p><p>2025级</p><p>文化素质教育课——选课</p><p>新教务系统</p></div>',
+        ]
+
+        candidates = discover_official_notice_candidates()
+
+        self.assertEqual(1, len(candidates))
+        self.assertEqual("https://jwc.hitwh.edu.cn/ks/list2.htm", download.call_args_list[1].args[0])
+        self.assertEqual(3, download.call_count)
 
 
 if __name__ == "__main__":

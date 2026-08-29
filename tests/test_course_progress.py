@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import course_progress.session as session_module
+
 from course_progress.capture import CaptureStore, score_candidate
 from course_progress.cli import build_parser
 from course_progress.credentials import CredentialStore, LoginCredentials
@@ -172,6 +174,108 @@ class AcademicBrowserSessionTests(unittest.TestCase):
 
         self.assertEqual(0, len(attempts))  # kick never consumed an auto-login
         self.assertEqual("https://webvpn.hitwh.edu.cn/#!/service", result.url)
+
+    def test_open_authenticated_renavigates_when_cas_ticket_page_stalls(self):
+        # loginCAS?ticket=ST-... 表示 CAS 已签发成功、后端会话已建立，但该确认页
+        # 的后续跳转可能被 WebVPN 改写中断而停滞。open_authenticated 应重新导航到
+        # 目标 URL 而不是把已登录页面当作仍在登录而无限等待。
+        class Context:
+            def __init__(self):
+                self.pages = []
+
+            def storage_state(self, **_kwargs):
+                return None
+
+            def clear_cookies(self):
+                return None
+
+        class Page:
+            def __init__(self):
+                self.url = "about:blank"
+                self.goto_calls = 0
+
+            def goto(self, url, **_kwargs):
+                self.goto_calls += 1
+                if self.goto_calls == 1:
+                    self.url = (
+                        "https://webvpn.hitwh.edu.cn/http/7772/loginCAS"
+                        "?ticket=ST-test"
+                    )
+                else:
+                    self.url = "https://webvpn.hitwh.edu.cn/http/7772/home"
+                return None
+
+            def wait_for_timeout(self, *_args):
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+            session.context = Context()
+            session.private_root = Path(directory)
+            session.auth_state_path = Path(directory) / "state.json"
+            session._fill_and_submit_login = lambda page: True
+            result = session.open_authenticated(
+                "https://webvpn.hitwh.edu.cn/http/7772/loginCAS",
+                timeout_seconds=10,
+                page=Page(),
+            )
+
+        self.assertEqual(2, result.goto_calls)  # initial navigation + one re-navigation
+        self.assertEqual("https://webvpn.hitwh.edu.cn/http/7772/home", result.url)
+
+    def test_open_authenticated_stops_refreshing_after_cas_retry_limit(self):
+        class Clock:
+            def __init__(self):
+                self.now = 0.0
+
+            def monotonic(self):
+                return self.now
+
+        class Context:
+            def __init__(self):
+                self.pages = []
+
+            def clear_cookies(self):
+                return None
+
+        clock = Clock()
+
+        class Page:
+            def __init__(self):
+                self.url = "about:blank"
+                self.goto_calls = 0
+
+            def goto(self, _url, **_kwargs):
+                self.goto_calls += 1
+                self.url = "https://webvpn.hitwh.edu.cn/http/7772/loginCAS"
+
+            def wait_for_timeout(self, *_args):
+                clock.now += 5.1
+
+        page = Page()
+        original_time = session_module.time
+        try:
+            session_module.time = clock
+            with tempfile.TemporaryDirectory() as directory:
+                session = AcademicBrowserSession.__new__(AcademicBrowserSession)
+                session.context = Context()
+                session.private_root = Path(directory)
+                session.auth_state_path = Path(directory) / "state.json"
+                session._fill_and_submit_login = lambda _page: False
+                with self.assertRaises(TimeoutError):
+                    session.open_authenticated(
+                        "https://webvpn.hitwh.edu.cn/http/7772/home",
+                        timeout_seconds=60,
+                        page=page,
+                    )
+        finally:
+            session_module.time = original_time
+
+        self.assertEqual(
+            1 + session_module.CAS_RENAVIGATE_LIMIT,
+            page.goto_calls,
+            "initial navigation plus only the bounded CAS retries",
+        )
 
     def test_webvpn_health_check_rejects_ip_change_redirect(self):
         class Context:

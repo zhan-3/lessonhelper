@@ -6,12 +6,14 @@ import {
   compressWeeks,
   courseAlreadyCompleted,
   deriveCurrentWeek,
+  describeOptionMeetings,
   expandScheduleItems,
   formatWeekGroup,
   locationsByWeek,
+  planningFilterFor,
+  progressFilterByKey,
+  progressKeysByQueryCode,
   projectedCourseCredits,
-  requirementFilterFor,
-  requirementFilters,
   transitionsIntoGroup,
   weekItems,
   type CandidateOption,
@@ -28,6 +30,8 @@ const maximumPreviews = 3;
 const formatCredits = (credits: number) => Number.isInteger(credits) ? String(credits) : String(credits).replace(/0+$/, "").replace(/\.$/, "");
 
 const timeOverlaps = (a: ScheduleItem, b: ScheduleItem) => a.day !== null && a.day === b.day && a.start !== null && b.start !== null && a.end !== null && b.end !== null && a.start <= b.end && b.start <= a.end;
+const executionTimeOverlaps = (a: ScheduleItem, b: ScheduleItem) => timeOverlaps(a, b) &&
+  (!a.weeks.length || !b.weeks.length || a.weeks.some(week => b.weeks.includes(week)));
 const formatLocalDate = (date: Date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -46,15 +50,17 @@ const readCalibration = (term: string): WeekCalibration | null => {
 
 const diffCount = (diff: ScheduleDiff) => diff.added.length + diff.ended.length + diff.timeAdjusted.length + diff.teacherAdjusted.length;
 
-export function ScheduleBoard({ timetable, selection, graduationProgress }: {
+export function ScheduleBoard({ timetable, selection, graduationProgress, onExecuteSection, executionPending }: {
   timetable: WorkbenchState["snapshots"]["timetable"];
   selection: WorkbenchState["snapshots"]["selection"];
   graduationProgress?: WorkbenchState["graduation_progress"];
+  onExecuteSection?: (sectionId: string, courseName: string) => void;
+  executionPending?: boolean;
 }) {
   const term = timetable?.term || selection?.term || "当前学期";
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [query, setQuery] = useState("");
-  const [requirementFilter, setRequirementFilter] = useState<RequirementFilter>("全部");
+  const [requirementFilter, setRequirementFilter] = useState("全部");
   const [conflictFilter, setConflictFilter] = useState("全部");
   const [page, setPage] = useState(1);
   const [previewKeys, setPreviewKeys] = useState<string[]>([]);
@@ -67,6 +73,15 @@ export function ScheduleBoard({ timetable, selection, graduationProgress }: {
 
   const current = useMemo(() => ((timetable?.payload.entries as Record<string, unknown>[] | undefined) ?? []).flatMap((item, index) => expandScheduleItems(item, "current", index)), [timetable]);
   const candidateOptions = useMemo(() => ((selection?.payload.sections as Record<string, unknown>[] | undefined) ?? []).map(candidateOption), [selection]);
+  // 筛选选项由实际数据推导：没有对应课程的培养要求不再出现在选项栏。
+  const requirementFilterOptions = useMemo(() => {
+    const present = new Set<string>();
+    for (const option of candidateOptions) {
+      const value = planningFilterFor(option);
+      if (value) present.add(value);
+    }
+    return ["全部", ...[...present].sort((a, b) => a.localeCompare(b, "zh-CN"))];
+  }, [candidateOptions]);
   const allMeetings = useMemo(() => [...current, ...candidateOptions.flatMap(option => option.meetings)], [current, candidateOptions]);
   const maxWeek = Math.max(1, ...allMeetings.flatMap(item => item.weeks));
   const calibration = useMemo(() => readCalibration(term), [term, calibrationRevision]);
@@ -76,8 +91,6 @@ export function ScheduleBoard({ timetable, selection, graduationProgress }: {
     courses.findIndex(other => other.code === course.code && other.name === course.name) === index
   );
   const culturalProgress = progressItems.find(item => item.key === "cultural_quality");
-  const confirmedCulturalCredits = culturalProgress?.completed_credits ?? 0;
-  const requiredCulturalCredits = culturalProgress?.required_credits ?? 8;
   const fourHistoriesComplete = culturalProgress?.courses.some(course => /四史/.test(course.name)) ?? false;
 
   useEffect(() => {
@@ -90,9 +103,12 @@ export function ScheduleBoard({ timetable, selection, graduationProgress }: {
   }, [term, maxWeek]);
 
   const previewOptions = candidateOptions.filter(option => previewKeys.includes(option.key));
-  const projectedCulturalCredits = projectedCourseCredits(previewOptions, completedCourses, "文化素质");
-  const expectedCulturalCredits = confirmedCulturalCredits + projectedCulturalCredits;
-  const remainingCulturalCredits = Math.max(0, requiredCulturalCredits - expectedCulturalCredits);
+  // 进度面板与待选课程同步：只展示本次选课查询覆盖的培养要求。
+  const syncedProgress = (() => {
+    const queries = (selection?.payload.queries as Array<{ category?: unknown }> | undefined) ?? [];
+    const keys = new Set(queries.flatMap(item => progressKeysByQueryCode[String(item.category ?? "")] ?? []));
+    return progressItems.filter(item => keys.has(item.key));
+  })();
   const scheduleItems = [...current, ...previewOptions.flatMap(option => option.meetings)];
   const weekGroups = compressWeeks(scheduleItems, maxWeek);
   const selectedGroup = weekGroups.find(group => group.weeks.includes(selectedWeek)) ?? weekGroups[0];
@@ -114,13 +130,12 @@ export function ScheduleBoard({ timetable, selection, graduationProgress }: {
     return meetings.some(meeting => [...visibleCurrent, ...otherPreviewMeetings].some(other => timeOverlaps(meeting, other)));
   };
   const filteredOptions = candidateOptions.filter(option => {
-    const planningCategory = requirementFilterFor(option.category);
+    const planningCategory = planningFilterFor(option);
     const searchable = `${option.name} ${option.courseCode} ${option.teacher} ${option.category} ${planningCategory ?? ""}`.toLowerCase();
-    const visibleThisWeek = option.unknown || option.meetings.some(item => activeInWeek(item, selectedWeek));
     const hasConflict = optionHasConflict(option);
-    return !courseAlreadyCompleted(option, completedCourses) && visibleThisWeek && (requirementFilter === "全部" || planningCategory === requirementFilter) && (!query || searchable.includes(query.toLowerCase())) &&
+    return !courseAlreadyCompleted(option, completedCourses) && (requirementFilter === "全部" || planningCategory === requirementFilter) && (!query || searchable.includes(query.toLowerCase())) &&
       (conflictFilter === "全部" || (conflictFilter === "有冲突" ? hasConflict : !hasConflict));
-  }).sort((a, b) => Number(optionHasConflict(a)) - Number(optionHasConflict(b)) || (requirementFilterFor(a.category) ?? a.category).localeCompare(requirementFilterFor(b.category) ?? b.category, "zh-CN") || b.credits - a.credits || a.name.localeCompare(b.name, "zh-CN"));
+  }).sort((a, b) => Number(optionHasConflict(a)) - Number(optionHasConflict(b)) || (planningFilterFor(a) ?? a.category).localeCompare(planningFilterFor(b) ?? b.category, "zh-CN") || b.credits - a.credits || a.name.localeCompare(b.name, "zh-CN"));
   const pages = Math.max(1, Math.ceil(filteredOptions.length / pageSize));
   const safePage = Math.min(page, pages);
   const pagedOptions = filteredOptions.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -150,12 +165,6 @@ export function ScheduleBoard({ timetable, selection, graduationProgress }: {
       if (keys.length >= maximumPreviews) return keys;
       return [...keys, key];
     });
-  };
-
-  const optionTime = (option: CandidateOption) => {
-    const meetings = option.meetings.filter(item => activeInWeek(item, selectedWeek));
-    if (!meetings.length || meetings.every(item => item.unknown)) return "上课时间待定";
-    return meetings.filter(item => !item.unknown).map(item => `周${weekdays[(item.day ?? 1) - 1]} 第${item.start}–${item.end}节`).join("；");
   };
 
   const renderBlock = (item: ScheduleItem) => {
@@ -192,6 +201,25 @@ export function ScheduleBoard({ timetable, selection, graduationProgress }: {
       <div className="schedule-legend"><span className="legend current" />当前课程 <span className="legend candidate" />预览课程 <span className="legend conflict" />时间冲突</div>
     </div>
 
+    <section className="progress-band" aria-label="学分进度">
+      <div className="progress-band-heading"><strong>学分进度</strong><small>与本次选课查询类别同步</small></div>
+      {syncedProgress.length ? <div className="progress-band-inner">{syncedProgress.map(item => {
+        const filter = progressFilterByKey[item.key];
+        const confirmedCredits = item.completed_credits ?? 0;
+        const requiredCredits = item.required_credits ?? 0;
+        const projectedCredits = filter ? projectedCourseCredits(previewOptions, completedCourses, filter) : 0;
+        const expectedCredits = confirmedCredits + projectedCredits;
+        const remainingCredits = Math.max(0, requiredCredits - expectedCredits);
+        return <article className="progress-card" key={item.key}>
+          <header><strong>{item.label}</strong><span>{formatCredits(confirmedCredits)}/{formatCredits(requiredCredits)} 学分</span></header>
+          {requiredCredits > 0 && <progress max={requiredCredits} value={Math.min(expectedCredits, requiredCredits)} />}
+          <p>{remainingCredits > 0 ? `还差 ${formatCredits(remainingCredits)} 学分` : "总学分已满足"}{projectedCredits > 0 && ` · 预览后 ${formatCredits(expectedCredits)}`}{item.key === "cultural_quality" && ` · 四史${fourHistoriesComplete ? "已完成" : "待完成"} · D 类 2 学分待核对`}</p>
+          <p className="progress-courses">{item.courses.length ? item.courses.map(course => <span key={`${course.code}-${course.name}`}>{course.name} · {formatCredits(course.credits)}</span>) : <span>暂无已确认课程</span>}</p>
+        </article>;
+      })}</div> : <div className="progress-band-inner"><article className="progress-card unavailable"><strong>尚未同步已修课程</strong><span>当前只能计算本次预览，不能判断真实缺口。</span></article></div>}
+      {graduationProgress?.status === "incomplete" && <small>已修课程数据不完整，当前缺口只能作为下限参考。</small>}
+    </section>
+
     <nav className="week-selector" aria-label="选择相同课表周次">
       <div className="week-selector-label"><strong>相同课表周次</strong><button className="text-button" onClick={() => setCalibrationOpen(value => !value)}>{currentWeek ? `本周：第${currentWeek}周` : "校准本周"}</button></div>
       <div className="week-groups">{weekGroups.map(group => {
@@ -211,6 +239,7 @@ export function ScheduleBoard({ timetable, selection, graduationProgress }: {
       {diffOpen && <div className="diff-details">{transitions.map(diff => <article key={diff.week}><strong>第 {diff.week} 周起</strong>{diff.added.length > 0 && <p>新增：{diff.added.join("、")}</p>}{diff.ended.length > 0 && <p>结束：{diff.ended.join("、")}</p>}{diff.timeAdjusted.length > 0 && <p>时间调整：{diff.timeAdjusted.join("、")}</p>}{diff.teacherAdjusted.length > 0 && <p>老师调整：{diff.teacherAdjusted.join("、")}</p>}</article>)}</div>}
     </section>
 
+
     <div className="schedule-workspace">
       <div>
         <div className="timetable-scroll"><div className="timetable" style={{ "--periods": sessionCount } as React.CSSProperties}>
@@ -222,24 +251,20 @@ export function ScheduleBoard({ timetable, selection, graduationProgress }: {
       </div>
 
       <aside className="course-browser">
-        <div className="browser-heading"><div><h3>待选课程</h3><small>按第 {selectedWeek} 周筛选 · 最多预览 {maximumPreviews} 门</small></div><span>{filteredOptions.length} 门 · {safePage}/{pages} 页</span></div>
+        <div className="browser-heading"><div><h3>待选课程</h3><small>按第 {selectedWeek} 周检测冲突 · 最多预览 {maximumPreviews} 门</small></div><span>{filteredOptions.length} 门 · {safePage}/{pages} 页</span></div>
         <input aria-label="搜索待选课程" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索课程名、代码或教师" />
-        <div className="course-filters"><select value={requirementFilter} onChange={event => setRequirementFilter(event.target.value as RequirementFilter)} aria-label="培养要求">{requirementFilters.map(value => <option key={value}>{value === "全部" ? "全部培养要求" : value}</option>)}</select><select value={conflictFilter} onChange={event => setConflictFilter(event.target.value)} aria-label="冲突状态"><option>全部</option><option>无冲突</option><option>有冲突</option></select></div>
-        {culturalProgress ? <section className="requirement-progress" aria-label="文化素质完成进度">
-          <div><strong>文化素质</strong><span>{formatCredits(confirmedCulturalCredits)}/{formatCredits(requiredCulturalCredits)} 学分已确认{projectedCulturalCredits > 0 && ` · 预览后 ${formatCredits(expectedCulturalCredits)}/${formatCredits(requiredCulturalCredits)}`}</span></div>
-          <progress max={requiredCulturalCredits} value={Math.min(expectedCulturalCredits, requiredCulturalCredits)} />
-          <p>{remainingCulturalCredits > 0 ? `还差 ${formatCredits(remainingCulturalCredits)} 学分` : "总学分已满足"} · 四史{fourHistoriesComplete ? "已完成" : "待完成"} · D 类 2 学分待核对</p>
-          <details><summary>已确认 {culturalProgress.courses.length} 门，已从候选中排除</summary>{culturalProgress.courses.map(course => <span key={`${course.code}-${course.name}`}>{course.name} · {formatCredits(course.credits)} 学分</span>)}</details>
-          {graduationProgress?.status === "incomplete" && <small>已修课程数据不完整，当前缺口只能作为下限参考。</small>}
-        </section> : <section className="requirement-progress unavailable" aria-label="已修课程状态"><strong>尚未同步已修课程</strong><span>当前只能计算本次预览，不能判断真实缺口。</span></section>}
+        <div className="course-filters"><select value={requirementFilter} onChange={event => setRequirementFilter(event.target.value)} aria-label="培养要求">{requirementFilterOptions.map(value => <option key={value}>{value === "全部" ? "全部培养要求" : value}</option>)}</select><select value={conflictFilter} onChange={event => setConflictFilter(event.target.value)} aria-label="冲突状态"><option>全部</option><option>无冲突</option><option>有冲突</option></select></div>
         <div className="requirement-hints" aria-label="培养要求提醒"><span><b>体育</b> 每学年选 1 门</span><span><b>创新创业</b> 社会实践另计</span><span><b>英语</b> 大一优先</span></div>
         <div className="course-list">{pagedOptions.length ? pagedOptions.map(option => {
           const hasConflict = optionHasConflict(option);
           const previewIndex = previewKeys.indexOf(option.key);
           const previewed = previewIndex >= 0;
           const previewLimitReached = !previewed && previewKeys.length >= maximumPreviews;
-          const planningCategory = requirementFilterFor(option.category);
-          return <article className={`candidate-row ${hasConflict ? "has-conflict" : ""}`} key={option.key}><div className="candidate-copy"><strong>{option.name}</strong><span>{planningCategory ?? option.category} · {option.credits ? `${formatCredits(option.credits)} 学分` : "学分待核对"} · {option.teacher || "教师未提供"}</span><small>{optionTime(option)}</small></div><div className="candidate-actions">{previewed && <i className={`preview-dot preview-${previewIndex}`} aria-label={`预览颜色 ${previewIndex + 1}`} />}<b>{hasConflict ? "冲突" : "可排"}</b>{option.unknown ? <span>待定</span> : <button className={previewed ? "secondary" : ""} disabled={previewLimitReached} title={previewLimitReached ? "最多同时预览3门课程" : undefined} onClick={() => togglePreview(option.key)}>{previewed ? "取消" : "预览"}</button>}</div></article>;
+          const planningCategory = planningFilterFor(option);
+          const knownConflict = option.meetings.some(meeting => !meeting.unknown && current.some(other => !other.unknown && executionTimeOverlaps(meeting, other)));
+          const executionBlocked = executionPending || option.unknown || knownConflict || !option.executionReady;
+          const executionTitle = !option.executionReady ? "教学班缺少页面提供的执行身份" : option.unknown ? "上课时间未知，禁止执行" : knownConflict ? "与当前课表冲突" : executionPending ? "已有执行任务正在进行" : "确认并提交一次选课请求";
+          return <article className={`candidate-row ${hasConflict ? "has-conflict" : ""}`} key={option.key}><div className="candidate-copy"><strong>{option.name}</strong><span>{planningCategory ?? option.category} · {option.credits ? `${formatCredits(option.credits)} 学分` : "学分待核对"} · {option.teacher || "教师未提供"}</span><small>{describeOptionMeetings(option.meetings)}</small></div><div className="candidate-actions">{previewed && <i className={`preview-dot preview-${previewIndex}`} aria-label={`预览颜色 ${previewIndex + 1}`} />}<b>{knownConflict ? "冲突" : option.unknown ? "待定" : "可排"}</b>{!option.unknown && <button className={previewed ? "secondary" : ""} disabled={previewLimitReached} title={previewLimitReached ? "最多同时预览3门课程" : undefined} onClick={() => togglePreview(option.key)}>{previewed ? "取消" : "预览"}</button>}<button className="execute-selection" disabled={executionBlocked} title={executionTitle} onClick={() => onExecuteSection?.(String(option.identity ?? option.key), option.name)}>选课</button></div></article>;
         }) : <p className="empty">没有符合条件的待选课程。</p>}</div>
         <nav className="pagination" aria-label="待选课程分页"><button className="secondary" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>上一页</button><span>{safePage}</span><button className="secondary" disabled={safePage >= pages} onClick={() => setPage(safePage + 1)}>下一页</button></nav>
       </aside>

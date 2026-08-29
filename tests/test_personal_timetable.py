@@ -60,6 +60,33 @@ class PersonalTimetableParserTests(unittest.TestCase):
         self.assertEqual("odd", entries[0].week_parity)
         self.assertEqual("A101", entries[0].location)
 
+    def test_grid_parser_handles_legacy_close_br_tag_used_by_hitwh(self):
+        # The live HITWH timetable page separates lines with a stray
+        # ``</br>`` END tag (invalid HTML), never a ``<br>`` start tag.
+        entries = parse_timetable_grid_html(
+            """
+            <span>2026秋季学期 学生个人课表</span>
+            <table>
+              <tr><th>节次</th><th>星期一</th><th>星期二</th><th>星期三</th>
+                  <th>星期四</th><th>星期五</th><th>星期六</th><th>星期日</th></tr>
+              <tr><td>上午</td><td>1-2</td>
+                  <td>马克思主义基本原理</br>赵聪妹[1-5，7-16]周N楼-331</td>
+                  <td>概率论与数理统计X</br>王萌欣[1-5，7-13]周M楼-401</td>
+                  <td></td><td></td><td></td><td></td><td></td></tr>
+            </table>
+            """
+        )
+
+        self.assertEqual(2, len(entries))
+        first, second = entries
+        self.assertEqual("马克思主义基本原理", first.course_name)
+        self.assertEqual("赵聪妹", first.teacher)
+        self.assertEqual("N楼-331", first.location)
+        self.assertEqual((1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16), first.week_numbers)
+        self.assertEqual("all", first.week_parity)
+        self.assertEqual("概率论与数理统计X", second.course_name)
+        self.assertEqual("M楼-401", second.location)
+
     def test_grid_parser_handles_multiple_br_and_later_isolated_week_range(self):
         entries = parse_timetable_grid_html(
             """

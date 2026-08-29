@@ -214,6 +214,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions/selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SelectionExecutionRequest"];
+                };
+            };
+            responses: {
+                /** @description Explicitly confirmed single execution queued */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Confirmation or applicability check failed */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/tasks/{identity}": {
         parameters: {
             query?: never;
@@ -380,6 +424,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notices/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** Format: uri */
+                        index_url?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Matching official notice pages downloaded */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Official notice source could not be read */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/notices/{identity}/confirm": {
         parameters: {
             query?: never;
@@ -484,6 +575,12 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        SelectionExecutionRequest: {
+            section_id: string;
+            snapshot_id: string;
+            /** @description Must exactly equal section_id */
+            confirmation: string;
+        };
         LoginConfiguration: {
             /** @enum {string} */
             state: "missing" | "configured" | "invalid";
@@ -494,6 +591,8 @@ export interface components {
         Task: {
             id: string;
             operation?: string;
+            /** @enum {string} */
+            task_kind?: "observation" | "execution";
             state: string;
             progress?: {
                 [key: string]: unknown;

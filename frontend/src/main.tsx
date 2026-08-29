@@ -106,6 +106,18 @@ function App() {
     return () => window.clearInterval(timer);
   }, [task, state, load]);
 
+  const discoverOfficialNotices = async () => {
+    if (!state) return;
+    const response = await fetch("/api/notices/discover", {
+      method: "POST",
+      headers: jsonHeaders(state.csrf_token),
+      body: JSON.stringify({ index_url: "https://jwc.hitwh.edu.cn/ks/list.htm" }),
+    });
+    const result = await response.json();
+    setMessage(response.ok ? `已从教务处获取并解析 ${result.notices?.length ?? 0} 份候选通知` : (result.error ?? "通知获取失败"));
+    if (response.ok) await load();
+  };
+
   const inspectNotice = async () => {
     if (!state) return;
     const response = await fetch("/api/notices/candidates", {
@@ -129,7 +141,8 @@ function App() {
       headers: jsonHeaders(state.csrf_token),
     });
     const result = await response.json();
-    setMessage(response.ok ? "通知已确认" : (result.error ?? "确认失败"));
+    setMessage(response.ok ? "通知已确认，正在自动刷新待选课程" : (result.error ?? "确认失败"));
+    if (response.ok && result.refresh_task) setTask(result.refresh_task as Task);
     await load();
   };
 
@@ -149,6 +162,27 @@ function App() {
       headers: jsonHeaders(state.csrf_token),
     });
     if (!response.ok) setMessage("当前任务无法完成监听");
+  };
+
+  const executeSection = async (sectionId: string, courseName: string) => {
+    if (!state?.snapshots.selection) return;
+    if (!window.confirm(`确认提交一次选课请求？\n${courseName}\n教学班：${sectionId}\n\n系统不会自动重试。`)) return;
+    const response = await fetch("/api/executions/selection", {
+      method: "POST",
+      headers: jsonHeaders(state.csrf_token),
+      body: JSON.stringify({
+        section_id: sectionId,
+        snapshot_id: state.snapshots.selection.id,
+        confirmation: sectionId,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      setMessage(result.error ?? "选课请求未提交");
+      return;
+    }
+    setTask(result as Task);
+    setMessage("已提交一次选课任务；不会自动重试。");
   };
 
   const savePlan = async () => {
@@ -184,7 +218,7 @@ function App() {
       <p className="eyebrow">LOCAL ACADEMIC WORKBENCH</p>
       <h1>先连接你的教务身份</h1>
       <p>保存一次，之后工作台会在学校统一认证页面自动登录。成绩、课表和选课查询仍只在本机完成。</p>
-      <dl><div><dt>存储位置</dt><dd>仅本机 .private 目录</dd></div><div><dt>加密方式</dt><dd>Windows DPAPI · 当前用户可解密</dd></div><div><dt>操作边界</dt><dd>当前只读取，不会选课或退课</dd></div></dl>
+      <dl><div><dt>存储位置</dt><dd>仅本机 .private 目录</dd></div><div><dt>加密方式</dt><dd>Windows DPAPI · 当前用户可解密</dd></div><div><dt>操作边界</dt><dd>查询只读；选课需逐次明确确认，不提供退课</dd></div></dl>
     </section>
     <section className="login-form-panel" aria-labelledby="login-title">
       <div><span>首次设置</span><h2 id="login-title">自动登录配置</h2><p>请输入学校统一身份认证使用的学号和密码。</p></div>
@@ -202,16 +236,16 @@ function App() {
   const selection = state.snapshots.selection;
 
   return <main className="shell">
-    <header><p className="eyebrow">READ-ONLY ACADEMIC WORKBENCH</p><h1>选课规划工作台</h1><span className="session">{state.login_configuration.masked_username} · 教务会话 {state.academic_session.state} · <button className="text-button" onClick={clearLogin}>重新配置</button></span></header>
+    <header><p className="eyebrow">GUARDED ACADEMIC WORKBENCH</p><h1>选课规划工作台</h1><span className="session">{state.login_configuration.masked_username} · 教务会话 {state.academic_session.state} · <button className="text-button" onClick={clearLogin}>重新配置</button></span></header>
     {message && <p className="notice">{message}</p>}
-    <section className="toolbar"><button onClick={() => run("connect")}>连接教务会话</button><button onClick={() => run("observe-navigation")}>开始手动监听</button><button onClick={() => run("refresh-selection")} disabled={!state.confirmed_notice}>刷新选课班</button><button onClick={() => run("refresh-timetable")}>刷新课表</button><button onClick={() => run("refresh-progress")}>同步毕业进度</button><button className="secondary" onClick={load}>刷新状态</button></section>
+    <section className="toolbar"><button onClick={() => run("connect")}>同步课表与待选课程</button><button onClick={() => run("observe-navigation")}>开始手动监听</button><button onClick={() => run("refresh-selection")} disabled={!state.confirmed_notice}>刷新选课班</button><button onClick={() => run("refresh-timetable")}>刷新课表</button><button onClick={() => run("refresh-progress")}>同步毕业进度</button><button className="secondary" onClick={load}>刷新状态</button></section>
     {(state.stale.selection || state.stale.timetable) && <p className="warning">存在过期快照：刷新失败时仍保留旧数据，规划不会把过期数据标记为已就绪。</p>}
-    {task && <section className="task"><strong>任务：{task.state}</strong>{task.progress && <span> · {JSON.stringify(task.progress)}</span>}{task.operation === "observe-navigation" && !["succeeded", "failed", "cancelled"].includes(task.state) && <button onClick={finishObservation}>完成监听</button>}{!["succeeded", "failed", "cancelled"].includes(task.state) && <button className="danger" onClick={cancel}>取消</button>}</section>}
+    {task && <section className="task"><strong>任务：{task.state}</strong>{task.progress && <span> · {JSON.stringify(task.progress)}</span>}{task.operation === "observe-navigation" && !["succeeded", "failed", "cancelled"].includes(task.state) && <button onClick={finishObservation}>完成监听</button>}{task.task_kind !== "execution" && !["succeeded", "failed", "cancelled"].includes(task.state) && <button className="danger" onClick={cancel}>取消</button>}</section>}
     <section className="facts"><article><small>当前画像</small><strong>{String(state.profile?.grade ?? "尚未配置")} 年级</strong></article><article><small>已确认通知</small><strong>{String(state.confirmed_notice?.title ?? "尚未确认")}</strong></article><article><small>当前学期</small><strong>{timetable?.term || selection?.term || "—"}</strong></article></section>
-    <section className="panel"><h2>主动检查官方选课通知</h2><p>仅解析批准的官方来源，不会执行选课操作。</p><input value={url} onChange={event => setUrl(event.target.value)} placeholder="https://jwc.hitwh.edu.cn/…" /><textarea value={text} onChange={event => setText(event.target.value)} placeholder="也可以粘贴通知正文" rows={4} /><button onClick={inspectNotice}>检查并生成候选</button></section>
+    <section className="panel"><h2>主动检查官方选课通知</h2><p>直接读取教务处教务通知列表，下载标题类似“关于2026年秋季学期各类课程选课时间安排的通知”的公开静态页面并解析，不启动教务浏览器。</p><button onClick={discoverOfficialNotices}>从教务处获取最新选课安排</button><details><summary>手工链接或正文退路</summary><input value={url} onChange={event => setUrl(event.target.value)} placeholder="https://jwc.hitwh.edu.cn/…" /><textarea value={text} onChange={event => setText(event.target.value)} placeholder="也可以粘贴通知正文" rows={4} /><button onClick={inspectNotice}>检查并生成候选</button></details></section>
     <section className="panel"><h2>候选通知</h2>{candidates.length ? candidates.map(notice => <article className="candidate" key={notice.version_id}><strong>{notice.title || "未命名通知"}</strong><span>{notice.term || "待补充"} · {notice.status}</span>{notice.status !== "confirmed" && <button onClick={() => confirm(notice.version_id)}>确认此通知</button>}</article>) : <p className="empty">暂无候选通知</p>}</section>
     <section className="panel"><h2>本地只读规划</h2><p>按课程目标优先级和教学班偏好填写 JSON；这里只保存本地规划，不会发送选课请求。</p><textarea value={goals} onChange={event => setGoals(event.target.value)} rows={7} /><button onClick={savePlan}>保存规划</button>{plan && <pre className="plan-result">{JSON.stringify(plan, null, 2)}</pre>}</section>
-    <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={state.graduation_progress} />
+    <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={state.graduation_progress} onExecuteSection={executeSection} executionPending={task?.operation === "execute-selection" && !["succeeded", "failed", "cancelled"].includes(task.state)} />
   </main>;
 }
 

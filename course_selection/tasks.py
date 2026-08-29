@@ -28,6 +28,13 @@ from .gateway import AcademicGateway
 from .persistence import WorkspaceDatabase, sanitize_for_storage, utc_now
 
 
+def _same_academic_term(left: str, right: str) -> bool:
+    def normalized(value: str) -> str:
+        return "".join(str(value).split()).replace("年", "").replace("学期", "")
+
+    return bool(left and right and normalized(left) == normalized(right))
+
+
 class TaskState(str, Enum):
     QUEUED = "queued"
     CONNECTING = "connecting"
@@ -62,6 +69,19 @@ class ObservationService:
         self._done: dict[str, threading.Event] = {}
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
+        with self.database.connection:
+            now = utc_now()
+            message = "workbench restarted before this task finished"
+            self.database.connection.execute(
+                "update observation_tasks set state='failed',updated_at=?,error=? "
+                "where state in ('queued','connecting','waiting_for_authentication','reading','observing','cancel_requested')",
+                (now, message),
+            )
+            self.database.connection.execute(
+                "update execution_tasks set state='failed',updated_at=?,error=? "
+                "where state in ('queued','connecting','waiting_for_authentication','reading','cancel_requested')",
+                (now, message),
+            )
         if autostart:
             self.start()
 
@@ -92,11 +112,26 @@ class ObservationService:
             self._queue.put(identity)
             return SubmittedTask(identity, TaskState.QUEUED.value)
 
+    def submit_execution(self, context: dict[str, Any]) -> SubmittedTask:
+        """Queue a non-coalesced, explicitly confirmed execution task."""
+        safe_context = sanitize_for_storage(context)
+        identity, now = uuid.uuid4().hex, utc_now()
+        with self._lock, self.database.connection:
+            self.database.connection.execute(
+                "insert into execution_tasks values(?,?,?,?,?,?,?,?)",
+                (identity, "execute-selection", TaskState.QUEUED.value, now, now, "{}",
+                 json.dumps(safe_context, ensure_ascii=False), ""),
+            )
+            self._done[identity] = threading.Event()
+            self._queue.put("execution:" + identity)
+        return SubmittedTask(identity, TaskState.QUEUED.value)
+
     def run_when_idle(self, action: Callable[[], Any]) -> Any:
         """Serialize login/workspace changes against every academic task."""
         with self._lock:
             active = self.database.connection.execute(
-                "select 1 from observation_tasks where state in ('queued','connecting','waiting_for_authentication','reading','observing','cancel_requested') limit 1"
+                "select 1 from observation_tasks where state in ('queued','connecting','waiting_for_authentication','reading','observing','cancel_requested') "
+                "union all select 1 from execution_tasks where state in ('queued','connecting','waiting_for_authentication','reading','cancel_requested') limit 1"
             ).fetchone()
             if active:
                 raise RuntimeError("请等待当前教务任务结束后再更改登录")
@@ -104,10 +139,12 @@ class ObservationService:
 
     def inspect(self, identity: str) -> dict[str, Any] | None:
         with self._lock:
-            row = self.database.connection.execute("select * from observation_tasks where id=?", (identity,)).fetchone()
+            row = self.database.connection.execute("select *, 'observation' as task_kind from observation_tasks where id=?", (identity,)).fetchone()
+            if not row:
+                row = self.database.connection.execute("select *, 'execution' as task_kind from execution_tasks where id=?", (identity,)).fetchone()
         if not row:
             return None
-        return {"id": row["id"], "operation": row["operation"], "state": row["state"], "created_at": row["created_at"], "updated_at": row["updated_at"], "progress": json.loads(row["progress"]), "error": row["error"]}
+        return {"id": row["id"], "operation": row["operation"], "task_kind": row["task_kind"], "state": row["state"], "created_at": row["created_at"], "updated_at": row["updated_at"], "progress": json.loads(row["progress"]), "error": row["error"]}
 
     def cancel(self, identity: str) -> bool:
         with self._lock, self.database.connection:
@@ -140,7 +177,8 @@ class ObservationService:
         safe_error = str(sanitize_for_storage(error))[:1000]
         with self._lock, self.database.connection:
             safe_progress = sanitize_for_storage(progress or {})
-            self.database.connection.execute("update observation_tasks set state=?,updated_at=?,progress=?,error=? where id=?", (state, utc_now(), json.dumps(safe_progress, ensure_ascii=False), safe_error, identity))
+            table = "execution_tasks" if self.database.connection.execute("select 1 from execution_tasks where id=?", (identity,)).fetchone() else "observation_tasks"
+            self.database.connection.execute(f"update {table} set state=?,updated_at=?,progress=?,error=? where id=?", (state, utc_now(), json.dumps(safe_progress, ensure_ascii=False), safe_error, identity))
 
     def _run(self) -> None:
         while True:
@@ -167,6 +205,8 @@ class ObservationService:
                     self.gateway = None
                 self.session_state = "disconnected"
                 return
+            if identity.startswith("execution:"):
+                identity = identity.split(":", 1)[1]
             task = self.inspect(identity)
             if not task or task["state"] == TaskState.CANCELLED.value:
                 continue
@@ -185,7 +225,8 @@ class ObservationService:
 
     def _execute(self, identity: str) -> None:
         with self._lock:
-            row = self.database.connection.execute("select operation,context from observation_tasks where id=?", (identity,)).fetchone()
+            execution = self.database.connection.execute("select operation,context from execution_tasks where id=?", (identity,)).fetchone()
+            row = execution or self.database.connection.execute("select operation,context from observation_tasks where id=?", (identity,)).fetchone()
         operation, context = row[0], json.loads(row[1])
         if identity in self._cancelled:
             self._update(identity, TaskState.CANCELLED.value)
@@ -237,6 +278,14 @@ class ObservationService:
             self._update(identity, TaskState.CANCELLED.value)
             return
         self.session_state = "connected"
+        if operation == "execute-selection":
+            self._update(identity, TaskState.READING.value, {"target": "selection-execution"})
+            result = self.gateway.execute_selection(context, progress, cancelled)
+            if cancelled() or result.get("status") == "cancelled":
+                self._update(identity, TaskState.CANCELLED.value)
+            else:
+                self._update(identity, TaskState.SUCCEEDED.value, {"result": result})
+            return
         if operation == "connect":
             refreshes: dict[str, str] = {}
             trace_details: dict[str, Any] = {}
@@ -246,7 +295,7 @@ class ObservationService:
                 ("selection", self.gateway.refresh_selection),
             ):
                 if kind == "selection" and not context.get("allowed_categories"):
-                    refreshes[kind] = "skipped_no_confirmed_categories"
+                    refreshes.setdefault(kind, "skipped_no_confirmed_categories")
                     continue
                 self._update(identity, TaskState.READING.value, {"target": kind})
                 if kind == "timetable":
@@ -279,6 +328,14 @@ class ObservationService:
                     result = reader(context, progress, cancelled)
                 status = str(result.get("status", "incomplete"))
                 refreshes[kind] = status
+                if kind == "timetable" and status == "complete":
+                    timetable_term = str(result.get("term", ""))
+                    notice_term = str(context.get("term", ""))
+                    if notice_term and not _same_academic_term(timetable_term, notice_term):
+                        context["allowed_categories"] = []
+                        context["allowed_windows"] = {}
+                        refreshes["selection"] = "skipped_term_mismatch"
+
                 if status == "complete":
                     self.database.publish_snapshot(
                         kind,

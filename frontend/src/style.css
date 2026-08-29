@@ -120,15 +120,19 @@ h1 { font-size: 48px; font-weight: 500; margin: 10px 0; }
 .course-browser input, .course-filters { margin-left: 16px; margin-right: 16px; width: calc(100% - 32px); }
 .course-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .course-filters select { margin: 0; }
-.requirement-progress { margin: 12px 16px 8px; padding: 11px 0; border-top: 1px solid #384246; border-bottom: 1px solid #384246; }
-.requirement-progress > div { display: flex; justify-content: space-between; gap: 12px; color: #dce7e4; font-size: 12px; }
-.requirement-progress progress { display: block; width: 100%; height: 6px; margin: 9px 0 7px; accent-color: #78c8aa; }
-.requirement-progress p, .requirement-progress small { margin: 0; color: #aeb8b8; font-size: 11px; line-height: 1.45; }
-.requirement-progress details { margin-top: 7px; color: #9fd8c0; font-size: 11px; }
-.requirement-progress summary { cursor: pointer; }
-.requirement-progress details span { display: block; margin: 5px 0 0 14px; color: #aeb8b8; }
-.requirement-progress.unavailable { display: flex; flex-direction: column; gap: 4px; color: #eacb8a; }
-.requirement-progress.unavailable span { color: #aeb8b8; font-size: 11px; }
+.progress-band { margin-top: 14px; border: 1px solid #354044; background: #131719; padding: 12px 16px 14px; }
+.progress-band-heading { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin-bottom: 10px; color: #dce7e4; }
+.progress-band-heading small { color: #aeb8b8; font-size: 11px; }
+.progress-band-inner { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; max-width: 1080px; margin: 0 auto; }
+.progress-card { border: 1px solid #384246; background: #171b1d; border-radius: 6px; padding: 10px 12px; min-width: 0; }
+.progress-card header { display: flex; justify-content: space-between; gap: 12px; color: #dce7e4; font-size: 12px; }
+.progress-card progress { display: block; width: 100%; height: 6px; margin: 9px 0 7px; accent-color: #78c8aa; }
+.progress-card p { margin: 0 0 6px; color: #aeb8b8; font-size: 11px; line-height: 1.45; }
+.progress-card .progress-courses { display: flex; flex-wrap: wrap; gap: 3px 10px; max-height: 72px; overflow-y: auto; margin: 0; }
+.progress-card .progress-courses span { white-space: nowrap; }
+.progress-card.unavailable { display: flex; flex-direction: column; gap: 4px; color: #eacb8a; }
+.progress-card.unavailable span { color: #aeb8b8; font-size: 11px; }
+.progress-band > small { display: block; text-align: center; margin-top: 8px; color: #aeb8b8; font-size: 11px; }
 .requirement-hints { display: flex; flex-wrap: wrap; gap: 5px 10px; padding: 0 16px 10px; color: #aeb8b8; font-size: 11px; line-height: 1.45; }
 .requirement-hints span { white-space: nowrap; }
 .requirement-hints b { color: #b9d6c9; font-weight: 600; }
@@ -142,6 +146,8 @@ h1 { font-size: 48px; font-weight: 500; margin: 10px 0; }
 .candidate-actions b { font-size: 12px; color: #7bd6aa; white-space: nowrap; }
 .candidate-row.has-conflict b { color: #ed8b82; }
 .candidate-actions button { margin: 0; padding: 6px 9px; font-size: 12px; }
+.candidate-actions .execute-selection { background: #d7b76f; color: #241c0d; }
+.candidate-actions .execute-selection:disabled { background: #4a4d4c; color: #a4abaa; }
 .candidate-actions > span { font-size: 12px; color: #f0c679; }
 .preview-dot { width: 10px; height: 10px; border-radius: 3px; display: block; }
 .pagination { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; }
