@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { CandidateNotice, Task, WorkbenchState } from "./api";
 import { ScheduleBoard } from "./ScheduleBoard";
+import { selectionWindowsForGrade, type SelectionWindow } from "./schedule";
 import "./style.css";
 
 const jsonHeaders = (token: string) => ({ "Content-Type": "application/json", "X-CSRF-Token": token });
@@ -10,8 +11,6 @@ function App() {
   const [state, setState] = useState<WorkbenchState | null>(null);
   const [candidates, setCandidates] = useState<CandidateNotice[]>([]);
   const [task, setTask] = useState<Task | null>(null);
-  const [url, setUrl] = useState("");
-  const [text, setText] = useState("");
   const [goals, setGoals] = useState('[{"goal_id":"goal-1","course_identity":"COURSE","rank":1,"preferences":[{"section_id":"SECTION","rank":1}]}]');
   const [plan, setPlan] = useState<Record<string, unknown> | null>(null);
   const [message, setMessage] = useState("");
@@ -118,22 +117,6 @@ function App() {
     const result = await response.json();
     setMessage(response.ok ? `已从教务处获取并解析 ${result.notices?.length ?? 0} 份候选通知` : (result.error ?? "通知获取失败"));
     if (response.ok) await load();
-  };
-
-  const inspectNotice = async () => {
-    if (!state) return;
-    const response = await fetch("/api/notices/candidates", {
-      method: "POST",
-      headers: jsonHeaders(state.csrf_token),
-      body: JSON.stringify({ source_url: url, text }),
-    });
-    const result = await response.json();
-    setMessage(response.ok ? "已发现候选通知，请确认后使用" : (result.error ?? "通知检查失败"));
-    if (response.ok) {
-      setUrl("");
-      setText("");
-      await load();
-    }
   };
 
   const confirm = async (id: string) => {
@@ -255,6 +238,12 @@ function App() {
     const labels: Record<string, string> = { current: "当前", historical: "历史", incomplete: "不完整", missing: "缺失" };
     return `${labels[value?.status ?? "missing"] ?? value?.status}${value?.source_at ? ` · ${value.source_at}` : ""}${value?.reason ? ` · ${value.reason}` : ""}`;
   };
+  const grade = String(state.profile?.grade ?? "");
+  const selectionWindows = selectionWindowsForGrade(
+    (state.confirmed_notice?.windows as SelectionWindow[] | undefined) ?? [],
+    grade,
+  );
+  const pendingNotices = candidates.filter(notice => notice.status !== "confirmed");
 
   return <main className="shell">
     <header><p className="eyebrow">GUARDED ACADEMIC WORKBENCH</p><h1>选课规划工作台</h1><span className="session">{state.login_configuration.masked_username} · 浏览器 {state.academic_session.browser ?? "未知"} · WebVPN {state.academic_session.webvpn ?? "未知"} · 教务 {state.academic_session.state}{state.academic_session.last_verified_at && ` · 验证于 ${state.academic_session.last_verified_at}`} · <button className="text-button" onClick={clearLogin}>重新配置</button></span></header>
@@ -263,8 +252,14 @@ function App() {
     {activeTask && <section className="task"><strong>当前任务：{activeTask.operation} · {activeTask.state}</strong><span> · 开始于 {activeTask.created_at ?? "—"} · 超时 {activeTask.timeout_seconds ?? "—"} 秒</span>{activeTask.progress && <span> · {JSON.stringify(activeTask.progress)}</span>}{activeTask.operation === "observe-navigation" && <button onClick={finishObservation}>完成监听</button>}{activeTask.task_kind !== "execution" && <button className="danger" onClick={cancel}>取消</button>}</section>}
     {task && !activeTask && <section className="task"><strong>最近任务：{task.operation} · {task.state}</strong>{task.error && <span> · {task.error}</span>}{task.progress && <span> · {JSON.stringify(task.progress)}</span>}</section>}
     <section className="facts"><article><small>课表快照</small><strong>{statusLabel("timetable")}</strong></article><article><small>待选课程快照</small><strong>{statusLabel("selection")}</strong></article><article><small>毕业进度快照</small><strong>{statusLabel("progress")}</strong></article></section>
-    <section className="panel"><h2>主动检查官方选课通知</h2><p>直接读取教务处教务通知列表，下载标题类似“关于2026年秋季学期各类课程选课时间安排的通知”的公开静态页面并解析，不启动教务浏览器。</p><button onClick={discoverOfficialNotices} disabled={remoteBusy}>从教务处获取最新选课安排</button><details><summary>手工链接或正文退路</summary><input value={url} onChange={event => setUrl(event.target.value)} placeholder="https://jwc.hitwh.edu.cn/…" /><textarea value={text} onChange={event => setText(event.target.value)} placeholder="也可以粘贴通知正文" rows={4} /><button onClick={inspectNotice} disabled={remoteBusy}>检查并生成候选</button></details></section>
-    <section className="panel"><h2>候选通知</h2>{candidates.length ? candidates.map(notice => <article className="candidate" key={notice.version_id}><strong>{notice.title || "未命名通知"}</strong><span>{notice.term || "待补充"} · {notice.status}</span>{notice.status !== "confirmed" && <button onClick={() => confirm(notice.version_id)} disabled={remoteBusy}>确认此通知</button>}</article>) : <p className="empty">暂无候选通知</p>}</section>
+    <section className="notice-strip" aria-labelledby="selection-window-title">
+      <div className="notice-strip-heading"><div><small>官方选课通知</small><strong id="selection-window-title">{grade ? `${grade} 级选课安排` : "选课安排"}</strong></div><button className="secondary notice-refresh" onClick={discoverOfficialNotices} disabled={remoteBusy}>获取最新通知</button></div>
+      <details className="notice-window-disclosure">
+        <summary>{selectionWindows.length ? `${selectionWindows.length} 个适用选课时段` : "暂无适用选课时段"}<span>展开查看</span></summary>
+        <div className="notice-window-list">{selectionWindows.length ? selectionWindows.map((window, index) => <article key={`${window.opens_at}-${index}`}><time>{window.opens_at || "开始时间待定"}<b>至</b>{window.closes_at || "结束时间待定"}</time><div><strong>{window.category_text || "课程类别待定"}</strong><small>{window.method === "academic_system" ? "新教务系统" : (window.method || "办理方式待定")}</small></div></article>) : <p className="empty">当前已确认通知中没有匹配 {grade || "当前"} 年级的选课窗口。</p>}</div>
+      </details>
+      {pendingNotices.length > 0 && <details className="notice-candidates"><summary>发现 {pendingNotices.length} 份待确认通知</summary>{pendingNotices.map(notice => <article className="candidate" key={notice.version_id}><strong>{notice.title || "未命名通知"}</strong><span>{notice.term || "学期待确认"}</span><button onClick={() => confirm(notice.version_id)} disabled={remoteBusy}>确认</button></article>)}</details>}
+    </section>
     <section className="panel"><h2>本地只读规划</h2><p>按课程目标优先级和教学班偏好填写 JSON；这里只保存本地规划，不会发送选课请求。</p><textarea value={goals} onChange={event => setGoals(event.target.value)} rows={7} /><button onClick={savePlan}>保存规划</button>{plan && <pre className="plan-result">{JSON.stringify(plan, null, 2)}</pre>}</section>
     {state.execution_history && state.execution_history.length > 0 && <section className="panel"><h2>选课执行历史</h2>{state.execution_history.map(item => <article className="candidate" key={item.id}><strong>{item.course_name || item.section_id}</strong><span>{item.created_at} · {item.result} · {item.message}</span>{item.result === "unknown" && !item.resolved && <button onClick={() => resolveUnknown(item.id)}>已核实，解除阻断</button>}</article>)}<button className="danger" onClick={clearHistory}>清除执行历史</button></section>}
     <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={state.graduation_progress} onExecuteSection={executeSection} executionPending={remoteBusy} />

@@ -225,21 +225,6 @@ def create_workbench_app(
     def resolve_execution(identity: str):
         return (jsonify({"resolved": True}), 200) if database.resolve_execution(identity) else (jsonify({"error": "not found"}), 404)
 
-    @app.post("/api/notices/candidates")
-    def create_notice_candidate():
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return jsonify({"error": "JSON object required"}), 400
-        source_url = str(body.get("source_url", "")).strip()
-        text = str(body.get("text", "")).strip()
-        try:
-            saved, diff = core.create_notice_candidate(source_url, text)
-        except NoticeReadError as error:
-            return jsonify({"error": str(error)}), 400
-        except ValueError as error:
-            return jsonify({"error": str(error)}), 422
-        return jsonify({"notice": saved, "diff": diff}), 201
-
     @app.get("/api/notices/candidates")
     def list_notice_candidates():
         return jsonify({"notices": core.list_notice_candidates()})

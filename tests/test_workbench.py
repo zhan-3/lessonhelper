@@ -693,15 +693,20 @@ class WorkbenchApiTests(unittest.TestCase):
             app.extensions["observation_service"].close()
             app.extensions["workspace_database"].close()
 
-    def test_notice_check_requires_csrf_and_lists_candidates(self):
+    def test_manual_notice_import_is_not_exposed(self):
         with tempfile.TemporaryDirectory() as directory:
             app = create_workbench_app(Path(directory), gateway_factory=FakeGateway)
             client = app.test_client()
-            body = {"source_url": "https://jwc.hitwh.edu.cn/a", "text": "关于选课的通知"}
-            self.assertEqual(403, client.post("/api/notices/candidates", json=body).status_code)
             state = client.get("/api/state").get_json()
-            response = client.post("/api/notices/candidates", json=body, headers={"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]})
-            self.assertEqual(422, response.status_code)
+            headers = {"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]}
+
+            response = client.post(
+                "/api/notices/candidates",
+                json={"source_url": "https://jwc.hitwh.edu.cn/a", "text": "通知正文"},
+                headers=headers,
+            )
+
+            self.assertEqual(405, response.status_code)
             self.assertEqual([], client.get("/api/notices/candidates").get_json()["notices"])
             app.extensions["observation_service"].close()
             app.extensions["workspace_database"].close()

@@ -47,6 +47,23 @@ export type WeekCalibration = {
   week: number;
 };
 
+export type SelectionWindow = {
+  action?: string;
+  grades?: string[];
+  opens_at?: string;
+  closes_at?: string;
+  category_text?: string;
+  method?: string;
+};
+
+/** Only actionable selection windows for the current student's grade. */
+export function selectionWindowsForGrade(windows: SelectionWindow[], grade: string): SelectionWindow[] {
+  if (!grade) return [];
+  return windows
+    .filter(window => window.action === "selection" && (window.grades ?? []).includes(grade))
+    .sort((left, right) => String(left.opens_at ?? "").localeCompare(String(right.opens_at ?? "")));
+}
+
 export const requirementFilters = ["全部", "创新创业", "文化素质", "跨专业", "体育", "英语"] as const;
 export type RequirementFilter = typeof requirementFilters[number];
 

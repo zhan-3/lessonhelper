@@ -11,6 +11,7 @@ import {
   planningFilterFor,
   queryFilterFor,
   projectedCourseCredits,
+  selectionWindowsForGrade,
   candidateOption,
   weekSignature,
   type ScheduleItem,
@@ -33,6 +34,18 @@ const item = (overrides: Partial<ScheduleItem> = {}): ScheduleItem => ({
 });
 
 describe("schedule parsing", () => {
+  it("shows only selection windows for the current grade in chronological order", () => {
+    const windows = selectionWindowsForGrade([
+      { action: "selection", grades: ["2025"], opens_at: "2026-08-30 08:30", category_text: "文化素质" },
+      { action: "drop", grades: ["2025"], opens_at: "2026-08-29 14:30", category_text: "创新研修" },
+      { action: "selection", grades: ["2024"], opens_at: "2026-08-29 08:30", category_text: "体育" },
+      { action: "selection", grades: ["2025"], opens_at: "2026-08-29 08:30", category_text: "创新研修" },
+    ], "2025");
+
+    expect(windows.map(window => window.category_text)).toEqual(["创新研修", "文化素质"]);
+    expect(selectionWindowsForGrade(windows, "")).toEqual([]);
+  });
+
   it("maps raw course labels to the smaller planning filters", () => {
     expect(requirementFilterFor("创新实验课")).toBe("创新创业");
     expect(requirementFilterFor("文理通识-文化素质教育课")).toBe("文化素质");

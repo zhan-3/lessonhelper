@@ -51,9 +51,6 @@ paths:
   /api/notices/candidates:
     get:
       responses: {'200': {description: Candidate notice versions}}
-    post:
-      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: true}}}}
-      responses: {'201': {description: Candidate notice saved}}
   /api/notices/discover:
     post:
       requestBody: {required: false, content: {application/json: {schema: {type: object, properties: {index_url: {type: string, format: uri}}}}}}
