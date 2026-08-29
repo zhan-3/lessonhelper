@@ -169,7 +169,7 @@ class SelectionSnapshotTests(unittest.TestCase):
         self.assertEqual(
             "https://webvpn.hitwh.edu.cn/http/"
             "77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/"
-            "xsxk/queryXsxk",
+            "kbcx/queryGrkb",
             gateway._session.urls[0],
         )
 

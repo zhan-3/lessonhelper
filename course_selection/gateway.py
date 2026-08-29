@@ -18,6 +18,9 @@ Cancelled = Callable[[], bool]
 _ACADEMIC_PROXY_PATH = (
     "/http/77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/"
 )
+ACADEMIC_HEALTH_URL = (
+    "https://webvpn.hitwh.edu.cn" + _ACADEMIC_PROXY_PATH + "kbcx/queryGrkb"
+)
 
 
 class AcademicGateway(Protocol):
@@ -219,13 +222,11 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                 # success destination.  If it stalls, open_authenticated must
                 # keep retrying a fixed protected read page; retrying loginCAS
                 # itself can never prove that the academic session is usable.
-                from .selection_query import SELECTION_ENTRY_URL
-
                 academic_page.goto(
                     cas_url, wait_until="domcontentloaded", timeout=60_000
                 )
                 academic_page = self._session.open_authenticated(
-                    SELECTION_ENTRY_URL,
+                    ACADEMIC_HEALTH_URL,
                     timeout_seconds=600,
                     page=academic_page,
                 )
