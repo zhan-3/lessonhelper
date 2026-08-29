@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { WorkbenchState } from "./api";
 import {
   activeInWeek,
+  candidateExecutionStatus,
   candidateOption,
   compressWeeks,
   courseAlreadyCompleted,
+  courseColor,
   deriveCurrentWeek,
   describeOptionMeetings,
   expandScheduleItems,
@@ -14,12 +16,11 @@ import {
   progressFilterByKey,
   progressKeysByQueryCode,
   projectedCourseCredits,
-  transitionsIntoGroup,
   weekItems,
   type CandidateOption,
   type RequirementFilter,
-  type ScheduleDiff,
   type ScheduleItem,
+  type SelectionWindow,
   type WeekCalibration,
 } from "./schedule";
 
@@ -28,6 +29,7 @@ const sessionTimes = ["08:00–09:45", "10:05–11:50", "14:00–15:45", "16:05�
 const pageSize = 12;
 const maximumPreviews = 3;
 const formatCredits = (credits: number) => Number.isInteger(credits) ? String(credits) : String(credits).replace(/0+$/, "").replace(/\.$/, "");
+const courseColorStyle = (courseName: string) => ({ "--course-color": courseColor(courseName) }) as React.CSSProperties;
 
 const timeOverlaps = (a: ScheduleItem, b: ScheduleItem) => a.day !== null && a.day === b.day && a.start !== null && b.start !== null && a.end !== null && b.end !== null && a.start <= b.end && b.start <= a.end;
 const executionTimeOverlaps = (a: ScheduleItem, b: ScheduleItem) => timeOverlaps(a, b) &&
@@ -48,12 +50,12 @@ const readCalibration = (term: string): WeekCalibration | null => {
   }
 };
 
-const diffCount = (diff: ScheduleDiff) => diff.added.length + diff.ended.length + diff.timeAdjusted.length + diff.teacherAdjusted.length;
-
-export function ScheduleBoard({ timetable, selection, graduationProgress, onExecuteSection, executionPending }: {
+export function ScheduleBoard({ timetable, selection, graduationProgress, selectionWindows, studentGrade, onExecuteSection, executionPending }: {
   timetable: WorkbenchState["snapshots"]["timetable"];
   selection: WorkbenchState["snapshots"]["selection"];
   graduationProgress?: WorkbenchState["graduation_progress"];
+  selectionWindows: SelectionWindow[];
+  studentGrade: string;
   onExecuteSection?: (sectionId: string, courseName: string) => void;
   executionPending?: boolean;
 }) {
@@ -67,7 +69,6 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
   const [calibrationRevision, setCalibrationRevision] = useState(0);
   const [calibrationOpen, setCalibrationOpen] = useState(false);
   const [calibrationWeek, setCalibrationWeek] = useState(1);
-  const [diffOpen, setDiffOpen] = useState(false);
   const [locationDetailKey, setLocationDetailKey] = useState<string | null>(null);
   const groupButtons = useRef(new Map<string, HTMLButtonElement>());
 
@@ -119,7 +120,6 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
   const sessionCount = Math.max(3, ...boardItems.map(item => Math.ceil((item.end ?? 0) / 2)));
 
   useEffect(() => {
-    setDiffOpen(false);
     setLocationDetailKey(null);
     const button = selectedGroup ? groupButtons.current.get(selectedGroup.signature) : undefined;
     button?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
@@ -145,13 +145,6 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
 
   const currentConflictKeys = new Set(visibleCurrent.filter((item, index) => visibleCurrent.some((other, otherIndex) => index !== otherIndex && timeOverlaps(item, other)) || visiblePreviews.some(other => timeOverlaps(item, other))).map(item => item.key));
   const previewConflictKeys = new Set(visiblePreviews.filter((item, index) => visibleCurrent.some(other => timeOverlaps(item, other)) || visiblePreviews.some((other, otherIndex) => index !== otherIndex && timeOverlaps(item, other))).map(item => item.key));
-  const transitions = selectedGroup ? transitionsIntoGroup(scheduleItems, selectedGroup).filter(diff => diffCount(diff) > 0) : [];
-  const aggregateDiff = transitions.reduce((aggregate, diff) => ({
-    added: aggregate.added + diff.added.length,
-    ended: aggregate.ended + diff.ended.length,
-    adjusted: aggregate.adjusted + diff.timeAdjusted.length + diff.teacherAdjusted.length,
-  }), { added: 0, ended: 0, adjusted: 0 });
-
   const saveCalibration = () => {
     const next: WeekCalibration = { term, anchorDate: formatLocalDate(new Date()), week: calibrationWeek };
     window.localStorage.setItem(`workbench-current-week:${term}`, JSON.stringify(next));
@@ -177,15 +170,15 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
     const endSession = Math.ceil(item.end! / 2);
     const locationGroups = selectedGroup ? locationsByWeek(scheduleItems, selectedGroup, item) : [];
     const locationChanged = locationGroups.length > 1;
-    const previewIndex = previewKeys.indexOf(item.optionKey);
     const style = {
+      ...courseColorStyle(item.name),
       gridColumn: String(item.day! + 1),
       gridRow: `${startSession + 1} / ${endSession + 2}`,
       left: `calc(${lane * 100 / laneCount}% + 5px)`,
       width: `calc(${100 / laneCount}% - 10px)`,
     };
     const content = <><strong>{item.name}</strong><span>{item.teacher || "教师未提供"}</span><span>{item.location || "地点待定"}</span><small>第{item.start}–{item.end}节</small>{locationChanged && <em>查看分周地点</em>}</>;
-    const className = `course-block ${item.source} preview-${previewIndex} ${isConflict ? "has-conflict" : ""}`;
+    const className = `course-block ${item.source} ${isConflict ? "has-conflict" : ""}`;
     return locationChanged
       ? <button type="button" className={className} style={style} key={item.key} onClick={() => setLocationDetailKey(value => value === item.key ? null : item.key)} aria-expanded={locationDetailKey === item.key} aria-label={`${item.name}，查看分周地点`}>{content}</button>
       : <article className={className} style={style} key={item.key}>{content}</article>;
@@ -195,11 +188,6 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
   const detailedLocations = detailedItem && selectedGroup ? locationsByWeek(scheduleItems, selectedGroup, detailedItem) : [];
 
   return <section className="schedule-panel">
-    <div className="schedule-title">
-      <div><h2>七日课表</h2><p>{selectedGroup?.label ?? `第${selectedWeek}周`} · 当前按第 {selectedWeek} 周显示课程与地点。</p></div>
-      <div className="schedule-legend"><span className="legend current" />当前课程 <span className="legend candidate" />预览课程 <span className="legend conflict" />时间冲突</div>
-    </div>
-
     <section className="progress-band" aria-label="毕业进度规划参考">
       <div className="progress-band-heading"><strong>毕业进度规划参考</strong><small>基于 2026 指南 · 非学校正式毕业审核</small></div>
       {syncedProgress.length ? <div className="progress-band-inner">{syncedProgress.map(item => {
@@ -230,27 +218,23 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
 
     {calibrationOpen && <section className="week-calibration" aria-label="校准当前教学周"><div><strong>{calibration && currentWeek === null ? "本周校准已超出当前学期范围" : "今天是第几教学周？"}</strong><p>按学期保存在本机，以后每周一自动递增。</p></div><select value={calibrationWeek} onChange={event => setCalibrationWeek(Number(event.target.value))} aria-label="当前教学周">{Array.from({ length: maxWeek }, (_, index) => index + 1).map(week => <option key={week} value={week}>第 {week} 周</option>)}</select><button onClick={saveCalibration}>保存本周</button></section>}
 
-    <section className="schedule-diff">
-      <button className="diff-summary" onClick={() => setDiffOpen(value => !value)} aria-expanded={diffOpen} disabled={!transitions.length}>
-        <span>{transitions.length ? `${transitions.length} 次阶段变化` : selectedGroup?.weeks[0] === 1 ? "学期开始阶段" : "与上一阶段相同"}</span>
-        {transitions.length > 0 && <strong>新增 {aggregateDiff.added} · 结束 {aggregateDiff.ended} · 调整 {aggregateDiff.adjusted}</strong>}
-      </button>
-      {diffOpen && <div className="diff-details">{transitions.map(diff => <article key={diff.week}><strong>第 {diff.week} 周起</strong>{diff.added.length > 0 && <p>新增：{diff.added.join("、")}</p>}{diff.ended.length > 0 && <p>结束：{diff.ended.join("、")}</p>}{diff.timeAdjusted.length > 0 && <p>时间调整：{diff.timeAdjusted.join("、")}</p>}{diff.teacherAdjusted.length > 0 && <p>老师调整：{diff.teacherAdjusted.join("、")}</p>}</article>)}</div>}
-    </section>
-
     <section className={`preview-tray ${previewOptions.length ? "has-items" : ""}`} aria-live="polite" aria-label="课表预览状态">
       <div className="preview-tray-heading">
         <div><strong>{previewOptions.length ? `正在预览 ${previewOptions.length} 门课程` : "课表预览"}</strong><span>{previewOptions.length ? "候选课程已叠加到课表中，不会提交选课。" : "从待选课程中加入最多 3 门，先比较时间与冲突。"}</span></div>
         {previewOptions.length > 0 && <button className="text-button" onClick={() => setPreviewKeys([])}>清空预览</button>}
       </div>
-      {previewOptions.length > 0 && <div className="preview-selections">{previewOptions.map((option, index) => {
+      {previewOptions.length > 0 && <div className="preview-selections">{previewOptions.map(option => {
         const semesterConflict = option.meetings.some(meeting => !meeting.unknown && current.some(other => !other.unknown && executionTimeOverlaps(meeting, other)));
-        return <div className="preview-selection" key={option.key}><i className={`preview-dot preview-${index}`} /><span><strong>{option.name}</strong><small>{semesterConflict ? "学期内有冲突" : option.unknown ? "时间待确认" : "学期内无冲突"}</small></span><button className="text-button" onClick={() => togglePreview(option.key)} aria-label={`移出预览：${option.name}`}>移出</button></div>;
+        return <div className="preview-selection" key={option.key}><i className="preview-dot" style={courseColorStyle(option.name)} /><span><strong>{option.name}</strong><small>{semesterConflict ? "学期内有冲突" : option.unknown ? "时间待确认" : "学期内无冲突"}</small></span><button className="text-button" onClick={() => togglePreview(option.key)} aria-label={`移出预览：${option.name}`}>移出</button></div>;
       })}</div>}
     </section>
 
     <div className="schedule-workspace">
-      <div>
+      <div className="timetable-column">
+        <div className="schedule-title">
+          <div><h2>七日课表</h2><p>{selectedGroup?.label ?? `第${selectedWeek}周`} · 当前按第 {selectedWeek} 周显示课程与地点。</p></div>
+          <div className="schedule-legend"><span className="legend current" />当前课程 <span className="legend candidate" />预览课程 <span className="legend conflict" />时间冲突</div>
+        </div>
         <div className="timetable-scroll"><div className="timetable" style={{ "--periods": sessionCount } as React.CSSProperties}>
           <div className="time-head">时间 / 节次</div>{weekdays.map((day, index) => <div className="day-head" style={{ gridColumn: index + 2 }} key={day}>周{day}<small>星期{day}</small></div>)}
           {Array.from({ length: sessionCount }, (_, index) => <React.Fragment key={index}><div className="period-label" style={{ gridRow: index + 2 }}><strong>第{index * 2 + 1}–{index * 2 + 2}节</strong><small>{sessionTimes[index] ?? "时间待定"}</small></div>{weekdays.map((_, day) => <div className="time-cell" style={{ gridColumn: day + 2, gridRow: index + 2 }} key={day} />)}</React.Fragment>)}
@@ -271,11 +255,12 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
           const previewLimitReached = !previewed && previewKeys.length >= maximumPreviews;
           const planningCategory = planningFilterFor(option);
           const knownConflict = option.meetings.some(meeting => !meeting.unknown && current.some(other => !other.unknown && executionTimeOverlaps(meeting, other)));
-          const executionBlocked = executionPending || option.unknown || knownConflict || !option.executionReady;
+          const executionStatus = candidateExecutionStatus(option, selectionWindows, studentGrade);
+          const executionBlocked = executionPending || option.unknown || knownConflict || !executionStatus.canExecute;
           const scheduleStatus = option.unknown ? "时间待确认" : knownConflict ? "学期内有冲突" : hasConflict ? `第 ${selectedWeek} 周有冲突` : "学期内无冲突";
-          const executionReason = option.unknown ? "暂不可选：上课时间待确认" : knownConflict ? "暂不可选：与当前课表冲突" : executionPending ? "暂不可选：正在执行其他任务" : !option.executionReady ? "暂不可选：缺少教学班标识" : "可以提交选课";
+          const executionReason = option.unknown ? "暂不可选：上课时间待确认" : knownConflict ? "暂不可选：与当前课表冲突" : executionPending ? "暂不可选：正在执行其他任务" : executionStatus.canExecute ? executionStatus.reason : `暂不可选：${executionStatus.reason}`;
           return <article className={`candidate-row ${hasConflict ? "has-conflict" : ""} ${previewed ? "is-previewed" : ""}`} key={option.key}>
-            <div className="candidate-copy"><div className="candidate-title">{previewed && <i className={`preview-dot preview-${previewIndex}`} aria-hidden="true" />}<strong>{option.name}</strong></div><span>{planningCategory ?? option.category} · {option.credits ? `${formatCredits(option.credits)} 学分` : "学分待核对"} · {option.teacher || "教师未提供"}</span><small>{describeOptionMeetings(option.meetings)}</small><div className="candidate-status" id={`status-${option.key}`}><b className={knownConflict || option.unknown ? "blocked" : "ready"}>{scheduleStatus}</b><span>{executionReason}</span></div></div>
+            <div className="candidate-copy"><div className="candidate-title">{previewed && <i className="preview-dot" style={courseColorStyle(option.name)} aria-hidden="true" />}<strong>{option.name}</strong></div><span>{planningCategory ?? option.category} · {option.credits ? `${formatCredits(option.credits)} 学分` : "学分待核对"} · {option.teacher || "教师未提供"}</span><small>{describeOptionMeetings(option.meetings)}</small><div className="candidate-status" id={`status-${option.key}`}><b className={knownConflict || option.unknown ? "blocked" : "ready"}>{scheduleStatus}</b><span>{executionReason}</span></div></div>
             <div className="candidate-actions">{!option.unknown && <button className={previewed ? "secondary" : ""} disabled={previewLimitReached} aria-describedby={`status-${option.key}`} onClick={() => togglePreview(option.key)}>{previewed ? "移出预览" : previewLimitReached ? "预览已满" : "加入预览"}</button>}<button className="execute-selection" disabled={executionBlocked} aria-describedby={`status-${option.key}`} onClick={() => onExecuteSection?.(String(option.identity ?? option.key), option.name)}>{executionPending ? "处理中" : "选课"}</button></div>
           </article>;
         }) : <p className="empty">没有符合条件的待选课程。</p>}</div>

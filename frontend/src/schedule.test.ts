@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compressWeeks,
+  courseColor,
   deriveCurrentWeek,
   describeOptionMeetings,
   diffWeeks,
@@ -14,6 +15,7 @@ import {
   selectionCategoryLabel,
   selectionWindowDisplay,
   selectionWindowsForGrade,
+  candidateExecutionStatus,
   candidateOption,
   weekSignature,
   type ScheduleItem,
@@ -65,6 +67,12 @@ describe("schedule parsing", () => {
     expect(selectionCategoryLabel({ category_text: "文化素质教育课——选课" })).toBe("文化素质教育课");
   });
 
+  it("assigns one stable dark-mode color to each course name", () => {
+    expect(courseColor("高等数学")).toBe(courseColor(" 高等 数学 "));
+    expect(courseColor("高等数学")).not.toBe(courseColor("大学物理"));
+    expect(courseColor("高等数学")).toMatch(/^hsl\(\d+ \d+% \d+%\)$/);
+  });
+
   it("maps raw course labels to the smaller planning filters", () => {
     expect(requirementFilterFor("创新实验课")).toBe("创新创业");
     expect(requirementFilterFor("文理通识-文化素质教育课")).toBe("文化素质");
@@ -73,6 +81,41 @@ describe("schedule parsing", () => {
     expect(requirementFilterFor("专业核心课")).toBe("跨专业");
     expect(requirementFilterFor("专业基础课（包括大类平台课）")).toBe("跨专业");
     expect(requirementFilterFor("公共选修课")).toBeNull();
+  });
+
+  it("reports a closed category window before blaming a missing section identity", () => {
+    const option = candidateOption({
+      identity: "fallback",
+      action_rwh: "",
+      execution_ready: false,
+      name: "创业基础认知及职业规划",
+      query_code: "cxcy",
+    }, 0);
+    const windows = [{
+      action: "selection",
+      method: "academic_system",
+      grades: ["2025"],
+      category_codes: ["cxyx", "cxsy", "cxcy"],
+      opens_at: "2026-08-29 08:30",
+      closes_at: "2026-08-29 11:00",
+    }, {
+      action: "selection",
+      method: "academic_system",
+      grades: ["2025"],
+      category_codes: ["cxyx", "cxsy", "cxcy"],
+      opens_at: "2026-08-30 08:30",
+      closes_at: "2026-08-30 11:00",
+    }];
+
+    expect(candidateExecutionStatus(option, windows, "2025", new Date("2026-08-29T21:00:00"))).toEqual({
+      canExecute: false,
+      reason: "当前不在选课时间；下次开放 08.30 08:30–11:00",
+    });
+    expect(candidateExecutionStatus(option, windows, "2025", new Date("2026-08-29T09:00:00"))).toEqual({
+      canExecute: false,
+      reason: "开放时段内未取得教学班标识，请刷新待选课程",
+    });
+    expect(candidateExecutionStatus({ ...option, executionReady: true }, windows, "2025", new Date("2026-08-29T21:00:00")).canExecute).toBe(false);
   });
 
   it("marks only exact page-provided rwh identities executable", () => {

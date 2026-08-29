@@ -50,6 +50,7 @@ export type WeekCalibration = {
 export type SelectionWindow = {
   action?: string;
   grades?: string[];
+  category_codes?: string[];
   opens_at?: string;
   closes_at?: string;
   category_text?: string;
@@ -83,10 +84,10 @@ const parseNoticeDateTime = (value?: string): ParsedNoticeDateTime | null => {
   return { year: match[1], month: match[2], day: match[3], time: match[4] };
 };
 
-const weekdayLabel = (value: ParsedNoticeDateTime) => {
-  const date = new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
-  return `周${"日一二三四五六"[date.getDay()]}`;
-};
+const noticeDate = (value: ParsedNoticeDateTime) =>
+  new Date(Number(value.year), Number(value.month) - 1, Number(value.day), ...value.time.split(":").map(Number) as [number, number]);
+
+const weekdayLabel = (value: ParsedNoticeDateTime) => `周${"日一二三四五六"[noticeDate(value).getDay()]}`;
 
 /** Compact, timezone-stable labels for the confirmed-notice board. */
 export function selectionWindowDisplay(window: SelectionWindow): SelectionWindowDisplay {
@@ -108,6 +109,69 @@ export function selectionWindowDisplay(window: SelectionWindow): SelectionWindow
 /** The board already implies selection, so remove a duplicated source suffix. */
 export const selectionCategoryLabel = (window: SelectionWindow) =>
   String(window.category_text || "课程类别待确认").replace(/\s*——\s*选课\s*$/, "");
+
+export type CandidateExecutionStatus = {
+  canExecute: boolean;
+  reason: string;
+};
+
+/** Explain execution availability from the confirmed category window first. */
+export function candidateExecutionStatus(
+  option: Pick<CandidateOption, "queryCode" | "executionReady">,
+  windows: SelectionWindow[],
+  grade: string,
+  now: Date = new Date(),
+): CandidateExecutionStatus {
+  const matching = windows
+    .filter(window =>
+      window.action === "selection" &&
+      window.method === "academic_system" &&
+      (window.grades ?? []).includes(grade) &&
+      (window.category_codes ?? []).includes(option.queryCode)
+    )
+    .map(window => ({
+      window,
+      opens: parseNoticeDateTime(window.opens_at),
+      closes: parseNoticeDateTime(window.closes_at),
+    }))
+    .filter(item => item.opens && item.closes)
+    .sort((left, right) => noticeDate(left.opens!).getTime() - noticeDate(right.opens!).getTime());
+
+  if (!matching.length) {
+    return { canExecute: false, reason: "没有匹配当前年级和课程类别的选课窗口" };
+  }
+
+  const nowTime = now.getTime();
+  const active = matching.find(item =>
+    noticeDate(item.opens!).getTime() <= nowTime && nowTime <= noticeDate(item.closes!).getTime()
+  );
+  if (active) {
+    return option.executionReady
+      ? { canExecute: true, reason: "可以提交选课" }
+      : { canExecute: false, reason: "开放时段内未取得教学班标识，请刷新待选课程" };
+  }
+
+  const next = matching.find(item => noticeDate(item.opens!).getTime() > nowTime);
+  if (next) {
+    const display = selectionWindowDisplay(next.window);
+    return { canExecute: false, reason: `当前不在选课时间；下次开放 ${display.date.split(" ")[0]} ${display.time}` };
+  }
+  return { canExecute: false, reason: "当前不在选课时间；本轮选课已结束" };
+}
+
+/** Stable dark-mode color for one course across weeks, sections, and previews. */
+export function courseColor(courseName: string): string {
+  const normalized = courseName.trim().toLocaleLowerCase("zh-CN").replace(/\s+/g, "");
+  let hash = 2166136261;
+  for (const character of normalized || "未命名课程") {
+    hash = Math.imul(hash ^ character.codePointAt(0)!, 16777619);
+  }
+  const unsigned = hash >>> 0;
+  const hue = unsigned % 360;
+  const saturation = 40 + ((unsigned >>> 9) % 9);
+  const lightness = 28 + ((unsigned >>> 18) % 4);
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
+}
 
 export const requirementFilters = ["全部", "创新创业", "文化素质", "跨专业", "体育", "英语"] as const;
 export type RequirementFilter = typeof requirementFilters[number];

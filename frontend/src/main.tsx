@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { CandidateNotice, Task, WorkbenchState } from "./api";
 import { ScheduleBoard } from "./ScheduleBoard";
@@ -17,6 +17,9 @@ function App() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [savingLogin, setSavingLogin] = useState(false);
+  const [dataDrawerOpen, setDataDrawerOpen] = useState(false);
+  const drawerTriggerRef = useRef<HTMLButtonElement>(null);
+  const drawerCloseRef = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(async () => {
     const [response, notices] = await Promise.all([
@@ -34,6 +37,21 @@ function App() {
   }, []);
 
   useEffect(() => { load().catch((error: unknown) => setMessage(String(error))); }, [load]);
+
+  useEffect(() => {
+    if (!dataDrawerOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDataDrawerOpen(false);
+    };
+    document.body.classList.add("drawer-open");
+    drawerCloseRef.current?.focus();
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.classList.remove("drawer-open");
+      drawerTriggerRef.current?.focus();
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [dataDrawerOpen]);
 
   const configureLogin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -278,20 +296,39 @@ function App() {
       </aside>
     </header>
     {message && <p className="notice" role="status">{message}</p>}
-    <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={state.graduation_progress} onExecuteSection={executeSection} executionPending={remoteBusy} />
+    <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={state.graduation_progress} selectionWindows={(state.confirmed_notice?.windows as SelectionWindow[] | undefined) ?? []} studentGrade={grade} onExecuteSection={executeSection} executionPending={remoteBusy} />
+
+    <button ref={drawerTriggerRef} className={`data-drawer-trigger ${remoteBusy ? "is-busy" : ""}`} onClick={() => setDataDrawerOpen(true)} aria-haspopup="dialog" aria-expanded={dataDrawerOpen}>
+      <span className="data-trigger-mark" aria-hidden="true" />
+      <span><strong>{remoteBusy ? "数据同步中" : "数据操作"}</strong><small>刷新与快照状态</small></span>
+    </button>
+    {dataDrawerOpen && <div className="data-drawer-layer">
+      <button className="data-drawer-backdrop" onClick={() => setDataDrawerOpen(false)} aria-label="关闭数据操作面板" />
+      <aside className="data-drawer" role="dialog" aria-modal="true" aria-labelledby="data-drawer-title">
+        <header className="data-drawer-heading"><div><small>教务数据中心</small><h2 id="data-drawer-title">刷新与连接</h2><p>远程读取会保留最近一次完整快照，不会因失败清空现有数据。</p></div><button ref={drawerCloseRef} className="drawer-close" onClick={() => setDataDrawerOpen(false)} aria-label="关闭数据操作面板">关闭</button></header>
+        <section className="drawer-actions" aria-label="数据操作">
+          <button onClick={() => run("connect")} disabled={remoteBusy}><span>连接教务</span><small>验证当前教务会话</small></button>
+          <button onClick={() => run("refresh-timetable")} disabled={remoteBusy}><span>刷新课表</span><small>{statusLabel("timetable")}</small></button>
+          <button onClick={() => run("refresh-progress")} disabled={remoteBusy}><span>刷新毕业进度</span><small>{statusLabel("progress")}</small></button>
+          <button onClick={() => run("refresh-selection")} disabled={remoteBusy || !state.confirmed_notice}><span>刷新待选课程</span><small>{state.confirmed_notice ? statusLabel("selection") : "需先确认官方通知"}</small></button>
+          <button className="secondary" onClick={load}><span>刷新本地页面</span><small>不访问学校系统</small></button>
+          {state.capabilities?.development_diagnostics && <button className="secondary" onClick={() => run("observe-navigation")} disabled={remoteBusy}><span>诊断监听</span><small>开发诊断工具</small></button>}
+        </section>
+        {activeTask && <section className="drawer-task" aria-live="polite"><small>当前任务</small><strong>{activeTask.operation} · {activeTask.state}</strong><span>{taskProgressLabel(activeTask.progress) || `开始于 ${activeTask.created_at ?? "—"}`}</span><div>{activeTask.operation === "observe-navigation" && <button onClick={finishObservation}>完成监听</button>}{activeTask.task_kind !== "execution" && <button className="danger" onClick={cancel}>取消任务</button>}</div></section>}
+        {task && !activeTask && <section className="drawer-task" aria-live="polite"><small>最近任务</small><strong>{task.operation} · {task.state}</strong>{task.error && <span>{task.error}{task.task_kind === "observation" && task.operation !== "connect" && "；旧快照仍然保留"}</span>}{taskProgressLabel(task.progress) && <span>{taskProgressLabel(task.progress)}</span>}</section>}
+        <section className="drawer-snapshots" aria-label="快照状态"><article><small>课表</small><strong>{statusLabel("timetable")}</strong></article><article><small>待选课程</small><strong>{statusLabel("selection")}</strong></article><article><small>毕业进度</small><strong>{statusLabel("progress")}</strong></article></section>
+      </aside>
+    </div>}
+
     <details className="advanced-tools">
-      <summary><span><strong>数据与高级工具</strong><small>刷新教务数据、查看通知和管理本地规划</small></span><span>展开</span></summary>
+      <summary><span><strong>规划与高级记录</strong><small>管理官方通知、本地规划和执行历史</small></span><span>展开</span></summary>
       <div className="advanced-tools-body">
-    <section className="toolbar"><button onClick={() => run("connect")} disabled={remoteBusy}>连接教务</button><button onClick={() => run("refresh-timetable")} disabled={remoteBusy}>刷新课表</button><button onClick={() => run("refresh-progress")} disabled={remoteBusy}>刷新毕业进度</button><button onClick={() => run("refresh-selection")} disabled={remoteBusy || !state.confirmed_notice}>强制刷新待选课程</button>{state.capabilities?.development_diagnostics && <button onClick={() => run("observe-navigation")} disabled={remoteBusy}>诊断监听</button>}<button className="secondary" onClick={load}>刷新本地页面</button></section>
-    {activeTask && <section className="task"><strong>当前任务：{activeTask.operation} · {activeTask.state}</strong><span> · 开始于 {activeTask.created_at ?? "—"} · 超时 {activeTask.timeout_seconds ?? "—"} 秒</span>{taskProgressLabel(activeTask.progress) && <span> · {taskProgressLabel(activeTask.progress)}</span>}{activeTask.operation === "observe-navigation" && <button onClick={finishObservation}>完成监听</button>}{activeTask.task_kind !== "execution" && <button className="danger" onClick={cancel}>取消</button>}</section>}
-    {task && !activeTask && <section className="task"><strong>最近任务：{task.operation} · {task.state}</strong>{task.error && <span> · {task.error}{task.task_kind === "observation" && task.operation !== "connect" && "；旧快照仍然保留"}</span>}{taskProgressLabel(task.progress) && <span> · {taskProgressLabel(task.progress)}</span>}</section>}
-    <section className="facts"><article><small>课表快照</small><strong>{statusLabel("timetable")}</strong></article><article><small>待选课程快照</small><strong>{statusLabel("selection")}</strong></article><article><small>毕业进度快照</small><strong>{statusLabel("progress")}</strong></article></section>
     <section className="notice-management" aria-labelledby="notice-management-title">
       <div className="notice-management-heading"><div><small>通知管理</small><strong id="notice-management-title">官方选课通知</strong></div><button className="secondary" onClick={discoverOfficialNotices} disabled={remoteBusy}>获取最新通知</button></div>
       {pendingNotices.length > 0 ? <details className="notice-candidates"><summary>发现 {pendingNotices.length} 份待确认通知</summary>{pendingNotices.map(notice => <article className="candidate" key={notice.version_id}><strong>{notice.title || "未命名通知"}</strong><span>{notice.term || "学期待确认"}</span><button onClick={() => confirm(notice.version_id)} disabled={remoteBusy}>确认</button></article>)}</details> : <p className="muted">没有待确认的新通知；当前已确认安排显示在页面右上角。</p>}
     </section>
-    <section className="panel"><h2>本地只读规划</h2><p>按课程目标优先级和教学班偏好填写 JSON；这里只保存本地规划，不会发送选课请求。</p><textarea value={goals} onChange={event => setGoals(event.target.value)} rows={7} /><button onClick={savePlan}>保存规划</button>{plan && <pre className="plan-result">{JSON.stringify(plan, null, 2)}</pre>}</section>
-    {state.execution_history && state.execution_history.length > 0 && <section className="panel"><h2>选课执行历史</h2>{state.execution_history.map(item => <article className="candidate" key={item.id}><strong>{item.course_name || item.section_id}</strong><span>{item.created_at} · {item.result} · {item.message}</span>{item.result === "unknown" && !item.resolved && <button onClick={() => resolveUnknown(item.id)}>已核实，解除阻断</button>}</article>)}<button className="danger" onClick={clearHistory}>清除执行历史</button></section>}
+    <section className="panel plan-panel"><h2>本地只读规划</h2><p>按课程目标优先级和教学班偏好填写 JSON；这里只保存本地规划，不会发送选课请求。</p><textarea value={goals} onChange={event => setGoals(event.target.value)} rows={7} /><button onClick={savePlan}>保存规划</button>{plan && <pre className="plan-result">{JSON.stringify(plan, null, 2)}</pre>}</section>
+    {state.execution_history && state.execution_history.length > 0 && <section className="panel history-panel"><h2>选课执行历史</h2>{state.execution_history.map(item => <article className="candidate" key={item.id}><strong>{item.course_name || item.section_id}</strong><span>{item.created_at} · {item.result} · {item.message}</span>{item.result === "unknown" && !item.resolved && <button onClick={() => resolveUnknown(item.id)}>已核实，解除阻断</button>}</article>)}<button className="danger" onClick={clearHistory}>清除执行历史</button></section>}
       </div>
     </details>
   </main>;

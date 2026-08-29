@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import asdict
@@ -15,6 +16,8 @@ from course_progress.session import AcademicBrowserSession, WebVpnSessionExpired
 
 Progress = Callable[[str, dict[str, Any]], None]
 Cancelled = Callable[[], bool]
+
+logger = logging.getLogger(__name__)
 
 _ACADEMIC_PROXY_PATH = (
     "/http/77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/"
@@ -184,9 +187,26 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         context = self._session.context
         pages = context.pages
         page = next((item for item in pages if self._is_loopback(item.url)), None)
+        reused_page = page is not None
         if page is None:
             page = context.new_page()
-        page.goto(self._shell_url, wait_until="domcontentloaded", timeout=30_000)
+        try:
+            page.goto(
+                self._shell_url,
+                wait_until="domcontentloaded",
+                timeout=5_000 if reused_page else 20_000,
+            )
+        except Exception:
+            # A tab closed or disrupted through an external CDP client can
+            # remain listed by Chromium while its renderer no longer answers.
+            # Do not keep retrying that poisoned target: replace it once.
+            stale_page = page
+            page = context.new_page()
+            page.goto(self._shell_url, wait_until="domcontentloaded", timeout=20_000)
+            try:
+                stale_page.close()
+            except Exception:
+                logger.debug("close of unresponsive workbench page ignored")
         page.bring_to_front()
         self._shell_page = page
         progress("connecting", {"message": "visible Chromium workbench opened"})
