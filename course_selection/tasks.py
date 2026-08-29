@@ -262,6 +262,14 @@ class ObservationService:
                 self._execute(identity)
             except Exception as error:
                 task = self.inspect(identity)
+                # A terminal task must never leave the session badge looking
+                # like authentication is still actively waiting.
+                if self.session_state in {
+                    TaskState.CONNECTING.value,
+                    TaskState.WAITING_FOR_AUTHENTICATION.value,
+                }:
+                    self.session_state = "unknown"
+                    self.webvpn_state = "unknown"
                 if task and task["operation"] in {"refresh-selection", "refresh-timetable", "refresh-progress"}:
                     self.database.record_failed_attempt(
                         {"refresh-selection": "selection", "refresh-timetable": "timetable", "refresh-progress": "progress"}[task["operation"]],
@@ -284,6 +292,12 @@ class ObservationService:
                             )
                     if current.get("state") not in {TaskState.SUCCEEDED.value, TaskState.FAILED.value}:
                         self._update(identity, TaskState.FAILED.value, error="task timed out")
+                    if self.session_state in {
+                        TaskState.CONNECTING.value,
+                        TaskState.WAITING_FOR_AUTHENTICATION.value,
+                    }:
+                        self.session_state = "unknown"
+                        self.webvpn_state = "unknown"
                 self._done.setdefault(identity, threading.Event()).set()
 
     def _execute(self, identity: str) -> None:
@@ -291,6 +305,10 @@ class ObservationService:
             execution = self.database.connection.execute("select operation,context from execution_tasks where id=?", (identity,)).fetchone()
             row = execution or self.database.connection.execute("select operation,context from observation_tasks where id=?", (identity,)).fetchone()
         operation, context = row[0], json.loads(row[1])
+        # Bound every downstream browser/authentication wait by this task's
+        # declared deadline; a timer flag alone cannot interrupt a blocking
+        # Playwright call.
+        context["operation_timeout_seconds"] = TASK_TIMEOUT_SECONDS.get(operation, 180)
         if identity in self._cancelled:
             self._update(identity, TaskState.CANCELLED.value)
             return
@@ -339,6 +357,12 @@ class ObservationService:
         self.session_state = "connecting"
         self.gateway.connect(progress, cancelled)
         if cancelled():
+            if self.session_state in {
+                TaskState.CONNECTING.value,
+                TaskState.WAITING_FOR_AUTHENTICATION.value,
+            }:
+                self.session_state = "unknown"
+                self.webvpn_state = "unknown"
             self._update(identity, TaskState.CANCELLED.value)
             return
         self.session_state = "connected"

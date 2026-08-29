@@ -477,7 +477,10 @@ class ObservationServiceTests(unittest.TestCase):
 
     def test_read_timeout_reaches_terminal_state_and_releases_active_task(self):
         class SlowGateway(FakeGateway):
+            observed_timeout = None
+
             def observe_selection(self, request, progress, cancelled):
+                self.observed_timeout = request.context.get("operation_timeout_seconds")
                 while not cancelled():
                     time.sleep(0.005)
                 return SelectionObservationResult.incomplete("cancelled")
@@ -489,6 +492,7 @@ class ObservationServiceTests(unittest.TestCase):
             self.assertTrue(service.wait(task.id, 2))
             self.assertEqual(TaskState.FAILED.value, service.inspect(task.id)["state"])
             self.assertIn("timed out", service.inspect(task.id)["error"])
+            self.assertEqual(0.03, service.gateway.observed_timeout)
             self.assertIsNone(service.active_task())
             service.close()
             database.close()
@@ -600,7 +604,8 @@ class ObservationServiceTests(unittest.TestCase):
             task = service.submit("connect")
             self.assertTrue(service.wait(task.id, 2))
             self.assertEqual(TaskState.FAILED.value, service.inspect(task.id)["state"])
-            self.assertEqual(TaskState.WAITING_FOR_AUTHENTICATION.value, service.session_state)
+            self.assertEqual("unknown", service.session_state)
+            self.assertEqual("unknown", service.webvpn_state)
             self.assertFalse(gateway.closed)
             service.close()
             self.assertTrue(gateway.closed)

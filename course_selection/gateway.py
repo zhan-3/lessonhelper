@@ -279,7 +279,10 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                     cancelled=cancelled,
                     authenticate=lambda url, target_page: self._session.open_authenticated(
                         url,
-                        timeout_seconds=int(context.get("login_timeout_seconds", 600)),
+                        timeout_seconds=min(
+                            int(context.get("login_timeout_seconds", 600)),
+                            int(context.get("operation_timeout_seconds", 600)),
+                        ),
                         page=target_page,
                     ),
                 )
@@ -390,7 +393,10 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                 "社会实践": "social_practice",
             },
         )
-        timeout = int(context.get("login_timeout_seconds", 600))
+        timeout = min(
+            int(context.get("login_timeout_seconds", 600)),
+            int(context.get("operation_timeout_seconds", 600)),
+        )
 
         def on_request(url: str, semester: str, page_number: int) -> None:
             if page_number == 0:
@@ -485,7 +491,10 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         endpoint = resolve_academic_url(page.url, "/kbcx/queryGrkb")
         trace_requests.append({"method": "GET", "url": endpoint, "resource_type": "document"})
 
-        timeout = int(context.get("login_timeout_seconds", 600))
+        timeout = min(
+            int(context.get("login_timeout_seconds", 600)),
+            int(context.get("operation_timeout_seconds", 600)),
+        )
         try:
             page = self._session.open_authenticated(endpoint, timeout_seconds=timeout, page=page)
         except (PlaywrightError, TimeoutError) as error:
@@ -700,7 +709,9 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             term_value=str(context.get("term_value") or ""),
             source_page=int(context.get("source_page") or 1),
             authenticate=lambda url, target_page: self._session.open_authenticated(
-                url, timeout_seconds=600, page=target_page,
+                url,
+                timeout_seconds=int(context.get("operation_timeout_seconds", 30)),
+                page=target_page,
             ),
         )
         return result.to_dict()

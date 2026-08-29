@@ -259,8 +259,9 @@ def create_workbench_app(
     @app.post("/api/notices/<identity>/confirm")
     def confirm_notice(identity: str):
         try:
-            return jsonify(core.confirm_notice(identity))
-        except ValueError as error:
+            notice = service.run_when_idle(lambda: core.confirm_notice(identity))
+            return jsonify(notice)
+        except (RuntimeError, ValueError) as error:
             return jsonify({"error": str(error)}), 409
 
     @app.post("/api/timetable/import")
