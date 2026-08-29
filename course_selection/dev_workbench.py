@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.request import urlopen
 
 from playwright.sync_api import sync_playwright
 from watchfiles import PythonFilter, watch
@@ -70,6 +71,19 @@ def stop_workbench(process: subprocess.Popen) -> None:
         process.wait(timeout=5)
 
 
+def wait_for_cdp(cdp_url: str, timeout: float = 10, retry_interval: float = 0.05) -> bool:
+    """Wait for Chromium's DevTools endpoint, not merely its process launch."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(f"{cdp_url}/json/version", timeout=0.5) as response:
+                if response.status == 200:
+                    return True
+        except OSError:
+            time.sleep(retry_interval)
+    return False
+
+
 def run_dev_workbench(root: Path, workspace_root: Path, port: int, debug_port: int = 9222) -> int:
     """Keep Chromium/CDP alive while restarting only the Python workbench."""
     root, workspace_root = root.resolve(), workspace_root.resolve()
@@ -103,15 +117,21 @@ def run_dev_workbench(root: Path, workspace_root: Path, port: int, debug_port: i
             # Browser Host ownership intentionally lives here, not in a child.
             playwright, "chromium", resolve_profile_dir(root / ".private" / "course-progress")
         ):
-            child = start_workbench(root, workspace_root, port, cdp_url)
+            if not wait_for_cdp(cdp_url):
+                logger.error("dev workbench: CDP did not start within 10 seconds at %s", cdp_url)
+                return 1
             logger.info("dev workbench: CDP available at %s", cdp_url)
+            child = start_workbench(root, workspace_root, port, cdp_url)
             while True:
                 time.sleep(0.5)
-                if child.poll() is not None:
-                    # A fresh child picks up current sources anyway.
-                    child = start_workbench(root, workspace_root, port, cdp_url)
-                    restart_pending.clear()
-                    continue
+                exit_code = child.poll()
+                if exit_code is not None:
+                    # Exit 0 commonly means another workbench already owns the
+                    # workspace and was activated. Restarting here would invoke
+                    # that activation every 500 ms and continuously reload it.
+                    log = logger.info if exit_code == 0 else logger.error
+                    log("workbench process exited with code %s; stopping supervisor", exit_code)
+                    return exit_code
                 if restart_pending.is_set() and not has_active_tasks(workspace_root):
                     restart_pending.clear()
                     logger.info("Python sources changed; restarting workbench only")

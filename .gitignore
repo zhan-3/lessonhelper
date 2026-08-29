@@ -9,8 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# Linter/formatter caches
+# Tool and test caches
+.pytest_cache/
 .ruff_cache/
+.uv-cache/
+.codegraph/
 
 # Playwright session state (contains auth tokens)
 storage_state.json
