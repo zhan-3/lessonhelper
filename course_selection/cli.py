@@ -6,13 +6,12 @@ import getpass
 import logging
 import os
 import random
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 import click
-from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
+from playwright.sync_api import sync_playwright
 
 from course_progress.credentials import LoginCredentials, credential_store
 from course_progress.explorer import (
@@ -23,7 +22,7 @@ from course_progress.explorer import (
 )
 
 from . import config
-from .discovery import AcademicInterfaceDiscovery, TARGET_SELECTION, TARGET_TIMETABLE
+from .discovery import TARGET_SELECTION, TARGET_TIMETABLE, AcademicInterfaceDiscovery
 from .notice import (
     CATEGORY_LABELS,
     load_notice,

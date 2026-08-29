@@ -3,7 +3,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from click.testing import CliRunner
 from watchfiles import Change, PythonFilter
 
 from course_selection.cli import dev_workbench_cmd

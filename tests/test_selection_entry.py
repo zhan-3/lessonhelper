@@ -6,8 +6,8 @@ from course_selection.selection_entry import (
     STATUS_LOGIN_REQUIRED,
     STATUS_READY,
     STATUS_ROUND_NOT_OPEN,
-    classify_selection_response,
     classify_selection_html,
+    classify_selection_response,
     extract_course_sections_from_html,
     observe_json_exchange,
     selection_page_count,
@@ -15,10 +15,8 @@ from course_selection.selection_entry import (
 )
 
 
-
 def _section(identity: str, category: str) -> object:
     from dataclasses import dataclass
-    from types import SimpleNamespace
 
     @dataclass
     class Section:

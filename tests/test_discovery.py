@@ -5,7 +5,6 @@ from unittest import mock
 from click.testing import CliRunner
 
 from course_selection.cli import (
-    analyze_interface_cmd,
     configure_login_cmd,
     configure_profile_cmd,
     discover_selection_cmd,
