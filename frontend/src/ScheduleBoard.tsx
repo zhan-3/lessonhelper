@@ -1,7 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { WorkbenchState } from "./api";
 import {
-  activeInWeek,
   candidateExecutionStatus,
   candidateOption,
   compressWeeks,
@@ -50,12 +49,14 @@ const readCalibration = (term: string): WeekCalibration | null => {
   }
 };
 
-export function ScheduleBoard({ timetable, selection, graduationProgress, selectionWindows, studentGrade, onExecuteSection, executionPending }: {
+export function ScheduleBoard({ timetable, selection, graduationProgress, selectionWindows, studentGrade, previewKeys, onTogglePreview, onExecuteSection, executionPending }: {
   timetable: WorkbenchState["snapshots"]["timetable"];
   selection: WorkbenchState["snapshots"]["selection"];
   graduationProgress?: WorkbenchState["graduation_progress"];
   selectionWindows: SelectionWindow[];
   studentGrade: string;
+  previewKeys: string[];
+  onTogglePreview: (key: string) => void;
   onExecuteSection?: (sectionId: string, courseName: string) => void;
   executionPending?: boolean;
 }) {
@@ -65,11 +66,12 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
   const [requirementFilter, setRequirementFilter] = useState("全部");
   const [conflictFilter, setConflictFilter] = useState("全部");
   const [page, setPage] = useState(1);
-  const [previewKeys, setPreviewKeys] = useState<string[]>([]);
   const [calibrationRevision, setCalibrationRevision] = useState(0);
   const [calibrationOpen, setCalibrationOpen] = useState(false);
   const [calibrationWeek, setCalibrationWeek] = useState(1);
   const [locationDetailKey, setLocationDetailKey] = useState<string | null>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const [browserHeight, setBrowserHeight] = useState<number | null>(null);
   const groupButtons = useRef(new Map<string, HTMLButtonElement>());
 
   const current = useMemo(() => ((timetable?.payload.entries as Record<string, unknown>[] | undefined) ?? []).flatMap((item, index) => expandScheduleItems(item, "current", index)), [timetable]);
@@ -95,7 +97,6 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
   const fourHistoriesComplete = culturalProgress?.courses.some(course => /四史/.test(course.name)) ?? false;
 
   useEffect(() => {
-    setPreviewKeys([]);
     const nextCalibration = readCalibration(term);
     const nextCurrentWeek = deriveCurrentWeek(nextCalibration, maxWeek);
     setSelectedWeek(nextCurrentWeek ?? 1);
@@ -104,6 +105,7 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
   }, [term, maxWeek]);
 
   const previewOptions = candidateOptions.filter(option => previewKeys.includes(option.key));
+  const unknownCount = [...current, ...candidateOptions.flatMap(option => option.meetings)].filter(item => item.unknown).length;
   // 进度面板与待选课程同步：只展示本次选课查询覆盖的培养要求。
   const syncedProgress = (() => {
     const queries = (selection?.payload.queries as Array<{ category?: unknown }> | undefined) ?? [];
@@ -119,24 +121,33 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
   const boardItems = [...visibleCurrent, ...visiblePreviews];
   const sessionCount = Math.max(3, ...boardItems.map(item => Math.ceil((item.end ?? 0) / 2)));
 
+  useLayoutEffect(() => {
+    const compute = () => {
+      if (window.innerWidth < 1121) { setBrowserHeight(null); return; }
+      const title = workspaceRef.current?.querySelector(".schedule-title");
+      const scroll = workspaceRef.current?.querySelector(".timetable-scroll");
+      if (!title || !scroll) return;
+      setBrowserHeight(Math.floor(title.getBoundingClientRect().height + scroll.getBoundingClientRect().height));
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    return () => window.removeEventListener("resize", compute);
+  }, [sessionCount]);
+
   useEffect(() => {
     setLocationDetailKey(null);
     const button = selectedGroup ? groupButtons.current.get(selectedGroup.signature) : undefined;
     button?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
   }, [selectedGroup?.signature]);
 
-  const optionHasConflict = (option: CandidateOption) => {
-    const meetings = option.meetings.filter(item => activeInWeek(item, selectedWeek) && !item.unknown);
-    const otherPreviewMeetings = previewOptions.filter(preview => preview.key !== option.key).flatMap(preview => preview.meetings).filter(item => activeInWeek(item, selectedWeek));
-    return meetings.some(meeting => [...visibleCurrent, ...otherPreviewMeetings].some(other => timeOverlaps(meeting, other)));
-  };
+  const semesterConflict = (option: CandidateOption) => option.meetings.some(meeting => !meeting.unknown && current.some(other => !other.unknown && executionTimeOverlaps(meeting, other)));
   const filteredOptions = candidateOptions.filter(option => {
     const planningCategory = planningFilterFor(option);
     const searchable = `${option.name} ${option.courseCode} ${option.teacher} ${option.category} ${planningCategory ?? ""}`.toLowerCase();
-    const hasConflict = optionHasConflict(option);
+    const hasConflict = semesterConflict(option);
     return !courseAlreadyCompleted(option, completedCourses) && (requirementFilter === "全部" || planningCategory === requirementFilter) && (!query || searchable.includes(query.toLowerCase())) &&
       (conflictFilter === "全部" || (conflictFilter === "有冲突" ? hasConflict : !hasConflict));
-  }).sort((a, b) => Number(optionHasConflict(a)) - Number(optionHasConflict(b)) || (planningFilterFor(a) ?? a.category).localeCompare(planningFilterFor(b) ?? b.category, "zh-CN") || b.credits - a.credits || a.name.localeCompare(b.name, "zh-CN"));
+  }).sort((a, b) => Number(semesterConflict(a)) - Number(semesterConflict(b)) || (planningFilterFor(a) ?? a.category).localeCompare(planningFilterFor(b) ?? b.category, "zh-CN") || b.credits - a.credits || a.name.localeCompare(b.name, "zh-CN"));
   const pages = Math.max(1, Math.ceil(filteredOptions.length / pageSize));
   const safePage = Math.min(page, pages);
   const pagedOptions = filteredOptions.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -151,14 +162,6 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
     setCalibrationRevision(value => value + 1);
     setSelectedWeek(calibrationWeek);
     setCalibrationOpen(false);
-  };
-
-  const togglePreview = (key: string) => {
-    setPreviewKeys(keys => {
-      if (keys.includes(key)) return keys.filter(value => value !== key);
-      if (keys.length >= maximumPreviews) return keys;
-      return [...keys, key];
-    });
   };
 
   const renderBlock = (item: ScheduleItem) => {
@@ -218,18 +221,7 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
 
     {calibrationOpen && <section className="week-calibration" aria-label="校准当前教学周"><div><strong>{calibration && currentWeek === null ? "本周校准已超出当前学期范围" : "今天是第几教学周？"}</strong><p>按学期保存在本机，以后每周一自动递增。</p></div><select value={calibrationWeek} onChange={event => setCalibrationWeek(Number(event.target.value))} aria-label="当前教学周">{Array.from({ length: maxWeek }, (_, index) => index + 1).map(week => <option key={week} value={week}>第 {week} 周</option>)}</select><button onClick={saveCalibration}>保存本周</button></section>}
 
-    <section className={`preview-tray ${previewOptions.length ? "has-items" : ""}`} aria-live="polite" aria-label="课表预览状态">
-      <div className="preview-tray-heading">
-        <div><strong>{previewOptions.length ? `正在预览 ${previewOptions.length} 门课程` : "课表预览"}</strong><span>{previewOptions.length ? "候选课程已叠加到课表中，不会提交选课。" : "从待选课程中加入最多 3 门，先比较时间与冲突。"}</span></div>
-        {previewOptions.length > 0 && <button className="text-button" onClick={() => setPreviewKeys([])}>清空预览</button>}
-      </div>
-      {previewOptions.length > 0 && <div className="preview-selections">{previewOptions.map(option => {
-        const semesterConflict = option.meetings.some(meeting => !meeting.unknown && current.some(other => !other.unknown && executionTimeOverlaps(meeting, other)));
-        return <div className="preview-selection" key={option.key}><i className="preview-dot" style={courseColorStyle(option.name)} /><span><strong>{option.name}</strong><small>{semesterConflict ? "学期内有冲突" : option.unknown ? "时间待确认" : "学期内无冲突"}</small></span><button className="text-button" onClick={() => togglePreview(option.key)} aria-label={`移出预览：${option.name}`}>移出</button></div>;
-      })}</div>}
-    </section>
-
-    <div className="schedule-workspace">
+    <div className="schedule-workspace" ref={workspaceRef}>
       <div className="timetable-column">
         <div className="schedule-title">
           <div><h2>七日课表</h2><p>{selectedGroup?.label ?? `第${selectedWeek}周`} · 当前按第 {selectedWeek} 周显示课程与地点。</p></div>
@@ -243,30 +235,28 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
         {detailedItem && <section className="location-detail"><div><strong>{detailedItem.name} · 地点安排</strong><button className="text-button" onClick={() => setLocationDetailKey(null)}>关闭</button></div>{detailedLocations.map(group => <p key={group.weeks.join("-")}><span>{formatWeekGroup(group.weeks)}</span>{group.locations.join("、")}</p>)}</section>}
       </div>
 
-      <aside className="course-browser">
+      <aside className="course-browser" style={browserHeight ? { height: browserHeight } : undefined}>
         <div className="browser-heading"><div><h3>查找待选课程</h3><small>先加入预览，确认整学期无冲突后再选课</small></div><span>{filteredOptions.length} 门 · {safePage}/{pages} 页</span></div>
         <input aria-label="搜索待选课程" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索课程名、代码或教师" />
         <div className="course-filters"><select value={requirementFilter} onChange={event => setRequirementFilter(event.target.value)} aria-label="培养要求">{requirementFilterOptions.map(value => <option key={value}>{value === "全部" ? "全部培养要求" : value}</option>)}</select><select value={conflictFilter} onChange={event => setConflictFilter(event.target.value)} aria-label="冲突状态"><option>全部</option><option>无冲突</option><option>有冲突</option></select></div>
         <div className="requirement-hints" aria-label="培养要求提醒"><span><b>体育</b> 每学年选 1 门</span><span><b>创新创业</b> 社会实践另计</span><span><b>英语</b> 大一优先</span></div>
-        <div className="course-list">{pagedOptions.length ? pagedOptions.map(option => {
-          const hasConflict = optionHasConflict(option);
+        <div className="course-list" style={browserHeight ? { maxHeight: "none" } : undefined}>{pagedOptions.length ? pagedOptions.map(option => {
           const previewIndex = previewKeys.indexOf(option.key);
           const previewed = previewIndex >= 0;
-          const previewLimitReached = !previewed && previewKeys.length >= maximumPreviews;
           const planningCategory = planningFilterFor(option);
-          const knownConflict = option.meetings.some(meeting => !meeting.unknown && current.some(other => !other.unknown && executionTimeOverlaps(meeting, other)));
+          const knownConflict = semesterConflict(option);
           const executionStatus = candidateExecutionStatus(option, selectionWindows, studentGrade);
           const executionBlocked = executionPending || option.unknown || knownConflict || !executionStatus.canExecute;
-          const scheduleStatus = option.unknown ? "时间待确认" : knownConflict ? "学期内有冲突" : hasConflict ? `第 ${selectedWeek} 周有冲突` : "学期内无冲突";
+          const scheduleStatus = option.unknown ? "时间待确认" : knownConflict ? "学期内有冲突" : "学期内无冲突";
           const executionReason = option.unknown ? "暂不可选：上课时间待确认" : knownConflict ? "暂不可选：与当前课表冲突" : executionPending ? "暂不可选：正在执行其他任务" : executionStatus.canExecute ? executionStatus.reason : `暂不可选：${executionStatus.reason}`;
-          return <article className={`candidate-row ${hasConflict ? "has-conflict" : ""} ${previewed ? "is-previewed" : ""}`} key={option.key}>
+          return <article className={`candidate-row ${knownConflict ? "has-conflict" : ""} ${previewed ? "is-previewed" : ""}`} key={option.key}>
             <div className="candidate-copy"><div className="candidate-title">{previewed && <i className="preview-dot" style={courseColorStyle(option.name)} aria-hidden="true" />}<strong>{option.name}</strong></div><span>{planningCategory ?? option.category} · {option.credits ? `${formatCredits(option.credits)} 学分` : "学分待核对"} · {option.teacher || "教师未提供"}</span><small>{describeOptionMeetings(option.meetings)}</small><div className="candidate-status" id={`status-${option.key}`}><b className={knownConflict || option.unknown ? "blocked" : "ready"}>{scheduleStatus}</b><span>{executionReason}</span></div></div>
-            <div className="candidate-actions">{!option.unknown && <button className={previewed ? "secondary" : ""} disabled={previewLimitReached} aria-describedby={`status-${option.key}`} onClick={() => togglePreview(option.key)}>{previewed ? "移出预览" : previewLimitReached ? "预览已满" : "加入预览"}</button>}<button className="execute-selection" disabled={executionBlocked} aria-describedby={`status-${option.key}`} onClick={() => onExecuteSection?.(String(option.identity ?? option.key), option.name)}>{executionPending ? "处理中" : "选课"}</button></div>
+            <div className="candidate-actions">{!option.unknown && <button className={previewed ? "secondary" : ""} aria-describedby={`status-${option.key}`} onClick={() => onTogglePreview(option.key)}>{previewed ? "移出队列" : "加入队列"}</button>}<button className="execute-selection" disabled={executionBlocked} aria-describedby={`status-${option.key}`} onClick={() => onExecuteSection?.(String(option.identity ?? option.key), option.name)}>{executionPending ? "处理中" : "选课"}</button></div>
           </article>;
         }) : <p className="empty">没有符合条件的待选课程。</p>}</div>
-        <nav className="pagination" aria-label="待选课程分页"><button className="secondary" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>上一页</button><span>{safePage}</span><button className="secondary" disabled={safePage >= pages} onClick={() => setPage(safePage + 1)}>下一页</button></nav>
+        {unknownCount > 0 && <p className="unknown-note">有课程时间未能可靠解析，不会显示为空闲时间；请在列表中核对原始上课信息。</p>}
+        <nav className="pagination" aria-label="待选课程分页"><button className="page-arrow" aria-label="上一页" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>‹</button><button className="page-arrow" aria-label="下一页" disabled={safePage >= pages} onClick={() => setPage(safePage + 1)}>›</button></nav>
       </aside>
     </div>
-    {[...current, ...candidateOptions.flatMap(option => option.meetings)].filter(item => item.unknown).length > 0 && <p className="unknown-hint">有课程的时间尚未能可靠解析；它们不会被显示为空闲时间，请在待选课程中核对原始上课信息。</p>}
   </section>;
 }
