@@ -130,6 +130,13 @@ class SelectionSnapshotTests(unittest.TestCase):
         class Page:
             url = landing_url
 
+            def __init__(self):
+                self.navigations = []
+
+            def goto(self, url, **_kwargs):
+                self.navigations.append(url)
+                self.url = url
+
             def is_closed(self):
                 return False
 
@@ -157,6 +164,12 @@ class SelectionSnapshotTests(unittest.TestCase):
         self.assertEqual(
             "https://webvpn.hitwh.edu.cn/http/"
             "77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/loginCAS",
+            page.navigations[0],
+        )
+        self.assertEqual(
+            "https://webvpn.hitwh.edu.cn/http/"
+            "77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/"
+            "xsxk/queryXsxk",
             gateway._session.urls[0],
         )
 

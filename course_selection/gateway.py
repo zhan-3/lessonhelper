@@ -215,8 +215,17 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                 )
             cas_url = self._academic_cas_url(academic_page.url)
             if cas_url:
+                # loginCAS is only a session-establishment hop, never the
+                # success destination.  If it stalls, open_authenticated must
+                # keep retrying a fixed protected read page; retrying loginCAS
+                # itself can never prove that the academic session is usable.
+                from .selection_query import SELECTION_ENTRY_URL
+
+                academic_page.goto(
+                    cas_url, wait_until="domcontentloaded", timeout=60_000
+                )
                 academic_page = self._session.open_authenticated(
-                    cas_url,
+                    SELECTION_ENTRY_URL,
                     timeout_seconds=600,
                     page=academic_page,
                 )
