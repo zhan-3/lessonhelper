@@ -12,7 +12,6 @@ from course_selection.workbench import create_workbench_app
 from course_selection.workbench_service import WorkbenchService
 from tests.test_workbench import FakeGateway
 
-
 COURSE_HTML = """
 <form id="queryform"><input name="token" value="fresh"><input name="pageXklb" value="xsxk"><input name="pageXnxq" value="2026-20271"></form>
 <table><tr><th></th><th>课程代码</th><th>课程名称</th><th>上课信息</th></tr>

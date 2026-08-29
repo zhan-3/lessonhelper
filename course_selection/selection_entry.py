@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from course_progress.sanitizer import (
     is_sensitive_key,
@@ -17,7 +18,6 @@ from course_progress.sanitizer import (
     sanitize_request_body,
     sanitize_url,
 )
-
 
 STATUS_LOGIN_REQUIRED = "login_required"
 STATUS_ENTRY_UNREACHABLE = "entry_unreachable"
@@ -279,7 +279,7 @@ def extract_course_sections_from_html(html: str) -> tuple[SelectionCourseSection
         if headers is None or len(row) < max(headers.values()) + 1:
             continue
 
-        def value(name: str) -> str:
+        def value(name: str, headers=headers, row=row) -> str:
             index = headers.get(name)
             return row[index].text.strip() if index is not None else ""
 
@@ -343,7 +343,12 @@ def _selection_window(html: str) -> tuple[datetime, datetime] | None:
     )
     if not match:
         return None
-    return tuple(datetime.strptime(value, "%Y-%m-%d %H:%M") for value in match.groups())
+    # Naive school-notice timestamps are interpreted in the local timezone so
+    # comparisons against `current` stay consistent.
+    return tuple(
+        datetime.strptime(value, "%Y-%m-%d %H:%M").astimezone()
+        for value in match.groups()
+    )
 
 
 def classify_selection_html(
@@ -358,7 +363,7 @@ def classify_selection_html(
     sections = extract_course_sections_from_html(html)
     lowered = html.lower()
     window = _selection_window(html)
-    current = now or datetime.now()
+    current = (now or datetime.now(timezone.utc)).astimezone()
     expected_pairs = {
         (getattr(item, "opens_at", ""), getattr(item, "closes_at", ""))
         for item in expected_windows
@@ -564,7 +569,6 @@ class SelectionEntryExplorer:
             text = (page.locator("body").inner_text(timeout=500) or "").lower()
         except Exception:
             return False
-        selection_type = getattr(self.notice, "selection_type", "")
         return selection_page_matches_notice(text, self.notice)
 
     def _has_terminal_selection_observation(self) -> bool:

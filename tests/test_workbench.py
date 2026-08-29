@@ -25,7 +25,7 @@ from course_selection.notice_discovery import (
     parse_official_notice_links,
 )
 from course_selection.persistence import WorkspaceDatabase
-from course_selection.tasks import ObservationService, TASK_TIMEOUT_SECONDS, TaskState
+from course_selection.tasks import TASK_TIMEOUT_SECONDS, ObservationService, TaskState
 from course_selection.workbench import create_workbench_app
 
 

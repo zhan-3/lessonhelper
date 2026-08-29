@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from course_progress.session import AcademicBrowserSession, WebVpnSessionExpiredError
@@ -98,6 +99,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
 
     def __init__(self, profile_root=".private/course-progress", workspace_root=".private/academic-selection", portal_url: str | None = None, on_browser_closed: Callable[[], None] | None = None, cdp_url: str | None = None):
         from pathlib import Path
+
         from course_progress.explorer import DEFAULT_PORTAL_URL
         self.profile_root = Path(profile_root)
         self.workspace_root = Path(workspace_root)
@@ -159,7 +161,6 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         self._closing = False
         self._browser_closed_notified = False
         from playwright.sync_api import sync_playwright
-        from course_progress.session import AcademicBrowserSession
         self._playwright = sync_playwright().start()
         self._session = AcademicBrowserSession(
             self._playwright, browser_name="chromium", profile_root=self.profile_root,
@@ -245,7 +246,10 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
     def _refresh_selection_payload(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
-        from .selection_query import SelectionContractError, VerifiedSelectionQueryAdapter
+        from .selection_query import (
+            SelectionContractError,
+            VerifiedSelectionQueryAdapter,
+        )
 
         categories = tuple(context.get("allowed_categories", ()))
         semester_label = str(context.get("semester_label", ""))
@@ -323,7 +327,11 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             AuthenticatedAcademicClient,
         )
         from course_progress.collector import FixedGradeReader
-        from course_progress.progress import RequirementBaseline, evaluate_progress, parse_requirements
+        from course_progress.progress import (
+            RequirementBaseline,
+            evaluate_progress,
+            parse_requirements,
+        )
 
         page = getattr(self, "_academic_page", None)
         if page is None:
@@ -440,6 +448,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             AcademicClientError,
             AuthenticatedAcademicClient,
         )
+
         from .personal_timetable import parse_timetable_grid_html
 
         page = getattr(self, "_academic_page", None)
@@ -513,7 +522,12 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
         from playwright.sync_api import Error
-        from .manual_observation import ManualObservationPolicy, summarize_json_structure, url_evidence
+
+        from .manual_observation import (
+            ManualObservationPolicy,
+            summarize_json_structure,
+            url_evidence,
+        )
 
         browser_context = self._session.context
         policy = ManualObservationPolicy(context.get("allowed_post_requests", ()))

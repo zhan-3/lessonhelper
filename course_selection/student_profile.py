@@ -7,7 +7,6 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-
 DEFAULT_STUDENT_PROFILE_PATH = Path(
     ".private/academic-selection/student-profile.json"
 )

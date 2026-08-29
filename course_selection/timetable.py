@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -65,7 +65,7 @@ def _parse_int_range(value: str, label: str) -> tuple[int, int]:
     return min(numbers[0], numbers[1]), max(numbers[0], numbers[1])
 
 
-_UNKNOWN_TIME = re.compile(r"待定|未定|待安排|未知|时间未定|tbd|pending", re.I)
+_UNKNOWN_TIME = re.compile(r"待定|未定|待安排|未知|时间未定|tbd|pending", re.IGNORECASE)
 
 
 def _is_unknown_time(value: str) -> bool:
@@ -145,7 +145,6 @@ def _grid_entry_text(value: str) -> tuple[str, str, str, str]:
     if not lines:
         raise ValueError("课表单元格没有课程内容")
     first = lines[0]
-    combined = " ".join(lines)
     if "◇" in first:
         parts = [part.strip() for part in first.split("◇")]
         course_name = parts[0]

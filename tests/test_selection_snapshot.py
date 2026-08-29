@@ -4,8 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from course_selection.discovery import DiscoveryReport
 from course_selection.deep_observation import SelectionObservationRequest
+from course_selection.discovery import DiscoveryReport
 from course_selection.gateway import PlaywrightAcademicGateway
 from course_selection.selection_query import VerifiedSelectionQueryAdapter
 

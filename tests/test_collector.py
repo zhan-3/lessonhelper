@@ -9,11 +9,11 @@ from course_progress.collector import (
     SemesterOption,
     SessionExpiredError,
     collect_grade_records,
+    format_collection_summary,
+    format_semester_label,
     grade_query_parameters,
     load_checkpoint,
     save_checkpoint,
-    format_collection_summary,
-    format_semester_label,
 )
 
 
@@ -103,7 +103,7 @@ class CollectorTests(unittest.TestCase):
         def fetch_page(semester: str, page_number: int) -> str:
             calls.append((semester, page_number))
             return grade_page(
-                f"{semester}-{page_number}", semester, 2 if page_number == 1 else 2
+                f"{semester}-{page_number}", semester, 2
             )
 
         result = collect_grade_records(

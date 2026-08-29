@@ -99,25 +99,24 @@ def run_dev_workbench(root: Path, workspace_root: Path, port: int, debug_port: i
     watcher = threading.Thread(target=observe_changes, name="source-watcher", daemon=True)
     watcher.start()
     try:
-        with sync_playwright() as playwright:
+        with sync_playwright() as playwright, launch_browser_context(
             # Browser Host ownership intentionally lives here, not in a child.
-            with launch_browser_context(
-                playwright, "chromium", resolve_profile_dir(root / ".private" / "course-progress")
-            ):
-                child = start_workbench(root, workspace_root, port, cdp_url)
-                logger.info("dev workbench: CDP available at %s", cdp_url)
-                while True:
-                    time.sleep(0.5)
-                    if child.poll() is not None:
-                        # A fresh child picks up current sources anyway.
-                        child = start_workbench(root, workspace_root, port, cdp_url)
-                        restart_pending.clear()
-                        continue
-                    if restart_pending.is_set() and not has_active_tasks(workspace_root):
-                        restart_pending.clear()
-                        logger.info("Python sources changed; restarting workbench only")
-                        stop_workbench(child)
-                        child = start_workbench(root, workspace_root, port, cdp_url)
+            playwright, "chromium", resolve_profile_dir(root / ".private" / "course-progress")
+        ):
+            child = start_workbench(root, workspace_root, port, cdp_url)
+            logger.info("dev workbench: CDP available at %s", cdp_url)
+            while True:
+                time.sleep(0.5)
+                if child.poll() is not None:
+                    # A fresh child picks up current sources anyway.
+                    child = start_workbench(root, workspace_root, port, cdp_url)
+                    restart_pending.clear()
+                    continue
+                if restart_pending.is_set() and not has_active_tasks(workspace_root):
+                    restart_pending.clear()
+                    logger.info("Python sources changed; restarting workbench only")
+                    stop_workbench(child)
+                    child = start_workbench(root, workspace_root, port, cdp_url)
     except KeyboardInterrupt:
         return 0
     finally:

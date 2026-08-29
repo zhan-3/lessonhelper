@@ -13,12 +13,10 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 from playwright.sync_api import BrowserContext, Error, Playwright, Response
 
 from course_progress.capture import CaptureStore
-from course_progress.academic_client import resolve_academic_url
 from course_progress.sanitizer import sanitize_text, sanitize_url
 from course_progress.session import AcademicBrowserSession
 from course_selection.categories import CATEGORY_MENU_KEYWORDS, COURSE_CATEGORIES
 from course_selection.manual_observation import is_official_authentication_request
-
 
 TARGET_TIMETABLE = "timetable"
 TARGET_SELECTION = "selection"
@@ -279,7 +277,7 @@ class InterfaceDiscovery:
     ):
         if target not in TARGET_KEYWORDS:
             raise ValueError(f"未知发现目标：{target}")
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         self.target = target
         self.output_root = output_root / "discovery" / target / stamp
         self.store = CaptureStore(self.output_root)

@@ -7,9 +7,10 @@ the academic gateway and deliberately treats missing schedule information as
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 
 class PlanningBlockedError(ValueError):
@@ -118,9 +119,7 @@ def _overlap(left: tuple[int, int, int, tuple[int, ...], str], right: tuple[int,
     # normalized planner accepts the conservative start-period comparison.
     if weeks_a and weeks_b and not set(weeks_a).intersection(weeks_b):
         return False
-    if parity_a != "all" and parity_b != "all" and parity_a != parity_b:
-        return False
-    return True
+    return parity_a == "all" or parity_b == "all" or parity_a == parity_b
 
 
 def _snapshot_reasons(snapshot: Mapping[str, Any] | None, *, kind: str, term: str, profile_id: str,

@@ -9,7 +9,6 @@ from course_selection.deep_observation import (
     ProgressObservationResult,
     ReplayAcademicObserver,
     SelectionDiscoveryDiagnostic,
-    TimetableObservationRequest,
     TimetableObservationResult,
     TraceStore,
 )
@@ -51,7 +50,7 @@ class DeepObservationTests(unittest.TestCase):
             with self.subTest(status=result.status), tempfile.TemporaryDirectory() as directory:
                 database = WorkspaceDatabase.open(Path(directory))
                 existing = database.publish_snapshot("timetable", "2026-1", {"entries": [{"course_name": "Existing"}]}, source="test")
-                service = ObservationService(database, lambda: ReplayAcademicObserver(result))
+                service = ObservationService(database, lambda result=result: ReplayAcademicObserver(result))
                 task = service.submit("refresh-timetable", {"term": "2026-1"})
                 self.assertTrue(service.wait(task.id, 2))
                 self.assertEqual(existing["id"], database.latest_snapshot("timetable")["id"])
@@ -150,7 +149,7 @@ class DeepObservationTests(unittest.TestCase):
             with self.subTest(error=result.error), tempfile.TemporaryDirectory() as directory:
                 database = WorkspaceDatabase.open(Path(directory))
                 existing = database.publish_snapshot("progress", "2026-1", {"report": {"data_complete": True}}, source="test")
-                service = ObservationService(database, lambda: ReplayAcademicObserver(result))
+                service = ObservationService(database, lambda result=result: ReplayAcademicObserver(result))
                 task = service.submit("refresh-progress", {"term": "2026-1"})
                 self.assertTrue(service.wait(task.id, 2))
                 self.assertEqual(existing["id"], database.latest_snapshot("progress")["id"])
@@ -168,7 +167,7 @@ class DeepObservationTests(unittest.TestCase):
                 database = WorkspaceDatabase.open(Path(directory))
                 existing = database.publish_snapshot("progress", "2026-1", {"report": {"data_complete": True}}, source="test")
                 result = ProgressObservationResult.complete(payload, trace=AcademicRequestTrace.empty())
-                service = ObservationService(database, lambda: ReplayAcademicObserver(result))
+                service = ObservationService(database, lambda result=result: ReplayAcademicObserver(result))
                 task = service.submit("refresh-progress", {"baseline_version": "guide-2026"})
                 self.assertTrue(service.wait(task.id, 2))
                 self.assertEqual(TaskState.FAILED.value, service.inspect(task.id)["state"])
@@ -205,7 +204,7 @@ class DeepObservationTests(unittest.TestCase):
             with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
                 database = WorkspaceDatabase.open(Path(directory))
                 result = ManualObservationResult(status=status, error=status)
-                service = ObservationService(database, lambda: ReplayAcademicObserver(result))
+                service = ObservationService(database, lambda result=result: ReplayAcademicObserver(result))
                 task = service.submit("observe-navigation")
                 self.assertTrue(service.wait(task.id, 2))
                 self.assertEqual(expected, service.inspect(task.id)["state"])

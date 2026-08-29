@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
 
-from course_selection.deep_observation import AcademicRequestTrace, SelectionObservationResult, TimetableObservationResult
+from course_selection.deep_observation import (
+    AcademicRequestTrace,
+    SelectionObservationResult,
+    TimetableObservationResult,
+)
 from course_selection.persistence import WorkspaceDatabase
 from course_selection.single_instance import WorkspaceLock
 from course_selection.tasks import TaskState

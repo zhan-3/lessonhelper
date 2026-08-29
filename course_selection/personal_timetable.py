@@ -7,7 +7,6 @@ from html.parser import HTMLParser
 
 from .timetable import TimetableEntry
 
-
 _ALIASES = {
     "course_code": ("课程代码", "课程编号", "课程号", "course_code"),
     "course_name": ("课程名称", "课程名", "course_name"),
@@ -147,7 +146,7 @@ def parse_personal_timetable_html(html: str, *, term: str) -> tuple[TimetableEnt
     rows, headers = _find_table(html)
     entries: list[TimetableEntry] = []
     for row in rows:
-        def value(field: str) -> str:
+        def value(field: str, row=row) -> str:
             index = headers.get(field)
             return _clean(row[index]) if index is not None and index < len(row) else ""
 

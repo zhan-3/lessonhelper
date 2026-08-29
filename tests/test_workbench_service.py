@@ -1,6 +1,6 @@
+import json
 import tempfile
 import unittest
-import json
 from pathlib import Path
 
 from course_selection.persistence import WorkspaceDatabase

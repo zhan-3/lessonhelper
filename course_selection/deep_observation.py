@@ -6,13 +6,13 @@ import json
 import os
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import Any, Protocol
 
 from course_progress.sanitizer import sanitize_url
-
 
 _FIELD_NAME = re.compile(r"(?:^|[?&;])([^=&;]+)=")
 
@@ -37,7 +37,7 @@ class AcademicRequestTraceEvent:
     field_names: tuple[str, ...] = ()
 
     @classmethod
-    def from_request(cls, sequence: int, request: dict[str, Any]) -> "AcademicRequestTraceEvent":
+    def from_request(cls, sequence: int, request: dict[str, Any]) -> AcademicRequestTraceEvent:
         return cls(
             sequence=sequence,
             occurred_at=str(request.get("occurred_at") or _utc_now()),
@@ -63,11 +63,11 @@ class AcademicRequestTrace:
     events: tuple[AcademicRequestTraceEvent, ...] = ()
 
     @classmethod
-    def empty(cls) -> "AcademicRequestTrace":
+    def empty(cls) -> AcademicRequestTrace:
         return cls()
 
     @classmethod
-    def from_requests(cls, requests: Iterable[dict[str, Any]]) -> "AcademicRequestTrace":
+    def from_requests(cls, requests: Iterable[dict[str, Any]]) -> AcademicRequestTrace:
         return cls(tuple(AcademicRequestTraceEvent.from_request(index, request) for index, request in enumerate(requests, start=1)))
 
 
@@ -87,15 +87,15 @@ class TimetableObservationResult:
     error: str = ""
 
     @classmethod
-    def complete(cls, *, term: str, entries: list[dict[str, Any]], trace: AcademicRequestTrace) -> "TimetableObservationResult":
+    def complete(cls, *, term: str, entries: list[dict[str, Any]], trace: AcademicRequestTrace) -> TimetableObservationResult:
         return cls(status="complete", term=term, entries=tuple(entries), trace=trace)
 
     @classmethod
-    def incomplete(cls, error: str, *, trace: AcademicRequestTrace | None = None) -> "TimetableObservationResult":
+    def incomplete(cls, error: str, *, trace: AcademicRequestTrace | None = None) -> TimetableObservationResult:
         return cls(status="incomplete", error=error, trace=trace or AcademicRequestTrace.empty())
 
     @classmethod
-    def cancelled(cls, *, trace: AcademicRequestTrace | None = None) -> "TimetableObservationResult":
+    def cancelled(cls, *, trace: AcademicRequestTrace | None = None) -> TimetableObservationResult:
         return cls(status="cancelled", trace=trace or AcademicRequestTrace.empty())
 
     def snapshot_payload(self) -> dict[str, Any]:
@@ -120,11 +120,11 @@ class SelectionObservationResult:
     error: str = ""
 
     @classmethod
-    def complete(cls, payload: dict[str, Any], *, trace: AcademicRequestTrace) -> "SelectionObservationResult":
+    def complete(cls, payload: dict[str, Any], *, trace: AcademicRequestTrace) -> SelectionObservationResult:
         return cls(status="complete", payload=payload, trace=trace)
 
     @classmethod
-    def incomplete(cls, error: str, *, trace: AcademicRequestTrace | None = None) -> "SelectionObservationResult":
+    def incomplete(cls, error: str, *, trace: AcademicRequestTrace | None = None) -> SelectionObservationResult:
         return cls(status="incomplete", trace=trace or AcademicRequestTrace.empty(), error=error)
 
 
@@ -151,15 +151,15 @@ class ProgressObservationResult:
     error: str = ""
 
     @classmethod
-    def complete(cls, payload: dict[str, Any], *, trace: AcademicRequestTrace) -> "ProgressObservationResult":
+    def complete(cls, payload: dict[str, Any], *, trace: AcademicRequestTrace) -> ProgressObservationResult:
         return cls(status="complete", payload=payload, trace=trace)
 
     @classmethod
-    def incomplete(cls, error: str, *, trace: AcademicRequestTrace | None = None) -> "ProgressObservationResult":
+    def incomplete(cls, error: str, *, trace: AcademicRequestTrace | None = None) -> ProgressObservationResult:
         return cls(status="incomplete", trace=trace or AcademicRequestTrace.empty(), error=error)
 
     @classmethod
-    def cancelled(cls, *, trace: AcademicRequestTrace | None = None) -> "ProgressObservationResult":
+    def cancelled(cls, *, trace: AcademicRequestTrace | None = None) -> ProgressObservationResult:
         return cls(status="cancelled", trace=trace or AcademicRequestTrace.empty())
 
 

@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 _SENSITIVE_KEY = re.compile(
     r"(?:password|passwd|secret|token|cookie|authorization|credential|"
     r"student[_ -]?(?:number|no|name)|real[_ -]?name|response[_ -]?(?:html|body)|"
@@ -71,7 +70,7 @@ class WorkspaceDatabase:
         self.connection.row_factory = sqlite3.Row
 
     @classmethod
-    def open(cls, root: Path | str) -> "WorkspaceDatabase":
+    def open(cls, root: Path | str) -> WorkspaceDatabase:
         root = Path(root)
         root.mkdir(parents=True, exist_ok=True)
         path = root / "workbench.sqlite3"

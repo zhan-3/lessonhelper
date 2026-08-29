@@ -7,10 +7,10 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 from playwright.sync_api import Browser, BrowserContext, Error, Playwright
+from typing_extensions import Self
 
-from .explorer import _is_login_url, launch_browser_context, resolve_profile_dir
 from .credentials import AUTH_STATE_FILE_NAME, credential_store
-
+from .explorer import _is_login_url, launch_browser_context, resolve_profile_dir
 
 WEBVPN_CAS_ENTRY_URL = (
     "https://webvpn.hitwh.edu.cn/login?cas_login=true#!/service"
@@ -98,7 +98,7 @@ class AcademicBrowserSession:
         self.context: BrowserContext | None = None
         self.actual_browser_name = "chromium"
 
-    def __enter__(self) -> "AcademicBrowserSession":
+    def __enter__(self) -> Self:
         if self.cdp_url:
             browser = self.playwright.chromium.connect_over_cdp(self.cdp_url)
             if not browser.contexts:
@@ -124,12 +124,9 @@ class AcademicBrowserSession:
                 print("登录状态：已有状态无法读取，本次从登录页重新认证。")
                 self.context = self.browser.new_context(no_viewport=True)
             return self
-        try:
-            self.context = launch_browser_context(
-                self.playwright, "chromium", self.profile_dir
-            )
-        except Error:
-            raise
+        self.context = launch_browser_context(
+            self.playwright, "chromium", self.profile_dir
+        )
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:

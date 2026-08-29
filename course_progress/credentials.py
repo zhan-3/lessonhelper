@@ -5,11 +5,10 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+from collections.abc import Callable
 from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
-
 
 CREDENTIALS_FILE_NAME = "webvpn-login.dpapi"
 AUTH_STATE_FILE_NAME = "webvpn-auth-state.json"

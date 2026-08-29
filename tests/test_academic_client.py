@@ -10,7 +10,6 @@ from course_progress.collector import FixedGradeReader
 from course_selection.deep_observation import ProgressObservationRequest
 from course_selection.gateway import PlaywrightAcademicGateway
 
-
 ENTRY_HTML = """
 <select id="xnxqid"><option value="2025-20261">2025-2026 春季</option></select>
 """

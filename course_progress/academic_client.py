@@ -6,8 +6,9 @@ parameters; this client performs no menu discovery or control clicking.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 from course_progress.explorer import _is_login_url

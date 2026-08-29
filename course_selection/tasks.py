@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import queue
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from .deep_observation import (
     ManualObservationRequest,
@@ -238,7 +242,7 @@ class ObservationService:
                             try:
                                 failed_gateway.close()
                             except Exception:
-                                pass
+                                logger.debug("close of failed gateway ignored")
                 continue
             if identity is None:
                 if self.gateway:
@@ -254,7 +258,9 @@ class ObservationService:
             operation = str(task.get("operation") or "")
             timer = threading.Timer(
                 TASK_TIMEOUT_SECONDS.get(operation, 180),
-                lambda: self._expired.add(identity),
+                # Bind the current identity: the timer fires after the loop
+                # moves on, so a plain closure would timeout the wrong task.
+                lambda identity=identity: self._expired.add(identity),
             )
             timer.daemon = True
             timer.start()

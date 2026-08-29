@@ -4,7 +4,6 @@ import unittest
 from pathlib import Path
 
 import course_progress.session as session_module
-
 from course_progress.capture import CaptureStore, score_candidate
 from course_progress.cli import build_parser
 from course_progress.credentials import CredentialStore, LoginCredentials
@@ -23,15 +22,14 @@ from course_progress.sanitizer import (
     sanitize_url,
 )
 from course_progress.session import (
-    AcademicBrowserSession,
-    WebVpnSessionExpiredError,
     _PORTAL_OPEN_CAPTURE,
     _PORTAL_OPEN_READ,
-    _PORTAL_OPEN_RESTORE,
+    WEBVPN_USER_INFO_URL,
+    AcademicBrowserSession,
+    WebVpnSessionExpiredError,
     _is_legacy_webvpn_login,
     _is_webvpn_credential_page,
     webvpn_api_get,
-    WEBVPN_USER_INFO_URL,
 )
 
 
@@ -94,7 +92,7 @@ class AcademicBrowserSessionTests(unittest.TestCase):
                 return None
 
         class Context:
-            pages = []
+            pages = ()
 
             def storage_state(self, **_kwargs):
                 return None
@@ -150,7 +148,6 @@ class AcademicBrowserSessionTests(unittest.TestCase):
 
             def goto(self, url, **_kwargs):
                 self.url = url
-                return None
 
             def wait_for_timeout(self, *_args):
                 # The kick arrives during the poll loop, after the pre-loop
@@ -203,7 +200,6 @@ class AcademicBrowserSessionTests(unittest.TestCase):
                     )
                 else:
                     self.url = "https://webvpn.hitwh.edu.cn/http/7772/home"
-                return None
 
             def wait_for_timeout(self, *_args):
                 return None

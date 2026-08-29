@@ -5,17 +5,16 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Callable, Iterable
 
 from .academic_client import (
     AcademicContractError,
     AuthenticatedAcademicClient,
 )
 from .progress import AcademicRecord, parse_grade_html
-
 
 GRADE_ENDPOINT = "/cjcx/queryQmcj"
 

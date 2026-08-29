@@ -123,7 +123,7 @@ class SelectionEntryTests(unittest.TestCase):
         observation = classify_selection_html(
             200,
             empty,
-            now=datetime(2026, 8, 25, 12, 0),
+            now=datetime(2026, 8, 25, 12, 0).astimezone(),
         )
 
         self.assertEqual(observation.status, STATUS_ROUND_NOT_OPEN)

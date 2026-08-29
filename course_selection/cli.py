@@ -22,9 +22,9 @@ from course_progress.explorer import (
 )
 
 from . import config
+from .categories import CATEGORY_LABELS
 from .discovery import TARGET_SELECTION, TARGET_TIMETABLE, AcademicInterfaceDiscovery
 from .notice import (
-    CATEGORY_LABELS,
     load_notice,
     notice_selection_categories,
     notice_selection_window_map,
@@ -399,7 +399,7 @@ def _try_close_dialog(page) -> bool:
                 page.wait_for_timeout(500)
                 return True
     except Exception:
-        pass
+        logger.debug("dialog close skipped")
     return False
 
 
@@ -480,7 +480,7 @@ def _go_back(page) -> None:
             back_btn.click()
             page.wait_for_timeout(1000)
     except Exception:
-        pass
+        logger.debug("go-back click skipped")
 
 
 def _do_booking(page, course_name: str) -> bool:
@@ -561,7 +561,7 @@ def _do_booking(page, course_name: str) -> bool:
                     else:
                         logger.info("      弹窗: %s", content[:60])
             except Exception:
-                pass
+                logger.debug("dialog check skipped")
 
             seats = page.locator("input[type='radio']")
             if seats.count() == 0:
@@ -615,7 +615,7 @@ def _run_cas_book(
     click.echo()
     click.echo("=" * 60)
     click.echo("  开放式实验系统 - 自动预约脚本 (CAS SSO)")
-    click.echo(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    click.echo(f"  {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S')}")
     click.echo("=" * 60)
 
     chrome_path = _get_chrome_path()
