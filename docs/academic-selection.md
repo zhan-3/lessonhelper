@@ -5,15 +5,17 @@
 启动本地页面：
 
 ```powershell
-uv run python -m course_selection
+uv run course-selection workbench
 ```
+
+（兼容旧写法 `uv run python -m course_selection workbench`。）
 
 ## 开发时保持浏览器与实时监控
 
 开发时使用以下命令。它启动一个长期持有 profile 的 Chromium，并在 Python 源码变化后只重启工作台进程；浏览器标签页、登录状态和 DevTools 连接不会重启：
 
 ```powershell
-uv run python -m course_selection dev-workbench
+uv run course-selection dev-workbench
 ```
 
 DevTools/CDP 仅监听本机 `127.0.0.1:9222`，可在另一终端实时附加：
@@ -31,7 +33,7 @@ playwright-cli -s=academic-live requests
 首次使用可配置统一身份认证自动登录：
 
 ```powershell
-uv run python -m course_selection configure-login
+uv run course-selection configure-login
 ```
 
 命令在终端中读取一次学号和密码（密码输入不会显示），并使用 Windows
@@ -59,7 +61,7 @@ WebVPN 会话状态；后续优先直接复用，失效时才在
 配置学生画像（当前用户为 2025 级）：
 
 ```powershell
-uv run python -m course_selection configure-profile --grade 2025
+uv run course-selection configure-profile --grade 2025
 ```
 
 只有“已确认通知 + 学生画像年级”共同匹配出的选课类别会进入查询白名单；退课、申请和纸质/邮件办理事项会被排除。
@@ -67,7 +69,7 @@ uv run python -m course_selection configure-profile --grade 2025
 探索已确认通知对应的教务选课入口：
 
 ```powershell
-uv run python -m course_selection explore-entry
+uv run course-selection explore-entry
 ```
 
 命令会复用 `.private/course-progress/` 的教务浏览器 profile。登录完成后，请在可见浏览器中手动打开通知对应的“学生选课”页面；程序只监听该页面产生的 Fetch/XHR JSON，并将脱敏结果保存到：
@@ -83,8 +85,8 @@ uv run python -m course_selection explore-entry
 自动分析课表或选课入口：
 
 ```powershell
-uv run python -m course_selection discover-timetable
-uv run python -m course_selection discover-selection
+uv run course-selection discover-timetable
+uv run course-selection discover-selection
 ```
 
 两个命令默认启动 Playwright 自带 Chromium 的临时可见会话，并加载上次保存的
@@ -97,7 +99,7 @@ WebVPN 状态；传入 `--browser chrome` 才会显式使用系统 Chrome。
 维护者可以运行结构化的学生画像接口分析器：
 
 ```powershell
-uv run python -m course_selection analyze-interface --target student-profile
+uv run course-selection analyze-interface --target student-profile
 ```
 
 该命令复用本机 DPAPI 登录和唯一的可见 Chromium，只允许 GET/HEAD/OPTIONS 与精确的
@@ -134,7 +136,7 @@ WebVPN storage state 失效时，旧入口可能显示 EasyConnect `#!/login`。
 
 ## 长期运行工作台
 
-请在独立终端中运行 `uv run python -m course_selection workbench`，并保持该进程运行。工作台默认离线启动，只恢复本地画像、通知和教务快照；只有点击“连接教务”或某个明确的刷新按钮才会访问学校系统。“连接教务”仅验证教务会话，不会隐式刷新课表或待选课程。
+请在独立终端中运行 `uv run course-selection workbench`，并保持该进程运行。工作台默认离线启动，只恢复本地画像、通知和教务快照；只有点击“连接教务”或某个明确的刷新按钮才会访问学校系统。“连接教务”仅验证教务会话，不会隐式刷新课表或待选课程。
 
 待选课程以学生画像版本、学期、通知版本和查询契约版本为上下文保存在本地。上下文未变化时直接使用最近完整快照；“强制刷新待选课程”会在确认后读取白名单内全部类别和分页。每个上下文保留最近三份完整待选课程快照。选课执行前只重新读取目标类别和来源页，按真实 `rwh` 验证并获取新令牌。
 

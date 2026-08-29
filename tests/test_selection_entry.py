@@ -192,12 +192,13 @@ class SelectionEntryTests(unittest.TestCase):
         self.assertEqual(contract.response_fields, ("courseId", "courseName"))
 
     def test_selection_cli_requires_a_confirmed_notice(self):
-        from course_selection.cli import build_parser
+        from course_selection.cli import explore_entry_cmd
 
-        args = build_parser().parse_args(["explore-entry", "--wait-seconds", "3"])
+        context = explore_entry_cmd.make_context(
+            "explore-entry", ["--wait-seconds", "3"]
+        )
 
-        self.assertEqual(args.command, "explore-entry")
-        self.assertEqual(args.wait_seconds, 3)
+        self.assertEqual(3, context.params["wait_seconds"])
 
     def test_requires_notice_specific_text_before_accepting_a_selection_page(self):
         class Notice:

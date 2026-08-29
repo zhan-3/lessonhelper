@@ -3,27 +3,27 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from course_selection.cli import build_parser
-from course_selection.dev_workbench import has_active_tasks, source_mtimes
+from click.testing import CliRunner
+from watchfiles import Change, PythonFilter
+
+from course_selection.cli import dev_workbench_cmd
+from course_selection.dev_workbench import WATCHED_PACKAGES, has_active_tasks
 
 
 class DevWorkbenchTests(unittest.TestCase):
     def test_cli_exposes_fixed_loopback_devtools_port(self):
-        args = build_parser().parse_args(["dev-workbench"])
-        self.assertEqual("dev-workbench", args.command)
-        self.assertEqual(9222, args.debug_port)
-        self.assertEqual(5000, args.port)
+        params = {param.name: param for param in dev_workbench_cmd.params}
+        self.assertEqual(9222, params["debug_port"].default)
+        self.assertEqual(5000, params["port"].default)
 
-    def test_source_watch_ignores_private_data_and_tracks_python(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "course_selection").mkdir()
-            (root / "course_progress").mkdir()
-            source = root / "course_selection" / "gateway.py"
-            source.write_text("x = 1", encoding="utf-8")
-            (root / ".private" / "course_selection").mkdir(parents=True)
-            (root / ".private" / "course_selection" / "ignored.py").write_text("x = 2", encoding="utf-8")
-            self.assertEqual({source}, set(source_mtimes(root)))
+    def test_source_watch_targets_packages_and_tracks_python_only(self):
+        # The watcher watches only the two package directories, so anything
+        # outside them (for example .private/) can never trigger a restart.
+        self.assertEqual(("course_selection", "course_progress"), WATCHED_PACKAGES)
+        watch_filter = PythonFilter()
+        self.assertTrue(watch_filter(Change.added, "course_selection/gateway.py"))
+        self.assertTrue(watch_filter(Change.modified, "course_progress/explorer.py"))
+        self.assertFalse(watch_filter(Change.modified, "course_selection/data.json"))
 
     def test_active_task_check_defers_restart(self):
         with tempfile.TemporaryDirectory() as directory:

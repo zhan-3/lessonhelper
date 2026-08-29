@@ -44,3 +44,6 @@ frontend/vite.config.d.ts
 .omo/
 .impeccable/
 .scratch/verify/
+
+# Local environment overrides (may contain secrets)
+.env

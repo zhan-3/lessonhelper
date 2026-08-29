@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-import threading
+import signal
 import time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from werkzeug.serving import make_server
+from waitress import serve
 
+from . import config
 from .gateway import PlaywrightAcademicGateway
 from .single_instance import WorkspaceLock
 from .workbench import create_workbench_app
+
+logger = logging.getLogger("course-selection.application")
 
 
 def activate_running_workbench(url: str) -> bool:
@@ -48,7 +52,7 @@ def run_workbench_application(root: Path, port: int) -> int:
     gateway_factory = lambda: PlaywrightAcademicGateway(
         root.parent / "course-progress",
         root,
-        cdp_url=os.environ.get("ACADEMIC_BROWSER_CDP_URL") or None,
+        cdp_url=config.ACADEMIC_BROWSER_CDP_URL,
     )
     app = create_workbench_app(
         root,
@@ -58,32 +62,25 @@ def run_workbench_application(root: Path, port: int) -> int:
     )
     service = app.extensions["observation_service"]
     database = app.extensions["workspace_database"]
-    server = make_server("127.0.0.1", port, app, threaded=True)
-    server_thread = threading.Thread(
-        target=server.serve_forever,
-        name="local-workbench-http",
-        daemon=True,
-    )
-    server_thread.start()
+
+    # Offline startup: opening the local shell must not authenticate or
+    # contact any university endpoint. Remote work begins only after an
+    # explicit user action.
+    shell = service.submit("launch-shell", {"workbench_url": url})
+    if not service.wait(shell.id, 30):
+        logger.error("visible Chromium workbench did not start within 30 seconds")
+        return 1
+    result = service.inspect(shell.id) or {}
+    if result.get("state") != "succeeded":
+        logger.error("visible Chromium workbench failed to start: %s", result.get("error"))
+        return 1
+
     try:
-        # Offline startup: opening the local shell must not authenticate or
-        # contact any university endpoint. Remote work begins only after an
-        # explicit user action.
-        shell = service.submit("launch-shell", {"workbench_url": url})
-        if not service.wait(shell.id, 30):
-            raise TimeoutError("visible Chromium workbench did not start within 30 seconds")
-        result = service.inspect(shell.id) or {}
-        if result.get("state") != "succeeded":
-            raise RuntimeError(result.get("error") or "visible Chromium workbench failed to start")
-        # Closing Chromium does not terminate the local workspace. The next
-        # explicit remote operation can create a new browser session.
-        while True:
-            time.sleep(1)
+        logger.info("Workbench serving at %s (waitress)", url)
+        serve(app, host="127.0.0.1", port=port, _quiet=True)
     except KeyboardInterrupt:
         return 0
     finally:
-        server.shutdown()
-        server_thread.join(timeout=5)
         service.close()
         database.close()
         lock.release()

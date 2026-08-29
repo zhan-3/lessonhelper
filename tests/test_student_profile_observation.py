@@ -5,7 +5,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from course_selection.cli import build_parser
+from click.testing import CliRunner
+
+from course_selection.cli import analyze_interface_cmd
 from course_selection.student_profile_observation import (
     _validated_academic_entry,
     cleanup_expired_analyses,
@@ -15,14 +17,14 @@ from course_selection.student_profile_observation import (
 
 class StudentProfileObservationTests(unittest.TestCase):
     def test_cli_exposes_only_the_student_profile_target(self):
-        args = build_parser().parse_args(
-            ["analyze-interface", "--target", "student-profile", "--wait-seconds", "10"]
+        context = analyze_interface_cmd.make_context(
+            "analyze-interface",
+            ["--target", "student-profile", "--wait-seconds", "10"],
         )
-        self.assertEqual("analyze-interface", args.command)
-        self.assertEqual("student-profile", args.target)
-        self.assertEqual(10, args.wait_seconds)
-        with self.assertRaises(SystemExit):
-            build_parser().parse_args(["analyze-interface", "--target", "selection"])
+        self.assertEqual("student-profile", context.params["target"])
+        self.assertEqual(10, context.params["wait_seconds"])
+        result = CliRunner().invoke(analyze_interface_cmd, ["--target", "selection"])
+        self.assertNotEqual(0, result.exit_code)
 
     def test_candidate_keeps_field_structure_without_identity_values(self):
         payload = {

@@ -2,30 +2,25 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from watchfiles import PythonFilter, watch
 
 from course_progress.explorer import launch_browser_context, resolve_profile_dir
 
-WATCHED_PACKAGES = (Path("course_selection"), Path("course_progress"))
+logger = logging.getLogger("course-selection.dev-workbench")
+
+WATCHED_PACKAGES = ("course_selection", "course_progress")
 ACTIVE_TASK_STATES = ("queued", "connecting", "waiting_for_authentication", "reading", "observing", "cancel_requested")
-
-
-def source_mtimes(root: Path) -> dict[Path, int]:
-    """Return modification timestamps for Python source, excluding private data."""
-    return {
-        path: path.stat().st_mtime_ns
-        for package in WATCHED_PACKAGES
-        for path in (root / package).rglob("*.py")
-        if path.is_file()
-    }
 
 
 def has_active_tasks(workspace_root: Path) -> bool:
@@ -82,6 +77,27 @@ def run_dev_workbench(root: Path, workspace_root: Path, port: int, debug_port: i
     original_debug_port = os.environ.get("ACADEMIC_BROWSER_DEBUG_PORT")
     os.environ["ACADEMIC_BROWSER_DEBUG_PORT"] = str(debug_port)
     child: subprocess.Popen | None = None
+    # Event-driven source watching: a background thread waits on OS-level file
+    # notifications (watchfiles) and only signals Python-file changes.  The
+    # main loop stays cheap — it just polls child status and the flag.
+    restart_pending = threading.Event()
+    stop_watching = threading.Event()
+
+    def observe_changes() -> None:
+        try:
+            for _changes in watch(
+                *(root / package for package in WATCHED_PACKAGES),
+                watch_filter=PythonFilter(),
+                stop_event=stop_watching,
+                debounce=400,
+                step=50,
+            ):
+                restart_pending.set()
+        except OSError as error:
+            logger.warning("source watcher stopped: %s", error)
+
+    watcher = threading.Thread(target=observe_changes, name="source-watcher", daemon=True)
+    watcher.start()
     try:
         with sync_playwright() as playwright:
             # Browser Host ownership intentionally lives here, not in a child.
@@ -89,25 +105,23 @@ def run_dev_workbench(root: Path, workspace_root: Path, port: int, debug_port: i
                 playwright, "chromium", resolve_profile_dir(root / ".private" / "course-progress")
             ):
                 child = start_workbench(root, workspace_root, port, cdp_url)
-                known = source_mtimes(root)
-                restart_pending = False
-                print(f"dev workbench: CDP available at {cdp_url}")
+                logger.info("dev workbench: CDP available at %s", cdp_url)
                 while True:
                     time.sleep(0.5)
-                    current = source_mtimes(root)
-                    restart_pending = restart_pending or current != known
-                    known = current
                     if child.poll() is not None:
+                        # A fresh child picks up current sources anyway.
                         child = start_workbench(root, workspace_root, port, cdp_url)
-                        restart_pending = False
-                    if restart_pending and not has_active_tasks(workspace_root):
-                        print("dev workbench: Python sources changed; restarting workbench only")
+                        restart_pending.clear()
+                        continue
+                    if restart_pending.is_set() and not has_active_tasks(workspace_root):
+                        restart_pending.clear()
+                        logger.info("Python sources changed; restarting workbench only")
                         stop_workbench(child)
                         child = start_workbench(root, workspace_root, port, cdp_url)
-                        restart_pending = False
     except KeyboardInterrupt:
         return 0
     finally:
+        stop_watching.set()
         if child is not None:
             stop_workbench(child)
         if original_debug_port is None:

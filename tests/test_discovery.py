@@ -1,7 +1,16 @@
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from course_selection.cli import build_parser
+from click.testing import CliRunner
+
+from course_selection.cli import (
+    analyze_interface_cmd,
+    configure_login_cmd,
+    configure_profile_cmd,
+    discover_selection_cmd,
+    discover_timetable_cmd,
+)
 from course_selection.discovery import (
     TARGET_SELECTION,
     TARGET_TIMETABLE,
@@ -151,30 +160,33 @@ class InterfaceDiscoveryTests(unittest.TestCase):
         )
 
     def test_cli_exposes_both_automatic_discovery_commands(self):
-        timetable = build_parser().parse_args(["discover-timetable"])
-        selection = build_parser().parse_args(["discover-selection"])
+        runner = CliRunner()
+        with mock.patch("course_selection.cli._run_discovery") as discovery:
+            result = runner.invoke(discover_timetable_cmd, [], catch_exceptions=False)
+            self.assertEqual(0, result.exit_code)
+            result = runner.invoke(discover_selection_cmd, [], catch_exceptions=False)
+            self.assertEqual(0, result.exit_code)
 
-        self.assertEqual(timetable.discovery_target, TARGET_TIMETABLE)
-        self.assertEqual(selection.discovery_target, TARGET_SELECTION)
-        self.assertEqual(selection.max_clicks, 8)
-        self.assertFalse(selection.persistent_session)
-        self.assertIsNone(selection.grade)
+        timetable_call, selection_call = discovery.call_args_list
+        self.assertEqual(TARGET_TIMETABLE, timetable_call.kwargs["target"])
+        self.assertEqual(TARGET_SELECTION, selection_call.kwargs["target"])
+        self.assertEqual(8, selection_call.kwargs["max_clicks"])
+        self.assertFalse(selection_call.kwargs["persistent_session"])
+        self.assertIsNone(selection_call.kwargs["grade"])
         self.assertEqual(
-            str(selection.notice),
             str(Path(".private") / "academic-selection" / "selection-notice.json"),
+            str(selection_call.kwargs["notice"]),
         )
 
-        configure = build_parser().parse_args(
-            ["configure-login", "--username", "2025000000"]
+        configure = configure_login_cmd.make_context(
+            "configure-login", ["--username", "2025000000"]
         )
-        self.assertEqual(configure.command, "configure-login")
-        self.assertEqual(configure.username, "2025000000")
+        self.assertEqual("2025000000", configure.params["username"])
 
-        profile = build_parser().parse_args(
-            ["configure-profile", "--grade", "2025"]
+        profile = configure_profile_cmd.make_context(
+            "configure-profile", ["--grade", "2025"]
         )
-        self.assertEqual(profile.command, "configure-profile")
-        self.assertEqual(profile.grade, "2025")
+        self.assertEqual("2025", profile.params["grade"])
 
     def test_finds_new_academic_system_in_portal_catalog(self):
         payload = {
