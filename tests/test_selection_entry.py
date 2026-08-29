@@ -40,6 +40,9 @@ class SelectionEntryTests(unittest.TestCase):
 
         self.assertEqual(len(sections), 1)
         self.assertEqual(sections[0].identity, "TASK-9")
+        self.assertEqual(sections[0].action_rwh, "TASK-9")
+        self.assertEqual(sections[0].action_name, "saveXsxk1")
+        self.assertTrue(sections[0].execution_ready)
         self.assertEqual(sections[0].course_code, "GE101")
         self.assertEqual(sections[0].teacher, "李老师")
         self.assertEqual(sections[0].selected_count, "18")
@@ -55,6 +58,14 @@ class SelectionEntryTests(unittest.TestCase):
 
         self.assertEqual(section.teacher, "李可欣")
         self.assertEqual(section.time, "[10-17周]星期一第3,4节")
+
+    def test_fallback_identity_is_not_marked_executable(self):
+        html = self.COURSE_HTML.replace("saveXsxk1('TASK-9')", "showCourse('GE101')")
+
+        section = extract_course_sections_from_html(html)[0]
+
+        self.assertFalse(section.execution_ready)
+        self.assertEqual(section.action_rwh, "")
 
     def test_reads_page_count_and_does_not_flatten_composite_capacity(self):
         html = self.COURSE_HTML.replace(

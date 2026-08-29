@@ -58,6 +58,10 @@ class SelectionCourseSection:
     requirements: str = ""
     selected_count: str = ""
     capacity_count: str = ""
+    # Only a page-provided saveXsxk identity may drive execution.
+    action_rwh: str = ""
+    action_name: str = ""
+    execution_ready: bool = False
 
 
 @dataclass(frozen=True)
@@ -260,8 +264,14 @@ def extract_course_sections_from_html(html: str) -> tuple[SelectionCourseSection
         class_info = value("上课信息")
         selected_count, capacity_count = _split_capacity(value("已选/容量"))
         attribute_text = " ".join(cell.attributes for cell in row)
-        task_match = re.search(r"saveXsxk\d?\(['\"]([^'\"]+)", attribute_text)
-        identity = task_match.group(1) if task_match else "|".join(
+        action_match = re.search(
+            r"\b(saveXsxk\d?)\s*\(\s*['\"]([^'\"]+)['\"]",
+            attribute_text,
+            flags=re.IGNORECASE,
+        )
+        action_name = action_match.group(1) if action_match else ""
+        action_rwh = action_match.group(2) if action_match else ""
+        identity = action_rwh or "|".join(
             part for part in (course_code, name, class_info) if part
         )
         if identity in seen:
@@ -287,6 +297,9 @@ def extract_course_sections_from_html(html: str) -> tuple[SelectionCourseSection
                 requirements=value("选课要求"),
                 selected_count=selected_count,
                 capacity_count=capacity_count,
+                action_rwh=action_rwh,
+                action_name=action_name,
+                execution_ready=bool(action_rwh),
             )
         )
     return tuple(sections)
