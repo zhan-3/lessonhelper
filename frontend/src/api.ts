@@ -19,4 +19,5 @@ export type WorkbenchState = Omit<GeneratedWorkbenchState, "active_task" | "snap
   academic_session: {
     state: string; browser?: string; webvpn?: string; last_verified_at?: string;
   };
+  capabilities?: { development_diagnostics?: boolean };
 };

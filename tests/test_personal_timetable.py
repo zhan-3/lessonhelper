@@ -195,7 +195,8 @@ class PersonalTimetableParserTests(unittest.TestCase):
         self.assertEqual(1, len(result.entries))
         endpoint = session.open_calls[0][0]
         self.assertEqual("/kbcx/queryGrkb", endpoint.split("/http/abc123", 1)[1])
-        self.assertEqual({"url": endpoint}, page.evaluate_calls[0][1])
+        self.assertEqual(endpoint, page.evaluate_calls[0][1]["url"])
+        self.assertEqual({}, page.evaluate_calls[0][1]["overrides"])
         self.assertTrue(result.trace.events[0].url.endswith("/kbcx/queryGrkb"))
         self.assertEqual(
             ("fhlj", "xnxq"), result.trace.events[1].field_names

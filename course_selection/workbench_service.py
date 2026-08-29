@@ -171,7 +171,7 @@ class WorkbenchService:
 
         result: dict[str, Any] = {
             "login_configuration": self.login_configuration(),
-            "profile": self.database.current_profile(),
+            "profile": self.effective_profile(),
             "confirmed_notice": self.database.confirmed_notice(),
             "snapshots": {"selection": selection, "timetable": timetable, "progress": progress_snapshot},
             "snapshot_changes": {
@@ -199,8 +199,20 @@ class WorkbenchService:
             result["csrf_token"] = csrf_token
         return result
 
+    def effective_profile(self) -> dict[str, Any] | None:
+        """Student facts with grade derived from the ID prefix when not saved."""
+        profile = self.database.current_profile()
+        if profile is not None:
+            return dict(profile)
+        masked = str((self.login_configuration() or {}).get("masked_username", ""))
+        prefix = masked[:4]
+        if prefix.isdigit() and len(prefix) == 4:
+            return {"grade": prefix}
+        return None
+
     def refresh_context(self) -> dict[str, Any]:
-        profile, notice = self.database.current_profile(), self.database.confirmed_notice()
+        profile = self.effective_profile()
+        notice = self.database.confirmed_notice()
         timetable = self.database.latest_snapshot("timetable")
         windows = (notice or {}).get("windows", [])
         grade = str((profile or {}).get("grade", ""))

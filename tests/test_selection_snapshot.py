@@ -39,10 +39,12 @@ class _Frame:
 
     def evaluate(self, _script, arguments):
         self.calls.append(arguments)
+        category = arguments["overrides"]["pageXklb"]
+        page = arguments["overrides"].get("pageNo")
         return {
             "status": 200,
             "url": "https://academic.example/xsxk/queryXsxkList",
-            "requestBody": f"pageXklb={arguments['category']}&pageXnxq=2026-1",
+            "requestBody": f"pageXklb={category}&pageXnxq=2026-1" + (f"&pageNo={page}" if page else ""),
             "body": self.html,
         }
 
@@ -54,6 +56,9 @@ class _Page:
 
     def goto(self, url, **_kwargs):
         self.urls.append(url)
+
+    def evaluate(self, script, arguments):
+        return self.main_frame.evaluate(script, arguments)
 
     def is_closed(self):
         return False
@@ -310,7 +315,8 @@ class SelectionSnapshotTests(unittest.TestCase):
                 )
 
         self.assertEqual("interface_unconfirmed", observed.status)
-        self.assertEqual(0, observed.diagnostic["captures"])
+        self.assertIn("reason", observed.diagnostic)
+        self.assertNotIn("captures", observed.diagnostic)
 
 
 if __name__ == "__main__":

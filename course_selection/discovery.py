@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 from playwright.sync_api import BrowserContext, Error, Playwright, Response
 
 from course_progress.capture import CaptureStore
-from course_progress.collector import resolve_academic_url
+from course_progress.academic_client import resolve_academic_url
 from course_progress.sanitizer import sanitize_text, sanitize_url
 from course_progress.session import AcademicBrowserSession
 from course_selection.categories import CATEGORY_MENU_KEYWORDS, COURSE_CATEGORIES

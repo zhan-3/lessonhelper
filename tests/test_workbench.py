@@ -744,6 +744,17 @@ class WorkbenchApiTests(unittest.TestCase):
             app.extensions["observation_service"].close()
             app.extensions["workspace_database"].close()
 
+    def test_production_capability_rejects_manual_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_workbench_app(Path(directory), gateway_factory=FakeGateway, development_diagnostics=False)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]}
+            self.assertFalse(state["capabilities"]["development_diagnostics"])
+            self.assertEqual(400, client.post("/api/tasks", json={"operation": "observe-navigation"}, headers=headers).status_code)
+            app.extensions["observation_service"].close()
+            app.extensions["workspace_database"].close()
+
     def test_read_only_plan_is_persisted_without_starting_gateway(self):
         with tempfile.TemporaryDirectory() as directory:
             gateway = FakeGateway()
@@ -764,9 +775,13 @@ class WorkbenchApiTests(unittest.TestCase):
     def test_manual_navigation_observation_can_be_finished_through_api(self):
         with tempfile.TemporaryDirectory() as directory:
             gateway = ManualObservationGateway()
-            app = create_workbench_app(Path(directory), gateway_factory=lambda: gateway)
+            app = create_workbench_app(
+                Path(directory), gateway_factory=lambda: gateway,
+                development_diagnostics=True,
+            )
             client = app.test_client()
             state = client.get("/api/state").get_json()
+            self.assertTrue(state["capabilities"]["development_diagnostics"])
             headers = {"Origin": "http://localhost", "Host": "localhost", "X-CSRF-Token": state["csrf_token"]}
             created = client.post("/api/tasks", json={"operation": "observe-navigation"}, headers=headers)
             self.assertEqual(202, created.status_code)

@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlencode
 
 from playwright.sync_api import Error
 
+from course_progress.academic_client import AuthenticatedAcademicClient
 from course_progress.sanitizer import sanitize_request_body, sanitize_url
 
 from .categories import CATEGORY_LABELS
@@ -28,42 +29,6 @@ SELECTION_ENTRY_URL = (
     "77726476706e69737468656265737421fae0558f693861446900c7a99c406d3667/"
     "xsxk/queryXsxk"
 )
-
-_FETCH_SELECTION_PAGE = """
-async ({url, category, semesterLabel, pageNo, pageCount}) => {
-  const form = document.querySelector('form#queryform, form[name="queryform"]');
-  if (!form) throw new Error('未找到选课查询表单');
-  const parameters = new URLSearchParams(new FormData(form));
-  parameters.set('rwh', '');
-  parameters.set('pageXklb', category);
-  if (pageNo !== null) {
-    parameters.set('pageNo', String(pageNo));
-    parameters.set('pageSize', '20');
-    parameters.set('pageCount', String(pageCount));
-  } else {
-    parameters.delete('pageNo');
-    parameters.delete('pageSize');
-    parameters.delete('pageCount');
-  }
-  const semester = Array.from(form.querySelectorAll('select[name="pageXnxq"] option'))
-    .find(option => option.textContent.replace(/[\\s年]|学期/g, '') === semesterLabel);
-  if (!semester) throw new Error(`通知学期不在页面选项中: ${semesterLabel}`);
-  parameters.set('pageXnxq', semester.value);
-  const response = await fetch(url, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: parameters.toString(),
-    redirect: 'follow',
-  });
-  return {
-    status: response.status,
-    url: response.url,
-    requestBody: parameters.toString(),
-    body: await response.text(),
-  };
-}
-"""
 
 
 class SelectionContractError(RuntimeError):
@@ -112,15 +77,12 @@ class VerifiedSelectionQueryAdapter:
         if not categories or not semester_label:
             return {"status": "no_matching_round", "sections": [], "queries": []}
 
-        trace_requests: list[dict[str, Any]] = [
-            {"method": "GET", "url": self.entry_url, "resource_type": "document"}
-        ]
         entry = f"{self.entry_url}?{urlencode({'pageXklb': categories[0]})}"
+        auth = authenticate or (lambda url, target: (target.goto(url, wait_until="domcontentloaded", timeout=60_000), target)[1])
+        client = AuthenticatedAcademicClient(page, authenticate=auth, timeout_seconds=15, cancelled=cancelled)
         try:
-            if authenticate is None:
-                page.goto(entry, wait_until="domcontentloaded", timeout=60_000)
-            else:
-                page = authenticate(entry, page)
+            client.get(entry)
+            page = client.page
             frame = page.main_frame
             form = frame.locator('form#queryform, form[name="queryform"]').first
             if form.count() == 0:
@@ -132,7 +94,7 @@ class VerifiedSelectionQueryAdapter:
                 f"verified selection entry is unavailable: {str(error)[:160]}"
             ) from error
 
-        from course_progress.collector import resolve_academic_url
+        from course_progress.academic_client import resolve_academic_url
 
         endpoint = resolve_academic_url(frame.url, "/xsxk/queryXsxkList")
         queries: list[dict[str, Any]] = []
@@ -157,21 +119,20 @@ class VerifiedSelectionQueryAdapter:
                             "page_count": expected_pages,
                         },
                     )
-                    last_result = frame.evaluate(
-                        _FETCH_SELECTION_PAGE,
-                        {
-                            "url": endpoint,
-                            "category": category,
-                            "semesterLabel": semester_label,
-                            "pageNo": None if page_number == 1 else page_number,
-                            "pageCount": expected_pages,
-                        },
+                    overrides = {"rwh": "", "pageXklb": category}
+                    remove: tuple[str, ...] = ()
+                    if page_number > 1:
+                        overrides.update({"pageNo": str(page_number), "pageSize": "20", "pageCount": str(expected_pages)})
+                    else:
+                        remove = ("pageNo", "pageSize")
+                    response = client.post_page_form(
+                        "/xsxk/queryXsxkList", overrides=overrides, remove=remove,
                     )
-                    trace_requests.append({
-                        "method": "POST", "url": str(last_result.get("url") or endpoint),
-                        "resource_type": "fetch", "post_data": str(last_result.get("requestBody") or ""),
-                    })
-                    html = str(last_result["body"])
+                    last_result = {
+                        "status": response.status, "url": response.url,
+                        "requestBody": response.request_body, "body": response.body,
+                    }
+                    html = response.body
                     if page_number == 1:
                         expected_pages = min(selection_page_count(html), 50)
                     expected = tuple(
@@ -246,5 +207,5 @@ class VerifiedSelectionQueryAdapter:
             "contract_version": self.version,
             "sections": list(all_sections.values()),
             "queries": queries,
-            "_trace_requests": trace_requests,
+            "_trace_requests": client.trace_requests,
         }

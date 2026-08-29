@@ -27,6 +27,7 @@ def create_workbench_app(
     workbench_url: str = "http://127.0.0.1:5000",
     login_root: Path | str | None = None,
     require_login_configuration: bool = False,
+    development_diagnostics: bool | None = None,
 ) -> Flask:
     root = Path(root)
     resolved_login_root = Path(login_root) if login_root else (
@@ -57,6 +58,10 @@ def create_workbench_app(
         CSRF_TOKEN=secrets.token_urlsafe(24),
         WORKBENCH_URL=workbench_url.rstrip("/"),
         REQUIRE_LOGIN_CONFIGURATION=require_login_configuration,
+        DEVELOPMENT_DIAGNOSTICS=(
+            os.environ.get("ACADEMIC_WORKBENCH_DEV_DIAGNOSTICS") == "1"
+            if development_diagnostics is None else development_diagnostics
+        ),
     )
     app.extensions["workspace_database"] = database
     app.extensions["observation_service"] = service
@@ -95,10 +100,14 @@ def create_workbench_app(
 
     @app.get("/api/state")
     def state():
-        return jsonify(core.state(
+        payload = core.state(
             session_state=service.session_status(), active_task=service.active_task(),
             csrf_token=app.config["CSRF_TOKEN"],
-        ))
+        )
+        payload["capabilities"] = {
+            "development_diagnostics": bool(app.config["DEVELOPMENT_DIAGNOSTICS"]),
+        }
+        return jsonify(payload)
 
     @app.post("/api/login-configuration")
     def configure_login():
@@ -136,7 +145,10 @@ def create_workbench_app(
         if not isinstance(body, dict):
             return jsonify({"error": "JSON object required"}), 400
         operation = body.get("operation", "")
-        if operation not in {"connect", "refresh-selection", "refresh-timetable", "refresh-progress", "observe-navigation"}:
+        allowed_operations = {"connect", "refresh-selection", "refresh-timetable", "refresh-progress"}
+        if app.config["DEVELOPMENT_DIAGNOSTICS"]:
+            allowed_operations.add("observe-navigation")
+        if operation not in allowed_operations:
             return jsonify({"error": "unsupported observation operation"}), 400
         if app.config["REQUIRE_LOGIN_CONFIGURATION"] and not core.login_configuration().get("configured"):
             return jsonify({"error": "请先配置本机自动登录"}), 409

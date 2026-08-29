@@ -4,30 +4,20 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Iterable
-from urllib.parse import urljoin, urlsplit
 
-from playwright.sync_api import Frame, Page
-
-from .explorer import _is_login_url
+from .academic_client import (
+    AcademicContractError,
+    AuthenticatedAcademicClient,
+)
 from .progress import AcademicRecord, parse_grade_html
 
 
 GRADE_ENDPOINT = "/cjcx/queryQmcj"
-
-
-def resolve_academic_url(current_url: str, endpoint: str) -> str:
-    """Resolve an academic endpoint for direct access or a WebVPN rewritten app."""
-    parts = urlsplit(current_url)
-    match = re.match(r"^(/https?/[0-9a-fA-F]+)(?:/|$)", parts.path)
-    if match:
-        return f"{parts.scheme}://{parts.netloc}{match.group(1)}/{endpoint.lstrip('/')}"
-    return urljoin(current_url, endpoint)
 
 
 def grade_query_parameters(
@@ -182,6 +172,43 @@ def parse_page_count(html: str) -> int:
     return parser.page_count
 
 
+class _SemesterParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_selector = False
+        self.current_value = ""
+        self.current_text: list[str] = []
+        self.options: list[SemesterOption] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attributes = dict(attrs)
+        if tag == "select" and attributes.get("id") == "xnxqid":
+            self.in_selector = True
+        elif tag == "option" and self.in_selector:
+            self.current_value = str(attributes.get("value") or "").strip()
+            self.current_text = []
+
+    def handle_data(self, data: str) -> None:
+        if self.in_selector and self.current_value:
+            self.current_text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "option" and self.in_selector and self.current_value:
+            self.options.append(SemesterOption(self.current_value, "".join(self.current_text).strip()))
+            self.current_value = ""
+            self.current_text = []
+        elif tag == "select" and self.in_selector:
+            self.in_selector = False
+
+
+def parse_semester_options(html: str) -> tuple[SemesterOption, ...]:
+    parser = _SemesterParser()
+    parser.feed(html)
+    if not parser.options:
+        raise AcademicContractError("成绩接口缺少学期选择器 #xnxqid")
+    return tuple(parser.options)
+
+
 def _validate_grade_page(html: str) -> None:
     lowered = html.lower()
     if "统一身份认证" in html or "authserver/login" in lowered:
@@ -278,179 +305,38 @@ def collect_grade_records(
     return GradeCollection(tuple(records), semester_list, tuple(failures))
 
 
-_FETCH_GRADE_PAGE = """
-async ({url, parameters}) => {
-  const body = new URLSearchParams(parameters).toString();
-  const response = await fetch(url, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body,
-    redirect: 'follow',
-  });
-  if (!response.ok) {
-    throw new Error(`成绩查询失败: HTTP ${response.status}`);
-  }
-  return {
-    status: response.status,
-    length: Number(response.headers.get('content-length') || 0),
-    body: await response.text(),
-  };
-}
-"""
+class FixedGradeReader:
+    """Read every grade page through the fixed authenticated request contract."""
 
-
-def find_academic_frame(pages: Iterable[Page]) -> Frame | None:
-    for page in pages:
-        frame = page.frame(name="iframename")
-        if frame is not None and frame.url != "about:blank":
-            return frame
-    return None
-
-
-def find_authenticated_academic_frame(pages: Iterable[Page]) -> Frame | None:
-    for page in pages:
-        frame = page.frame(name="iframename")
-        if frame is not None and frame.url != "about:blank" and not _is_login_url(
-            frame.url
-        ):
-            return frame
-    return None
-
-
-def read_semester_options(frame: Frame) -> tuple[SemesterOption, ...]:
-    """Read the semester selector from the protected grade page.
-
-    A non-login iframe is not sufficient evidence of an authenticated
-    session: the portal can leave its shell mounted while redirecting the
-    protected application.  The selector is the page-level marker that the
-    collector actually needs.
-    """
-    selector = frame.locator("#xnxqid")
-    if selector.count() == 0:
-        raise SessionExpiredError("受保护成绩页面未提供学期选择器，登录可能已失效")
-    options = selector.locator("option").evaluate_all(
-        "options => options.map(option => ({value: option.value, label: option.textContent.trim()}))"
-    )
-    semesters = tuple(
-        SemesterOption(str(option["value"]), str(option["label"]))
-        for option in options
-        if str(option["value"]).strip()
-    )
-    if not semesters:
-        raise RuntimeError("期末成绩页面未提供任何学期选项")
-    return semesters
-
-
-def wait_for_academic_frame(page: Page, timeout_seconds: int = 300) -> Frame:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        pages = tuple(page.context.pages) or (page,)
-        frame = find_authenticated_academic_frame(pages)
-        if frame is not None:
-            return frame
-        page.wait_for_timeout(500)
-    raise TimeoutError("等待教务系统主内容 iframe 超时")
-
-
-def wait_for_reauthentication(page: Page, timeout_seconds: int = 300) -> Frame:
-    """Wait for a visible login flow to finish after an expired session."""
-    print(
-        "检测到教务系统会话失效，请在浏览器中完成统一身份认证；"
-        f"最长等待 {timeout_seconds} 秒。"
-    )
-    deadline = time.monotonic() + timeout_seconds
-    earliest_retry = time.monotonic() + 1.0
-    while time.monotonic() < deadline:
-        pages = tuple(page.context.pages) or (page,)
-        frame = find_authenticated_academic_frame(pages)
-        if time.monotonic() >= earliest_retry and frame is not None:
-            print("重新认证完成，继续采集当前分页。")
-            return frame
-        page.wait_for_timeout(500)
-    raise TimeoutError("等待重新认证超时；已保存当前采集断点")
-
-
-class PlaywrightGradeCollector:
-    """Read passed grade pages through an authenticated academic-system frame."""
-
-    def __init__(self, *, page_size: int = 20):
-        if page_size <= 0:
-            raise ValueError("page_size 必须大于 0")
+    def __init__(self, client: AuthenticatedAcademicClient, *, page_size: int = 20):
+        self.client = client
         self.page_size = page_size
 
     def collect(
         self,
-        page: Page,
         *,
-        frame_timeout_seconds: int = 300,
-        on_session_expired: Callable[[], None] | None = None,
-        on_page_data: Callable[
-            [SemesterOption, int, int, tuple[AcademicRecord, ...]], None
-        ]
-        | None = None,
-        checkpoint: CollectionCheckpoint | None = None,
+        on_page_data: Callable[[SemesterOption, int, int, tuple[AcademicRecord, ...]], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
-        on_request: Callable[[str, str, int], None] | None = None,
+        checkpoint: CollectionCheckpoint | None = None,
     ) -> GradeCollection:
-        print("正在等待教务系统标签页和课程 iframe……")
-        frame = wait_for_academic_frame(page, frame_timeout_seconds)
-        print("已找到教务系统课程 iframe，正在验证受保护成绩页面……")
-        grade_url = ""
-
-        def load_grade_page(*, reauthenticate: bool) -> tuple[SemesterOption, ...]:
-            nonlocal frame, grade_url
-            needs_reauthentication = reauthenticate
-            while True:
-                if needs_reauthentication:
-                    if on_session_expired is None:
-                        raise SessionExpiredError("成绩页面要求重新认证")
-                    on_session_expired()
-                    needs_reauthentication = False
-                frame = wait_for_academic_frame(page, frame_timeout_seconds)
-                grade_url = resolve_academic_url(frame.url, GRADE_ENDPOINT)
-                if on_request is not None:
-                    on_request(grade_url, "", 0)
-                frame.goto(grade_url, wait_until="domcontentloaded", timeout=60_000)
-                if _is_login_url(frame.url):
-                    needs_reauthentication = True
-                    continue
-                try:
-                    return read_semester_options(frame)
-                except SessionExpiredError:
-                    needs_reauthentication = True
-
-        semesters = load_grade_page(reauthenticate=False)
-        print(f"已读取 {len(semesters)} 个学期，开始逐学期采集成绩记录……")
-
-        def refresh_after_session_expiry() -> None:
-            load_grade_page(reauthenticate=True)
+        entry = self.client.get(GRADE_ENDPOINT)
+        semesters = parse_semester_options(entry.body)
 
         def fetch_page(semester: str, page_number: int) -> str:
-            if on_request is not None:
-                on_request(grade_url, semester, page_number)
-            result = frame.evaluate(
-                _FETCH_GRADE_PAGE,
-                {
-                    "url": grade_url,
-                    "parameters": grade_query_parameters(
-                        semester, page_number, page_size=self.page_size
-                    ),
-                },
+            response = self.client.post_form(
+                GRADE_ENDPOINT,
+                grade_query_parameters(semester, page_number, page_size=self.page_size),
+                retry_read_once=True,
             )
-            body = str(result["body"])
-            return body
+            if response.status != 200:
+                raise RuntimeError(f"成绩查询失败: HTTP {response.status}")
+            return response.body
 
-        collection = collect_grade_records(
+        return collect_grade_records(
             semesters,
             fetch_page,
             on_page_data=on_page_data,
-            on_session_expired=refresh_after_session_expiry,
-            checkpoint=checkpoint,
             is_cancelled=is_cancelled,
+            checkpoint=checkpoint,
         )
-        print(
-            f"采集完成：{len(collection.semesters)} 个学期；"
-            f"{format_collection_summary(collection.semesters, collection.records)}"
-        )
-        return collection
+

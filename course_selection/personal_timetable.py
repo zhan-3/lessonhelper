@@ -8,28 +8,6 @@ from html.parser import HTMLParser
 from .timetable import TimetableEntry
 
 
-FETCH_TIMETABLE_PAGE_SCRIPT = """
-async ({url}) => {
-  const form = document.querySelector('form#queryform, form[name="queryform"]');
-  if (!form) throw new Error('未找到课表查询表单');
-  const parameters = new URLSearchParams(new FormData(form));
-  const response = await fetch(url, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: parameters.toString(),
-    redirect: 'follow',
-  });
-  return {
-    status: response.status,
-    url: response.url,
-    requestBody: parameters.toString(),
-    body: await response.text(),
-  };
-}
-"""
-
-
 _ALIASES = {
     "course_code": ("课程代码", "课程编号", "课程号", "course_code"),
     "course_name": ("课程名称", "课程名", "course_name"),

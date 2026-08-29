@@ -100,6 +100,48 @@ class WorkbenchServiceTests(unittest.TestCase):
                 service.create_notice_candidate("https://example.com/news", "course selection")
             database.close()
 
+    def test_grade_derives_from_student_id_prefix_when_profile_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = WorkspaceDatabase.open(root / "workspace")
+            login_root = root / "course-progress"
+            login_root.mkdir(parents=True)
+            (login_root / "webvpn-login.dpapi").write_bytes(b"")
+            (login_root / "webvpn-login-meta.json").write_text(
+                json.dumps({"masked_username": "2025******"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            service = WorkbenchService(database, login_root=login_root)
+            self.assertEqual("2025", service.effective_profile().get("grade"))
+            self.assertEqual("2025", service.state(session_state="disconnected")["profile"].get("grade"))
+            database.close()
+
+    def test_refresh_context_matches_windows_from_derived_grade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = WorkspaceDatabase.open(root / "workspace")
+            login_root = root / "course-progress"
+            login_root.mkdir(parents=True)
+            (login_root / "webvpn-login.dpapi").write_bytes(b"")
+            (login_root / "webvpn-login-meta.json").write_text(
+                json.dumps({"masked_username": "2025******"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            notice = database.save_notice({
+                "term": "2026年春季学期",
+                "windows": [{
+                    "action": "selection", "method": "academic_system",
+                    "grades": ["2025"], "category_codes": ["ty", "public"],
+                }],
+                "query_eligible": True,
+            })
+            database.confirm_notice(notice["version_id"])
+            service = WorkbenchService(database, login_root=login_root)
+            context = service.refresh_context()
+            self.assertEqual(["ty", "public"], context["allowed_categories"])
+            self.assertIsNone(context["profile_id"])
+            database.close()
+
 
 if __name__ == "__main__":
     unittest.main()

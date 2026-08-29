@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
-from course_progress.collector import resolve_academic_url
+from course_progress.academic_client import AuthenticatedAcademicClient
 
 from .selection_entry import extract_course_sections_from_html
-from .selection_query import SELECTION_ENTRY_URL
 
 _ALERT = re.compile(r"\balert\s*\(\s*(['\"])(.*?)\1\s*\)", re.DOTALL)
 
@@ -46,49 +45,6 @@ def classify_selection_execution_html(html: str) -> tuple[str, str]:
     return "unknown", "未识别到选课结果"
 
 
-_READ_SECTION_PAGE = """
-async ({queryUrl, category, termValue, pageNo}) => {
-  const form = document.querySelector('form#queryform, form[name="queryform"]');
-  if (!form) throw new Error('未找到选课表单');
-  const parameters = new URLSearchParams(new FormData(form));
-  parameters.set('rwh', '');
-  parameters.set('pageXklb', category);
-  parameters.set('pageXnxq', termValue);
-  if (pageNo > 1) {
-    parameters.set('pageNo', String(pageNo));
-    parameters.set('pageSize', '20');
-  } else {
-    parameters.delete('pageNo');
-    parameters.delete('pageSize');
-  }
-  const response = await fetch(queryUrl, {
-    method: 'POST', credentials: 'same-origin', redirect: 'follow',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: parameters.toString(),
-  });
-  return {status: response.status, body: await response.text()};
-}
-"""
-
-
-_EXECUTE_SELECTION = """
-async ({submitUrl, sectionId, category, termValue}) => {
-  const form = document.querySelector('form#queryform, form[name="queryform"]');
-  if (!form) throw new Error('未找到选课表单');
-  const parameters = new URLSearchParams(new FormData(form));
-  parameters.set('rwh', sectionId);
-  parameters.set('pageXklb', category);
-  parameters.set('pageXnxq', termValue);
-  const response = await fetch(submitUrl, {
-    method: 'POST', credentials: 'same-origin', redirect: 'follow',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: parameters.toString(),
-  });
-  return {status: response.status, url: response.url, body: await response.text()};
-}
-"""
-
-
 class VerifiedSelectionExecutionAdapter:
     """Reload one exact category and submit one exact page-provided rwh once."""
 
@@ -104,35 +60,33 @@ class VerifiedSelectionExecutionAdapter:
     ) -> SelectionExecutionResult:
         if not section_id or not category or not term_value:
             raise ValueError("section_id, category and term are required")
-        query_url = resolve_academic_url(page.url or SELECTION_ENTRY_URL, "/xsxk/queryXsxkList")
-        entry = f"{query_url}?{urlencode({'pageXklb': category, 'pageXnxq': term_value})}"
-        page = authenticate(entry, page)
-        query = page.evaluate(
-            _READ_SECTION_PAGE,
-            {
-                "queryUrl": query_url,
-                "category": category,
-                "termValue": term_value,
-                "pageNo": max(1, int(source_page or 1)),
-            },
+        client = AuthenticatedAcademicClient(
+            page, authenticate=authenticate, timeout_seconds=15,
         )
-        if int(query.get("status") or 0) != 200:
+        entry = f"/xsxk/queryXsxkList?{urlencode({'pageXklb': category, 'pageXnxq': term_value})}"
+        client.get(entry)
+        page_number = max(1, int(source_page or 1))
+        overrides = {"rwh": "", "pageXklb": category, "pageXnxq": term_value}
+        remove: tuple[str, ...] = ()
+        if page_number > 1:
+            overrides.update({"pageNo": str(page_number), "pageSize": "20"})
+        else:
+            remove = ("pageNo", "pageSize")
+        query = client.post_page_form(
+            "/xsxk/queryXsxkList", overrides=overrides, remove=remove,
+        )
+        if query.status != 200:
             raise RuntimeError("重新查询教学班失败")
         matching = [
-            item for item in extract_course_sections_from_html(str(query.get("body") or ""))
+            item for item in extract_course_sections_from_html(query.body)
             if item.action_rwh == section_id
         ]
         if len(matching) != 1 or not matching[0].execution_ready:
             raise RuntimeError("教学班已不在当前待选课程中")
-        submit_url = resolve_academic_url(page.url, "/xsxk/saveXsxk")
-        response = page.evaluate(
-            _EXECUTE_SELECTION,
-            {
-                "submitUrl": submit_url,
-                "sectionId": section_id,
-                "category": category,
-                "termValue": term_value,
-            },
+        response = client.post_page_form(
+            "/xsxk/saveXsxk",
+            overrides={"rwh": section_id, "pageXklb": category, "pageXnxq": term_value},
+            remove=("pageNo", "pageSize"),
         )
-        status, message = classify_selection_execution_html(str(response.get("body") or ""))
+        status, message = classify_selection_execution_html(response.body)
         return SelectionExecutionResult(status, message, section_id, category, term_value)

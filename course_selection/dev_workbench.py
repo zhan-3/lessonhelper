@@ -51,6 +51,7 @@ def start_workbench(root: Path, workspace_root: Path, port: int, cdp_url: str) -
     environment = {
         **os.environ,
         "ACADEMIC_BROWSER_CDP_URL": cdp_url,
+        "ACADEMIC_WORKBENCH_DEV_DIAGNOSTICS": "1",
     }
     return subprocess.Popen(
         [

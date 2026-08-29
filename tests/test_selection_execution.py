@@ -52,8 +52,9 @@ class ResultClassificationTests(unittest.TestCase):
         self.assertEqual("selected", result.status)
         self.assertEqual(2, page.evaluations)
         self.assertIn("pageXklb=xsxk", opened[0])
-        self.assertEqual(1, page.query_payload["pageNo"])
-        self.assertEqual("TERM-TASK-001", page.payload["sectionId"])
+        self.assertEqual("", page.query_payload["overrides"]["rwh"])
+        self.assertIn("pageNo", page.query_payload["remove"])
+        self.assertEqual("TERM-TASK-001", page.payload["overrides"]["rwh"])
 
     def test_adapter_does_not_submit_missing_section(self):
         class Page:

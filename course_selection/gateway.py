@@ -245,13 +245,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
     def _refresh_selection_payload(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
-        from types import SimpleNamespace
-
-        from .discovery import TARGET_SELECTION, InterfaceDiscovery
-        from .selection_query import (
-            SelectionContractError,
-            VerifiedSelectionQueryAdapter,
-        )
+        from .selection_query import SelectionContractError, VerifiedSelectionQueryAdapter
 
         categories = tuple(context.get("allowed_categories", ()))
         semester_label = str(context.get("semester_label", ""))
@@ -269,76 +263,33 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             except (AttributeError, TypeError):
                 pages = []
             page = pages[-1] if pages else None
-        if page is not None and not self._page_is_closed(page):
-            try:
-                result = VerifiedSelectionQueryAdapter().read(
-                    page,
-                    categories=categories,
-                    semester_label=semester_label,
-                    allowed_windows=raw_windows,
-                    progress=progress,
-                    cancelled=cancelled,
-                    authenticate=lambda url, target_page: self._session.open_authenticated(
-                        url,
-                        timeout_seconds=min(
-                            int(context.get("login_timeout_seconds", 600)),
-                            int(context.get("operation_timeout_seconds", 600)),
-                        ),
-                        page=target_page,
-                    ),
-                )
-                result.setdefault("source_kind", "verified-selection-api")
-                return result
-            except SelectionContractError as error:
-                progress(
-                    "reading",
-                    {
-                        "target": "selection",
-                        "mode": "contract-discovery",
-                        "message": str(error),
-                    },
-                )
-
-        # Only a missing or changed verified contract enters discovery.  A
-        # transient category/page failure returned by the adapter remains an
-        # incomplete attempt and is never repeated through another path.
-        windows = {
-            code: tuple(SimpleNamespace(**item) for item in items)
-            for code, items in raw_windows.items()
-        }
-        navigator = InterfaceDiscovery(
-            target=TARGET_SELECTION, output_root=self.workspace_root,
-            allowed_selection_categories=categories,
-            allowed_selection_windows=windows,
-            notice_semester=semester_label,
-        )
-        browser_context = self._session.context
-        response_handler = navigator._handle_response
-        route_handler = navigator._guard_route
-        browser_context.on("response", response_handler)
-        browser_context.route("**/*", route_handler)
+        if page is None or self._page_is_closed(page):
+            return {"status": "interface_unconfirmed", "diagnostic": {"reason": "academic page unavailable"}}
         try:
-            progress("reading", {"target": "selection", "mode": "contract-discovery"})
-            report = navigator.run(browser_context, max_clicks=8, wait_seconds=30)
-        finally:
-            # Lightweight test and embedding contexts may not expose unroute;
-            # real Playwright BrowserContext instances do.
-            unroute = getattr(browser_context, "unroute", None)
-            if unroute is not None:
-                unroute("**/*", route_handler)
-            remove_listener = getattr(browser_context, "remove_listener", None)
-            if remove_listener is not None:
-                remove_listener("response", response_handler)
-        # Discovery is diagnostic-only: even a plausible response must be
-        # independently contracted before it can become a selection snapshot.
-        return {
-            "status": "interface_unconfirmed",
-            "diagnostic": {
-                "target_found": bool(getattr(report, "target_found", False)),
-                "captures": int(getattr(report, "captures", 0)),
-                "candidates_path": str(getattr(report, "candidates_path", "")),
-            },
-        }
+            result = VerifiedSelectionQueryAdapter().read(
+                page,
+                categories=categories,
+                semester_label=semester_label,
+                allowed_windows=raw_windows,
+                progress=progress,
+                cancelled=cancelled,
+                authenticate=lambda url, target_page: self._session.open_authenticated(
+                    url,
+                    timeout_seconds=min(
+                        int(context.get("login_timeout_seconds", 600)),
+                        int(context.get("operation_timeout_seconds", 600)),
+                    ),
+                    page=target_page,
+                ),
+            )
+            result.setdefault("source_kind", "verified-selection-api")
+            return result
+        except SelectionContractError as error:
+            # Contract discovery is deliberately not a runtime fallback.  Keep
+            # the old snapshot and expose only sanitized diagnostic evidence.
+            message = str(error)[:160]
+            progress("interface_unconfirmed", {"target": "selection", "message": message})
+            return {"status": "interface_unconfirmed", "diagnostic": {"reason": message}}
 
     def observe_selection(self, request, progress: Progress, cancelled: Cancelled):
         """Run the verified selection reader behind the typed observation seam."""
@@ -365,11 +316,13 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         trace_requests: list[dict[str, Any]] = []
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
-        from course_progress.collector import (
-            PlaywrightGradeCollector,
-            grade_query_parameters,
-            wait_for_reauthentication,
+        from course_progress.academic_client import (
+            AcademicAuthenticationRequired,
+            AcademicClientError,
+            AcademicContractError,
+            AuthenticatedAcademicClient,
         )
+        from course_progress.collector import FixedGradeReader
         from course_progress.progress import RequirementBaseline, evaluate_progress, parse_requirements
 
         page = getattr(self, "_academic_page", None)
@@ -399,37 +352,44 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             int(context.get("operation_timeout_seconds", 600)),
         )
 
-        def on_request(url: str, semester: str, page_number: int) -> None:
-            if page_number == 0:
-                trace_requests.append({"method": "GET", "url": url, "resource_type": "document"})
-                return
-            parameters = grade_query_parameters(
-                semester, page_number, page_size=int(context.get("page_size", 20))
-            )
-            trace_requests.append({
-                "method": "POST", "url": url, "resource_type": "fetch",
-                "post_data": "&".join(f"{name}={value}" for name, value in parameters.items()),
-            })
+        records_read = 0
 
         def on_page_data(semester, page_number, page_count, records):
+            nonlocal records_read
+            records_read += len(records)
             progress("reading", {
                 "target": "progress",
+                "contract_version": "grade-query-v1",
                 "semester": semester.label,
                 "page": page_number,
                 "page_count": page_count,
-                "records": len(records),
+                "records": records_read,
             })
 
-        collection = PlaywrightGradeCollector(
-            page_size=int(context.get("page_size", 20))
-        ).collect(
+        client = AuthenticatedAcademicClient(
             page,
-            frame_timeout_seconds=timeout,
-            on_session_expired=lambda: wait_for_reauthentication(page, timeout),
-            on_page_data=on_page_data,
-            is_cancelled=cancelled,
-            on_request=on_request,
+            authenticate=lambda url, target_page: self._session.open_authenticated(
+                url, timeout_seconds=timeout, page=target_page,
+            ),
+            timeout_seconds=min(15, timeout),
+            cancelled=cancelled,
         )
+        reader = FixedGradeReader(
+            client, page_size=int(context.get("page_size", 20))
+        )
+        try:
+            collection = reader.collect(
+                on_page_data=on_page_data, is_cancelled=cancelled
+            )
+        except AcademicAuthenticationRequired as error:
+            trace_requests.extend(client.trace_requests)
+            progress("interface_unconfirmed", {"target": "progress", "message": str(error)[:160]})
+            return {"status": "interface_unconfirmed", "report": None, "reason": str(error)[:160], "_trace_requests": trace_requests}
+        except (AcademicContractError, AcademicClientError) as error:
+            trace_requests.extend(client.trace_requests)
+            progress("interface_unconfirmed", {"target": "progress", "message": str(error)[:160]})
+            return {"status": "interface_unconfirmed", "report": None, "reason": str(error)[:160], "_trace_requests": trace_requests}
+        trace_requests.extend(client.trace_requests)
         report = evaluate_progress(collection.records, baseline)
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return {
@@ -469,19 +429,18 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         if cancelled():
             return ProgressObservationResult.cancelled(trace=trace)
         if result.get("status") != "complete":
-            return ProgressObservationResult.incomplete(str(result.get("status", "incomplete")), trace=trace)
+            return ProgressObservationResult.incomplete(str(result.get("reason") or result.get("status", "incomplete")), trace=trace)
         return ProgressObservationResult.complete(result, trace=trace)
 
     def _refresh_timetable_payload(self, context: dict[str, Any], progress: Progress, cancelled: Cancelled) -> dict[str, Any]:
         trace_requests: list[dict[str, Any]] = []
         if self._session is None or self._session.context is None:
             raise RuntimeError("academic session is disconnected")
-        from playwright.sync_api import Error as PlaywrightError
-        from course_progress.collector import resolve_academic_url
-        from .personal_timetable import (
-            FETCH_TIMETABLE_PAGE_SCRIPT,
-            parse_timetable_grid_html,
+        from course_progress.academic_client import (
+            AcademicClientError,
+            AuthenticatedAcademicClient,
         )
+        from .personal_timetable import parse_timetable_grid_html
 
         page = getattr(self, "_academic_page", None)
         if page is None:
@@ -489,42 +448,30 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             page = candidates[-1] if candidates else None
         if page is None or self._page_is_closed(page):
             return {"status": "entry_unreachable", "entries": [], "_trace_requests": trace_requests}
-        endpoint = resolve_academic_url(page.url, "/kbcx/queryGrkb")
-        trace_requests.append({"method": "GET", "url": endpoint, "resource_type": "document"})
-
         timeout = min(
             int(context.get("login_timeout_seconds", 600)),
             int(context.get("operation_timeout_seconds", 600)),
         )
+        client = AuthenticatedAcademicClient(
+            page,
+            authenticate=lambda url, target_page: self._session.open_authenticated(
+                url, timeout_seconds=timeout, page=target_page,
+            ),
+            timeout_seconds=min(15, timeout),
+            cancelled=cancelled,
+        )
+        progress("reading", {"target": "timetable", "contract_version": "personal-timetable-v1"})
         try:
-            page = self._session.open_authenticated(endpoint, timeout_seconds=timeout, page=page)
-        except (PlaywrightError, TimeoutError) as error:
+            client.get("/kbcx/queryGrkb")
+            response = client.post_page_form("/kbcx/queryGrkb", retry_read_once=True)
+        except (AcademicClientError, TimeoutError) as error:
+            trace_requests.extend(client.trace_requests)
             progress("interface_unconfirmed", {"target": "timetable", "message": str(error)[:160]})
             return {"status": "interface_unconfirmed", "entries": [], "reason": str(error)[:160], "_trace_requests": trace_requests}
-
-        progress("reading", {"target": "timetable", "endpoint": "/kbcx/queryGrkb"})
-        result: dict[str, Any] = {}
-        try:
-            result = page.evaluate(FETCH_TIMETABLE_PAGE_SCRIPT, {"url": endpoint})
-        except PlaywrightError:
-            # 会话重登后可能停在门户而非查询页;再导航一次后重试同源请求。
-            try:
-                trace_requests.append(
-                    {"method": "GET", "url": endpoint, "resource_type": "document"}
-                )
-                page = self._session.open_authenticated(endpoint, timeout_seconds=timeout, page=page)
-                result = page.evaluate(FETCH_TIMETABLE_PAGE_SCRIPT, {"url": endpoint})
-            except (PlaywrightError, TimeoutError) as error:
-                progress("interface_unconfirmed", {"target": "timetable", "message": str(error)[:160]})
-                return {"status": "interface_unconfirmed", "entries": [], "reason": str(error)[:160], "_trace_requests": trace_requests}
-
-        trace_requests.append({
-            "method": "POST", "url": str(result.get("url") or endpoint), "resource_type": "fetch",
-            "post_data": str(result.get("requestBody") or ""),
-        })
-        if int(result.get("status") or 0) != 200:
-            return {"status": "entry_unreachable", "entries": [], "http_status": result.get("status"), "_trace_requests": trace_requests}
-        html = str(result.get("body") or "")
+        trace_requests.extend(client.trace_requests)
+        if response.status != 200:
+            return {"status": "entry_unreachable", "entries": [], "http_status": response.status, "_trace_requests": trace_requests}
+        html = response.body
         try:
             entries = parse_timetable_grid_html(
                 html, expected_term=str(context.get("term") or "") or None

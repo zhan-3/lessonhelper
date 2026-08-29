@@ -110,7 +110,8 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
     return progressItems.filter(item => keys.has(item.key));
   })();
   const scheduleItems = [...current, ...previewOptions.flatMap(option => option.meetings)];
-  const weekGroups = compressWeeks(scheduleItems, maxWeek);
+  // 预览只叠加课程，不重写用户已经建立的学期周次导航。
+  const weekGroups = compressWeeks(current.length ? current : scheduleItems, maxWeek);
   const selectedGroup = weekGroups.find(group => group.weeks.includes(selectedWeek)) ?? weekGroups[0];
   const visibleCurrent = weekItems(current, selectedWeek);
   const visiblePreviews = weekItems(previewOptions.flatMap(option => option.meetings), selectedWeek);
@@ -183,13 +184,11 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
       left: `calc(${lane * 100 / laneCount}% + 5px)`,
       width: `calc(${100 / laneCount}% - 10px)`,
     };
-    return <button type="button" className={`course-block ${item.source} preview-${previewIndex} ${isConflict ? "has-conflict" : ""}`} style={style} key={item.key} onClick={() => locationChanged && setLocationDetailKey(value => value === item.key ? null : item.key)} aria-expanded={locationChanged ? locationDetailKey === item.key : undefined}>
-      <strong>{item.name}</strong>
-      <span>{item.teacher || "教师未提供"}</span>
-      <span>{item.location || "地点待定"}</span>
-      <small>第{item.start}–{item.end}节</small>
-      {locationChanged && <em>地点有变化</em>}
-    </button>;
+    const content = <><strong>{item.name}</strong><span>{item.teacher || "教师未提供"}</span><span>{item.location || "地点待定"}</span><small>第{item.start}–{item.end}节</small>{locationChanged && <em>查看分周地点</em>}</>;
+    const className = `course-block ${item.source} preview-${previewIndex} ${isConflict ? "has-conflict" : ""}`;
+    return locationChanged
+      ? <button type="button" className={className} style={style} key={item.key} onClick={() => setLocationDetailKey(value => value === item.key ? null : item.key)} aria-expanded={locationDetailKey === item.key} aria-label={`${item.name}，查看分周地点`}>{content}</button>
+      : <article className={className} style={style} key={item.key}>{content}</article>;
   };
 
   const detailedItem = boardItems.find(item => item.key === locationDetailKey);
@@ -201,8 +200,8 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
       <div className="schedule-legend"><span className="legend current" />当前课程 <span className="legend candidate" />预览课程 <span className="legend conflict" />时间冲突</div>
     </div>
 
-    <section className="progress-band" aria-label="学分进度">
-      <div className="progress-band-heading"><strong>学分进度</strong><small>与本次选课查询类别同步</small></div>
+    <section className="progress-band" aria-label="毕业进度规划参考">
+      <div className="progress-band-heading"><strong>毕业进度规划参考</strong><small>基于 2026 指南 · 非学校正式毕业审核</small></div>
       {syncedProgress.length ? <div className="progress-band-inner">{syncedProgress.map(item => {
         const filter = progressFilterByKey[item.key];
         const confirmedCredits = item.completed_credits ?? 0;
@@ -239,6 +238,16 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
       {diffOpen && <div className="diff-details">{transitions.map(diff => <article key={diff.week}><strong>第 {diff.week} 周起</strong>{diff.added.length > 0 && <p>新增：{diff.added.join("、")}</p>}{diff.ended.length > 0 && <p>结束：{diff.ended.join("、")}</p>}{diff.timeAdjusted.length > 0 && <p>时间调整：{diff.timeAdjusted.join("、")}</p>}{diff.teacherAdjusted.length > 0 && <p>老师调整：{diff.teacherAdjusted.join("、")}</p>}</article>)}</div>}
     </section>
 
+    <section className={`preview-tray ${previewOptions.length ? "has-items" : ""}`} aria-live="polite" aria-label="课表预览状态">
+      <div className="preview-tray-heading">
+        <div><strong>{previewOptions.length ? `正在预览 ${previewOptions.length} 门课程` : "课表预览"}</strong><span>{previewOptions.length ? "候选课程已叠加到课表中，不会提交选课。" : "从待选课程中加入最多 3 门，先比较时间与冲突。"}</span></div>
+        {previewOptions.length > 0 && <button className="text-button" onClick={() => setPreviewKeys([])}>清空预览</button>}
+      </div>
+      {previewOptions.length > 0 && <div className="preview-selections">{previewOptions.map((option, index) => {
+        const semesterConflict = option.meetings.some(meeting => !meeting.unknown && current.some(other => !other.unknown && executionTimeOverlaps(meeting, other)));
+        return <div className="preview-selection" key={option.key}><i className={`preview-dot preview-${index}`} /><span><strong>{option.name}</strong><small>{semesterConflict ? "学期内有冲突" : option.unknown ? "时间待确认" : "学期内无冲突"}</small></span><button className="text-button" onClick={() => togglePreview(option.key)} aria-label={`移出预览：${option.name}`}>移出</button></div>;
+      })}</div>}
+    </section>
 
     <div className="schedule-workspace">
       <div>
@@ -251,7 +260,7 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
       </div>
 
       <aside className="course-browser">
-        <div className="browser-heading"><div><h3>待选课程</h3><small>按第 {selectedWeek} 周检测冲突 · 最多预览 {maximumPreviews} 门</small></div><span>{filteredOptions.length} 门 · {safePage}/{pages} 页</span></div>
+        <div className="browser-heading"><div><h3>查找待选课程</h3><small>先加入预览，确认整学期无冲突后再选课</small></div><span>{filteredOptions.length} 门 · {safePage}/{pages} 页</span></div>
         <input aria-label="搜索待选课程" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索课程名、代码或教师" />
         <div className="course-filters"><select value={requirementFilter} onChange={event => setRequirementFilter(event.target.value)} aria-label="培养要求">{requirementFilterOptions.map(value => <option key={value}>{value === "全部" ? "全部培养要求" : value}</option>)}</select><select value={conflictFilter} onChange={event => setConflictFilter(event.target.value)} aria-label="冲突状态"><option>全部</option><option>无冲突</option><option>有冲突</option></select></div>
         <div className="requirement-hints" aria-label="培养要求提醒"><span><b>体育</b> 每学年选 1 门</span><span><b>创新创业</b> 社会实践另计</span><span><b>英语</b> 大一优先</span></div>
@@ -263,8 +272,12 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, onExec
           const planningCategory = planningFilterFor(option);
           const knownConflict = option.meetings.some(meeting => !meeting.unknown && current.some(other => !other.unknown && executionTimeOverlaps(meeting, other)));
           const executionBlocked = executionPending || option.unknown || knownConflict || !option.executionReady;
-          const executionTitle = !option.executionReady ? "教学班缺少页面提供的执行身份" : option.unknown ? "上课时间未知，禁止执行" : knownConflict ? "与当前课表冲突" : executionPending ? "已有执行任务正在进行" : "确认并提交一次选课请求";
-          return <article className={`candidate-row ${hasConflict ? "has-conflict" : ""}`} key={option.key}><div className="candidate-copy"><strong>{option.name}</strong><span>{planningCategory ?? option.category} · {option.credits ? `${formatCredits(option.credits)} 学分` : "学分待核对"} · {option.teacher || "教师未提供"}</span><small>{describeOptionMeetings(option.meetings)}</small></div><div className="candidate-actions">{previewed && <i className={`preview-dot preview-${previewIndex}`} aria-label={`预览颜色 ${previewIndex + 1}`} />}<b>{knownConflict ? "冲突" : option.unknown ? "待定" : "可排"}</b>{!option.unknown && <button className={previewed ? "secondary" : ""} disabled={previewLimitReached} title={previewLimitReached ? "最多同时预览3门课程" : undefined} onClick={() => togglePreview(option.key)}>{previewed ? "取消" : "预览"}</button>}<button className="execute-selection" disabled={executionBlocked} title={executionTitle} onClick={() => onExecuteSection?.(String(option.identity ?? option.key), option.name)}>选课</button></div></article>;
+          const scheduleStatus = option.unknown ? "时间待确认" : knownConflict ? "学期内有冲突" : hasConflict ? `第 ${selectedWeek} 周有冲突` : "学期内无冲突";
+          const executionReason = option.unknown ? "暂不可选：上课时间待确认" : knownConflict ? "暂不可选：与当前课表冲突" : executionPending ? "暂不可选：正在执行其他任务" : !option.executionReady ? "暂不可选：缺少教学班标识" : "可以提交选课";
+          return <article className={`candidate-row ${hasConflict ? "has-conflict" : ""} ${previewed ? "is-previewed" : ""}`} key={option.key}>
+            <div className="candidate-copy"><div className="candidate-title">{previewed && <i className={`preview-dot preview-${previewIndex}`} aria-hidden="true" />}<strong>{option.name}</strong></div><span>{planningCategory ?? option.category} · {option.credits ? `${formatCredits(option.credits)} 学分` : "学分待核对"} · {option.teacher || "教师未提供"}</span><small>{describeOptionMeetings(option.meetings)}</small><div className="candidate-status" id={`status-${option.key}`}><b className={knownConflict || option.unknown ? "blocked" : "ready"}>{scheduleStatus}</b><span>{executionReason}</span></div></div>
+            <div className="candidate-actions">{!option.unknown && <button className={previewed ? "secondary" : ""} disabled={previewLimitReached} aria-describedby={`status-${option.key}`} onClick={() => togglePreview(option.key)}>{previewed ? "移出预览" : previewLimitReached ? "预览已满" : "加入预览"}</button>}<button className="execute-selection" disabled={executionBlocked} aria-describedby={`status-${option.key}`} onClick={() => onExecuteSection?.(String(option.identity ?? option.key), option.name)}>{executionPending ? "处理中" : "选课"}</button></div>
+          </article>;
         }) : <p className="empty">没有符合条件的待选课程。</p>}</div>
         <nav className="pagination" aria-label="待选课程分页"><button className="secondary" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>上一页</button><span>{safePage}</span><button className="secondary" disabled={safePage >= pages} onClick={() => setPage(safePage + 1)}>下一页</button></nav>
       </aside>

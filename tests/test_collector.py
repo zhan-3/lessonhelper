@@ -2,17 +2,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from course_progress.academic_client import resolve_academic_url
 from course_progress.collector import (
     AcademicRecord,
     CollectionCheckpoint,
     SemesterOption,
     SessionExpiredError,
     collect_grade_records,
-    find_academic_frame,
     grade_query_parameters,
     load_checkpoint,
-    read_semester_options,
-    resolve_academic_url,
     save_checkpoint,
     format_collection_summary,
     format_semester_label,
@@ -49,35 +47,6 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(
             format_collection_summary(semesters, records),
             "2025秋季 2 条；2026春季 0 条",
-        )
-
-    def test_grade_page_validation_requires_semester_selector(self):
-        class FakeFrame:
-            def locator(self, selector):
-                self.selector = selector
-                return self
-
-            def count(self):
-                return 0
-
-        with self.assertRaisesRegex(SessionExpiredError, "学期选择器"):
-            read_semester_options(FakeFrame())
-
-    def test_finds_academic_frame_in_any_open_tab(self):
-        academic_frame = type("FakeFrame", (), {"url": "/cjcx/queryQmcj"})()
-
-        class FakePage:
-            def __init__(self, frame):
-                self._frame = frame
-
-            def frame(self, *, name):
-                return self._frame if name == "iframename" else None
-
-        self.assertIs(
-            find_academic_frame(
-                (FakePage(None), FakePage(academic_frame)),
-            ),
-            academic_frame,
         )
 
     def test_resolves_endpoint_inside_webvpn_application_prefix(self):

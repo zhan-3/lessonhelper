@@ -244,13 +244,22 @@ function App() {
     grade,
   );
   const pendingNotices = candidates.filter(notice => notice.status !== "confirmed");
+  const taskProgressLabel = (value?: Record<string, unknown>) => {
+    if (!value) return "";
+    if (value.semester) return `正在读取 ${value.semester}${value.page ? ` · 第 ${value.page}/${value.page_count ?? "?"} 页` : ""}${value.records !== undefined ? ` · 已读取 ${value.records} 条课程记录` : ""}`;
+    return String(value.message ?? value.target ?? "");
+  };
 
   return <main className="shell">
     <header><p className="eyebrow">GUARDED ACADEMIC WORKBENCH</p><h1>选课规划工作台</h1><span className="session">{state.login_configuration.masked_username} · 浏览器 {state.academic_session.browser ?? "未知"} · WebVPN {state.academic_session.webvpn ?? "未知"} · 教务 {state.academic_session.state}{state.academic_session.last_verified_at && ` · 验证于 ${state.academic_session.last_verified_at}`} · <button className="text-button" onClick={clearLogin}>重新配置</button></span></header>
-    {message && <p className="notice">{message}</p>}
-    <section className="toolbar"><button onClick={() => run("connect")} disabled={remoteBusy}>连接教务</button><button onClick={() => run("refresh-timetable")} disabled={remoteBusy}>刷新课表</button><button onClick={() => run("refresh-progress")} disabled={remoteBusy}>刷新毕业进度</button><button onClick={() => run("refresh-selection")} disabled={remoteBusy || !state.confirmed_notice}>强制刷新待选课程</button><button onClick={() => run("observe-navigation")} disabled={remoteBusy}>诊断监听</button><button className="secondary" onClick={load}>刷新本地页面</button></section>
-    {activeTask && <section className="task"><strong>当前任务：{activeTask.operation} · {activeTask.state}</strong><span> · 开始于 {activeTask.created_at ?? "—"} · 超时 {activeTask.timeout_seconds ?? "—"} 秒</span>{activeTask.progress && <span> · {JSON.stringify(activeTask.progress)}</span>}{activeTask.operation === "observe-navigation" && <button onClick={finishObservation}>完成监听</button>}{activeTask.task_kind !== "execution" && <button className="danger" onClick={cancel}>取消</button>}</section>}
-    {task && !activeTask && <section className="task"><strong>最近任务：{task.operation} · {task.state}</strong>{task.error && <span> · {task.error}</span>}{task.progress && <span> · {JSON.stringify(task.progress)}</span>}</section>}
+    {message && <p className="notice" role="status">{message}</p>}
+    <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={state.graduation_progress} onExecuteSection={executeSection} executionPending={remoteBusy} />
+    <details className="advanced-tools">
+      <summary><span><strong>数据与高级工具</strong><small>刷新教务数据、查看通知和管理本地规划</small></span><span>展开</span></summary>
+      <div className="advanced-tools-body">
+    <section className="toolbar"><button onClick={() => run("connect")} disabled={remoteBusy}>连接教务</button><button onClick={() => run("refresh-timetable")} disabled={remoteBusy}>刷新课表</button><button onClick={() => run("refresh-progress")} disabled={remoteBusy}>刷新毕业进度</button><button onClick={() => run("refresh-selection")} disabled={remoteBusy || !state.confirmed_notice}>强制刷新待选课程</button>{state.capabilities?.development_diagnostics && <button onClick={() => run("observe-navigation")} disabled={remoteBusy}>诊断监听</button>}<button className="secondary" onClick={load}>刷新本地页面</button></section>
+    {activeTask && <section className="task"><strong>当前任务：{activeTask.operation} · {activeTask.state}</strong><span> · 开始于 {activeTask.created_at ?? "—"} · 超时 {activeTask.timeout_seconds ?? "—"} 秒</span>{taskProgressLabel(activeTask.progress) && <span> · {taskProgressLabel(activeTask.progress)}</span>}{activeTask.operation === "observe-navigation" && <button onClick={finishObservation}>完成监听</button>}{activeTask.task_kind !== "execution" && <button className="danger" onClick={cancel}>取消</button>}</section>}
+    {task && !activeTask && <section className="task"><strong>最近任务：{task.operation} · {task.state}</strong>{task.error && <span> · {task.error}{task.task_kind === "observation" && task.operation !== "connect" && "；旧快照仍然保留"}</span>}{taskProgressLabel(task.progress) && <span> · {taskProgressLabel(task.progress)}</span>}</section>}
     <section className="facts"><article><small>课表快照</small><strong>{statusLabel("timetable")}</strong></article><article><small>待选课程快照</small><strong>{statusLabel("selection")}</strong></article><article><small>毕业进度快照</small><strong>{statusLabel("progress")}</strong></article></section>
     <section className="notice-strip" aria-labelledby="selection-window-title">
       <div className="notice-strip-heading"><div><small>官方选课通知</small><strong id="selection-window-title">{grade ? `${grade} 级选课安排` : "选课安排"}</strong></div><button className="secondary notice-refresh" onClick={discoverOfficialNotices} disabled={remoteBusy}>获取最新通知</button></div>
@@ -262,7 +271,8 @@ function App() {
     </section>
     <section className="panel"><h2>本地只读规划</h2><p>按课程目标优先级和教学班偏好填写 JSON；这里只保存本地规划，不会发送选课请求。</p><textarea value={goals} onChange={event => setGoals(event.target.value)} rows={7} /><button onClick={savePlan}>保存规划</button>{plan && <pre className="plan-result">{JSON.stringify(plan, null, 2)}</pre>}</section>
     {state.execution_history && state.execution_history.length > 0 && <section className="panel"><h2>选课执行历史</h2>{state.execution_history.map(item => <article className="candidate" key={item.id}><strong>{item.course_name || item.section_id}</strong><span>{item.created_at} · {item.result} · {item.message}</span>{item.result === "unknown" && !item.resolved && <button onClick={() => resolveUnknown(item.id)}>已核实，解除阻断</button>}</article>)}<button className="danger" onClick={clearHistory}>清除执行历史</button></section>}
-    <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={state.graduation_progress} onExecuteSection={executeSection} executionPending={remoteBusy} />
+      </div>
+    </details>
   </main>;
 }
 
