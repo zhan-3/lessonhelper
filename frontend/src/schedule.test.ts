@@ -11,6 +11,8 @@ import {
   planningFilterFor,
   queryFilterFor,
   projectedCourseCredits,
+  selectionCategoryLabel,
+  selectionWindowDisplay,
   selectionWindowsForGrade,
   candidateOption,
   weekSignature,
@@ -44,6 +46,23 @@ describe("schedule parsing", () => {
 
     expect(windows.map(window => window.category_text)).toEqual(["创新研修", "文化素质"]);
     expect(selectionWindowsForGrade(windows, "")).toEqual([]);
+  });
+
+  it("formats confirmed notice windows for the compact header board", () => {
+    expect(selectionWindowDisplay({
+      opens_at: "2026-08-29 08:30",
+      closes_at: "2026-08-29 11:00",
+    })).toEqual({
+      date: "08.29 周六",
+      time: "08:30–11:00",
+      fullRange: "2026-08-29 08:30 至 2026-08-29 11:00",
+    });
+    expect(selectionWindowDisplay({
+      opens_at: "2026-08-29 23:00",
+      closes_at: "2026-08-30 01:00",
+    })).toMatchObject({ date: "08.29–08.30", time: "23:00–01:00" });
+    expect(selectionWindowDisplay({}).date).toBe("日期待定");
+    expect(selectionCategoryLabel({ category_text: "文化素质教育课——选课" })).toBe("文化素质教育课");
   });
 
   it("maps raw course labels to the smaller planning filters", () => {

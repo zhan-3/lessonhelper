@@ -64,6 +64,51 @@ export function selectionWindowsForGrade(windows: SelectionWindow[], grade: stri
     .sort((left, right) => String(left.opens_at ?? "").localeCompare(String(right.opens_at ?? "")));
 }
 
+type ParsedNoticeDateTime = {
+  year: string;
+  month: string;
+  day: string;
+  time: string;
+};
+
+export type SelectionWindowDisplay = {
+  date: string;
+  time: string;
+  fullRange: string;
+};
+
+const parseNoticeDateTime = (value?: string): ParsedNoticeDateTime | null => {
+  const match = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}:\d{2})/);
+  if (!match) return null;
+  return { year: match[1], month: match[2], day: match[3], time: match[4] };
+};
+
+const weekdayLabel = (value: ParsedNoticeDateTime) => {
+  const date = new Date(Number(value.year), Number(value.month) - 1, Number(value.day));
+  return `周${"日一二三四五六"[date.getDay()]}`;
+};
+
+/** Compact, timezone-stable labels for the confirmed-notice board. */
+export function selectionWindowDisplay(window: SelectionWindow): SelectionWindowDisplay {
+  const opens = parseNoticeDateTime(window.opens_at);
+  const closes = parseNoticeDateTime(window.closes_at);
+  if (!opens) return { date: "日期待定", time: "时间待定", fullRange: "开放时间待定" };
+
+  const sameDay = closes && opens.year === closes.year && opens.month === closes.month && opens.day === closes.day;
+  const date = !closes || sameDay
+    ? `${opens.month}.${opens.day} ${weekdayLabel(opens)}`
+    : `${opens.month}.${opens.day}–${closes.month}.${closes.day}`;
+  const time = closes ? `${opens.time}–${closes.time}` : `${opens.time} 起`;
+  const fullRange = closes
+    ? `${opens.year}-${opens.month}-${opens.day} ${opens.time} 至 ${closes.year}-${closes.month}-${closes.day} ${closes.time}`
+    : `${opens.year}-${opens.month}-${opens.day} ${opens.time} 起`;
+  return { date, time, fullRange };
+}
+
+/** The board already implies selection, so remove a duplicated source suffix. */
+export const selectionCategoryLabel = (window: SelectionWindow) =>
+  String(window.category_text || "课程类别待确认").replace(/\s*——\s*选课\s*$/, "");
+
 export const requirementFilters = ["全部", "创新创业", "文化素质", "跨专业", "体育", "英语"] as const;
 export type RequirementFilter = typeof requirementFilters[number];
 
