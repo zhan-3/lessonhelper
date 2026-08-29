@@ -129,7 +129,7 @@ class PersistentWorkbenchAcceptanceTests(unittest.TestCase):
                     "nested": {"authorization": "Bearer abc"},
                 }, source="deterministic")
             count = db.connection.execute("select count(*) from snapshots where kind='selection'").fetchone()[0]
-            self.assertEqual(20, count)
+            self.assertEqual(3, count)
             change_count = db.connection.execute("select count(*) from snapshot_changes where kind='selection'").fetchone()[0]
             self.assertEqual(20, change_count)
             raw = " ".join(str(row[0]) for row in db.connection.execute("select payload from snapshots"))

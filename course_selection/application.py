@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -44,11 +45,9 @@ def run_workbench_application(root: Path, port: int) -> int:
     if not lock.acquire():
         return 0 if activate_running_workbench(url) else 1
 
-    browser_closed = threading.Event()
     gateway_factory = lambda: PlaywrightAcademicGateway(
         root.parent / "course-progress",
         root,
-        on_browser_closed=browser_closed.set,
         cdp_url=os.environ.get("ACADEMIC_BROWSER_CDP_URL") or None,
     )
     app = create_workbench_app(
@@ -59,7 +58,6 @@ def run_workbench_application(root: Path, port: int) -> int:
     )
     service = app.extensions["observation_service"]
     database = app.extensions["workspace_database"]
-    core = app.extensions["workbench_service"]
     server = make_server("127.0.0.1", port, app, threaded=True)
     server_thread = threading.Thread(
         target=server.serve_forever,
@@ -68,29 +66,20 @@ def run_workbench_application(root: Path, port: int) -> int:
     )
     server_thread.start()
     try:
-        discovered = []
-        try:
-            discovered = core.discover_notice_candidates()
-        except ValueError:
-            # The public notice site must not prevent the local workbench from opening.
-            pass
+        # Offline startup: opening the local shell must not authenticate or
+        # contact any university endpoint. Remote work begins only after an
+        # explicit user action.
         shell = service.submit("launch-shell", {"workbench_url": url})
         if not service.wait(shell.id, 30):
             raise TimeoutError("visible Chromium workbench did not start within 30 seconds")
         result = service.inspect(shell.id) or {}
         if result.get("state") != "succeeded":
             raise RuntimeError(result.get("error") or "visible Chromium workbench failed to start")
-        if core.login_configuration().get("configured"):
-            context = core.refresh_context()
-            confirmed = database.confirmed_notice()
-            if discovered and (
-                not confirmed
-                or discovered[0].get("version_id") != confirmed.get("version_id")
-            ):
-                context["allowed_categories"] = []
-                context["allowed_windows"] = {}
-            service.submit("connect", context)
-        browser_closed.wait()
+        # Closing Chromium does not terminate the local workspace. The next
+        # explicit remote operation can create a new browser session.
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
         return 0
     finally:
         server.shutdown()

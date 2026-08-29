@@ -25,7 +25,7 @@ from course_selection.notice_discovery import (
     parse_official_notice_links,
 )
 from course_selection.persistence import WorkspaceDatabase
-from course_selection.tasks import ObservationService, TaskState
+from course_selection.tasks import ObservationService, TASK_TIMEOUT_SECONDS, TaskState
 from course_selection.workbench import create_workbench_app
 
 
@@ -345,6 +345,29 @@ class WorkspaceDatabaseTests(unittest.TestCase):
             self.assertEqual("2025", database.current_profile()["grade"])
             database.close()
 
+    def test_version_three_cleanup_keeps_identity_notice_and_latest_timetable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = WorkspaceDatabase.open(root)
+            with database.connection:
+                profile_id = database._insert_profile({"grade": "2025"})
+                notice_id = database._insert_notice({"status": "confirmed", "query_eligible": True})
+                database.connection.execute("update notice_versions set status='confirmed' where id=?", (notice_id,))
+                database.connection.execute("delete from schema_migrations where version=3")
+            database.publish_snapshot("timetable", "old", {"entries": []}, source="test", profile_id=profile_id)
+            latest = database.publish_snapshot("timetable", "new", {"entries": []}, source="test", profile_id=profile_id)
+            database.publish_snapshot("selection", "new", {"sections": []}, source="test", profile_id=profile_id, notice_id=notice_id)
+            database.save_plan({"term": "new", "profile_id": profile_id, "notice_id": notice_id, "timetable_snapshot_id": latest["id"], "selection_snapshot_id": "x"})
+            database.close()
+
+            database = WorkspaceDatabase.open(root)
+            self.assertEqual("2025", database.current_profile()["grade"])
+            self.assertIsNotNone(database.confirmed_notice())
+            self.assertEqual(latest["id"], database.latest_snapshot("timetable")["id"])
+            self.assertIsNone(database.latest_snapshot("selection"))
+            self.assertIsNone(database.latest_plan())
+            database.close()
+
     def test_failed_refresh_keeps_last_complete_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             database = WorkspaceDatabase.open(Path(directory))
@@ -421,7 +444,7 @@ class ObservationServiceTests(unittest.TestCase):
             service.close()
             database.close()
 
-    def test_connect_authenticates_then_refreshes_timetable_and_allowed_selection(self):
+    def test_connect_only_verifies_session_without_refreshing_snapshots(self):
         with tempfile.TemporaryDirectory() as directory:
             database = WorkspaceDatabase.open(Path(directory))
             gateway = ShellGateway()
@@ -433,10 +456,12 @@ class ObservationServiceTests(unittest.TestCase):
             self.assertTrue(service.wait(task.id, 2))
             self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(task.id)["state"])
             self.assertEqual(1, gateway.connect_count)
-            self.assertEqual(1, gateway.timetable_count)
-            self.assertEqual(1, gateway.selection_count)
-            self.assertIsNotNone(database.latest_snapshot("timetable"))
-            self.assertIsNotNone(database.latest_snapshot("selection"))
+            self.assertEqual(0, gateway.timetable_count)
+            self.assertEqual(0, gateway.selection_count)
+            self.assertIsNone(database.latest_snapshot("timetable"))
+            self.assertIsNone(database.latest_snapshot("selection"))
+            self.assertEqual("connected", service.session_status()["state"])
+            self.assertTrue(service.session_status()["last_verified_at"])
             service.close()
             database.close()
 
@@ -448,6 +473,35 @@ class ObservationServiceTests(unittest.TestCase):
             context = database.connection.execute("select context from observation_tasks where id=?", (task.id,)).fetchone()[0]
             self.assertNotIn("secret", context)
             self.assertNotIn("Bearer abc", context)
+            database.close()
+
+    def test_read_timeout_reaches_terminal_state_and_releases_active_task(self):
+        class SlowGateway(FakeGateway):
+            def observe_selection(self, request, progress, cancelled):
+                while not cancelled():
+                    time.sleep(0.005)
+                return SelectionObservationResult.incomplete("cancelled")
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(TASK_TIMEOUT_SECONDS, {"refresh-selection": 0.03}):
+            database = WorkspaceDatabase.open(Path(directory))
+            service = ObservationService(database, SlowGateway)
+            task = service.submit("refresh-selection", {"term": "2025-2026-2"})
+            self.assertTrue(service.wait(task.id, 2))
+            self.assertEqual(TaskState.FAILED.value, service.inspect(task.id)["state"])
+            self.assertIn("timed out", service.inspect(task.id)["error"])
+            self.assertIsNone(service.active_task())
+            service.close()
+            database.close()
+
+    def test_different_remote_task_is_rejected_while_one_is_active(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            service = ObservationService(database, FakeGateway, autostart=False)
+            first = service.submit("refresh-selection", {"term": "2025-2026-2"})
+            with self.assertRaisesRegex(RuntimeError, "refresh-selection"):
+                service.submit("refresh-timetable", {"term": "2025-2026-2"})
+            self.assertEqual(first.id, service.active_task()["id"])
+            service.close()
             database.close()
 
     def test_equivalent_pending_refreshes_are_coalesced(self):
@@ -476,13 +530,15 @@ class ObservationServiceTests(unittest.TestCase):
                 return gateway
 
             service = ObservationService(database, factory)
-            tasks = (
-                service.submit("launch-shell", {"workbench_url": "http://127.0.0.1:5000"}),
-                service.submit("connect", {"term": "2026-1", "allowed_categories": ["szhx"]}),
-                service.submit("refresh-timetable", {"term": "2026-1"}),
-                service.submit("refresh-selection", {"term": "2026-1"}),
-            )
-            for task in tasks:
+            tasks = []
+            for operation, context in (
+                ("launch-shell", {"workbench_url": "http://127.0.0.1:5000"}),
+                ("connect", {"term": "2026-1", "allowed_categories": ["szhx"]}),
+                ("refresh-timetable", {"term": "2026-1"}),
+                ("refresh-selection", {"term": "2026-1"}),
+            ):
+                task = service.submit(operation, context)
+                tasks.append(task)
                 self.assertTrue(service.wait(task.id, 2))
 
             self.assertEqual(1, len(gateways))
@@ -582,7 +638,8 @@ class WorkbenchApiTests(unittest.TestCase):
             payload = response.get_json()
             self.assertTrue(payload["configured"])
             service = app.extensions["observation_service"]
-            self.assertTrue(service.wait(payload["connection_task"]["id"], 2))
+            self.assertNotIn("connection_task", payload)
+            self.assertIsNone(service.active_task())
             self.assertEqual("2025******", payload["masked_username"])
             self.assertNotIn("local-secret", json.dumps(payload))
             encrypted = Path(directory) / "course-progress" / "webvpn-login.dpapi"

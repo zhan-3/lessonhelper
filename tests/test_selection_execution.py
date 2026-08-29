@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -173,8 +174,28 @@ class ExecutionApiTests(unittest.TestCase):
             self.assertTrue(service.wait(task["id"], 2))
             inspected = client.get(f"/api/tasks/{task['id']}").get_json()
             self.assertEqual("selected", inspected["progress"]["result"]["status"])
+            history = client.get("/api/executions").get_json()["executions"]
+            self.assertEqual("selected", history[0]["result"])
+            self.assertEqual("TERM-TASK-001", history[0]["section_id"])
+            self.assertNotIn("token", json.dumps(history).lower())
             self.assertEqual(1, gateway.execution_count)
             service.close()
+            database.close()
+
+
+
+class UnknownExecutionTests(unittest.TestCase):
+    def test_unknown_result_blocks_until_user_resolves_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            database.record_execution(
+                {"section_id": "TASK", "course_name": "课程", "category": "xsxk", "snapshot_id": "S", "notice_id": "N"},
+                {"status": "unknown", "message": "未识别到选课结果"},
+            )
+            blocked = database.unresolved_execution("TASK")
+            self.assertIsNotNone(blocked)
+            self.assertTrue(database.resolve_execution(blocked["id"]))
+            self.assertIsNone(database.unresolved_execution("TASK"))
             database.close()
 
 

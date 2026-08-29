@@ -214,6 +214,98 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/executions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Local redacted execution history */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Execution history cleared */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/executions/{identity}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    identity: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Unknown execution resolved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Unknown execution not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions/selection": {
         parameters: {
             query?: never;
@@ -680,9 +772,24 @@ export interface components {
                 timetable: boolean;
                 progress: boolean;
             };
+            snapshot_status: {
+                [key: string]: {
+                    /** @enum {string} */
+                    status: "current" | "historical" | "incomplete" | "missing";
+                    reason: string;
+                    source_at: string;
+                };
+            };
             academic_session: {
                 state: string;
+                browser: string;
+                webvpn: string;
+                last_verified_at: string;
             };
+            active_task: components["schemas"]["Task"];
+            execution_history: {
+                [key: string]: unknown;
+            }[];
             csrf_token: string;
         };
     };

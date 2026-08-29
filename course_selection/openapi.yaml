@@ -24,6 +24,15 @@ paths:
   /api/plans/latest:
     get:
       responses: {'200': {description: Latest persisted read-only plan}, '404': {description: No plan}}
+  /api/executions:
+    get:
+      responses: {'200': {description: Local redacted execution history}}
+    delete:
+      responses: {'204': {description: Execution history cleared}}
+  /api/executions/{identity}/resolve:
+    post:
+      parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Unknown execution resolved}, '404': {description: Unknown execution not found}}
   /api/executions/selection:
     post:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SelectionExecutionRequest'}}}}
@@ -159,7 +168,7 @@ components:
         snapshot: {$ref: '#/components/schemas/Snapshot', nullable: true}
     WorkbenchState:
       type: object
-      required: [login_configuration, profile, confirmed_notice, snapshots, snapshot_changes, latest_plan, graduation_progress, stale, academic_session, csrf_token]
+      required: [login_configuration, profile, confirmed_notice, snapshots, snapshot_changes, latest_plan, graduation_progress, stale, snapshot_status, academic_session, active_task, execution_history, csrf_token]
       properties:
         login_configuration: {$ref: '#/components/schemas/LoginConfiguration'}
         profile: {type: object, nullable: true, additionalProperties: true}
@@ -187,8 +196,23 @@ components:
             selection: {type: boolean}
             timetable: {type: boolean}
             progress: {type: boolean}
+        snapshot_status:
+          type: object
+          additionalProperties:
+            type: object
+            required: [status, reason, source_at]
+            properties:
+              status: {type: string, enum: [current, historical, incomplete, missing]}
+              reason: {type: string}
+              source_at: {type: string}
         academic_session:
           type: object
-          required: [state]
-          properties: {state: {type: string}}
+          required: [state, browser, webvpn, last_verified_at]
+          properties:
+            state: {type: string}
+            browser: {type: string}
+            webvpn: {type: string}
+            last_verified_at: {type: string}
+        active_task: {$ref: '#/components/schemas/Task', nullable: true}
+        execution_history: {type: array, items: {type: object, additionalProperties: true}}
         csrf_token: {type: string}

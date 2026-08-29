@@ -95,7 +95,10 @@ def create_workbench_app(
 
     @app.get("/api/state")
     def state():
-        return jsonify(core.state(session_state=service.session_state, csrf_token=app.config["CSRF_TOKEN"]))
+        return jsonify(core.state(
+            session_state=service.session_status(), active_task=service.active_task(),
+            csrf_token=app.config["CSRF_TOKEN"],
+        ))
 
     @app.post("/api/login-configuration")
     def configure_login():
@@ -108,10 +111,7 @@ def create_workbench_app(
                     str(body.get("username", "")),
                     str(body.get("password", "")),
                 )
-                service.submit("reset-login")
-                service.submit("launch-shell", {"workbench_url": app.config["WORKBENCH_URL"]})
-                connection = service.submit("connect", core.refresh_context())
-                return {**result, "connection_task": {"id": connection.id, "state": connection.state}}
+                return result
 
             result = service.run_when_idle(configure_and_restart)
         except (OSError, RuntimeError, ValueError) as error:
@@ -124,7 +124,6 @@ def create_workbench_app(
             def clear_and_restart():
                 core.clear_login()
                 service.submit("reset-login")
-                service.submit("launch-shell", {"workbench_url": app.config["WORKBENCH_URL"]})
 
             service.run_when_idle(clear_and_restart)
         except (OSError, RuntimeError) as error:
@@ -149,7 +148,10 @@ def create_workbench_app(
             context = core.refresh_context()
         elif operation == "refresh-progress":
             context = core.progress_context()
-        task = service.submit(operation, context)
+        try:
+            task = service.submit(operation, context)
+        except RuntimeError as error:
+            return jsonify({"error": str(error), "active_task": service.active_task()}), 409
         return jsonify({"id": task.id, "operation": operation, "state": task.state}), 202
 
     @app.get("/api/tasks/<identity>")
@@ -210,6 +212,19 @@ def create_workbench_app(
             "task_kind": "execution", "state": task.state,
         }), 202
 
+    @app.get("/api/executions")
+    def execution_history():
+        return jsonify({"executions": database.execution_history()})
+
+    @app.delete("/api/executions")
+    def clear_execution_history():
+        database.clear_execution_history()
+        return "", 204
+
+    @app.post("/api/executions/<identity>/resolve")
+    def resolve_execution(identity: str):
+        return (jsonify({"resolved": True}), 200) if database.resolve_execution(identity) else (jsonify({"error": "not found"}), 404)
+
     @app.post("/api/notices/candidates")
     def create_notice_candidate():
         body = request.get_json(silent=True)
@@ -244,12 +259,7 @@ def create_workbench_app(
     @app.post("/api/notices/<identity>/confirm")
     def confirm_notice(identity: str):
         try:
-            notice = core.confirm_notice(identity)
-            refresh = None
-            if core.login_configuration().get("configured"):
-                task = service.submit("refresh-selection", core.refresh_context())
-                refresh = {"id": task.id, "state": task.state, "operation": "refresh-selection"}
-            return jsonify({**notice, "refresh_task": refresh})
+            return jsonify(core.confirm_notice(identity))
         except ValueError as error:
             return jsonify({"error": str(error)}), 409
 

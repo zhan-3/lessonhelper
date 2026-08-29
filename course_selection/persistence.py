@@ -59,6 +59,8 @@ create index if not exists plans_created on plans(created_at desc);
 create table if not exists refresh_attempts(id text primary key, kind text not null, state text not null, started_at text not null, finished_at text, error text not null default '', snapshot_id text references snapshots(id));
 create table if not exists observation_tasks(id text primary key, operation text not null, coalesce_key text not null, state text not null, created_at text not null, updated_at text not null, progress text not null, context text not null, error text not null default '');
 create table if not exists execution_tasks(id text primary key, operation text not null, state text not null, created_at text not null, updated_at text not null, progress text not null, context text not null, error text not null default '');
+create table if not exists execution_history(id text primary key, created_at text not null, section_id text not null, course_name text not null, category text not null, result text not null, message text not null, snapshot_id text not null, notice_id text not null, resolved integer not null default 0 check(resolved in (0,1)));
+create index if not exists execution_history_created on execution_history(created_at desc);
 """
 
 
@@ -93,12 +95,37 @@ class WorkspaceDatabase:
                 )
             database = cls(root, connection)
             database._import_legacy_once()
+            database._migrate_incompatible_workspace_once()
             return database
         except Exception:
             connection.close()
             if existed and (root / "workbench.sqlite3.backup").exists():
                 shutil.copy2(root / "workbench.sqlite3.backup", path)
             raise
+
+    def _migrate_incompatible_workspace_once(self) -> None:
+        """Drop unsafe pre-lifecycle facts while retaining identity and one timetable."""
+        applied = self.connection.execute(
+            "select 1 from schema_migrations where version=3"
+        ).fetchone()
+        if applied:
+            return
+        with self.connection:
+            newest_timetable = self.connection.execute(
+                "select id from snapshots where kind='timetable' order by created_at desc,rowid desc limit 1"
+            ).fetchone()
+            keep_id = newest_timetable[0] if newest_timetable else ""
+            self.connection.execute("delete from snapshot_changes")
+            self.connection.execute("delete from refresh_attempts")
+            self.connection.execute("delete from plans")
+            self.connection.execute("delete from observation_tasks")
+            self.connection.execute("delete from execution_tasks")
+            self.connection.execute(
+                "delete from snapshots where kind!='timetable' or id!=?", (keep_id,)
+            )
+            self.connection.execute(
+                "insert into schema_migrations(version,applied_at) values(3,?)", (utc_now(),)
+            )
 
     def _import_legacy_once(self) -> None:
         done = self.connection.execute(
@@ -211,7 +238,12 @@ class WorkspaceDatabase:
             )
             self.connection.execute("insert into refresh_attempts values(?,?,?,?,?,?,?)", (uuid.uuid4().hex, kind, "succeeded", utc_now(), utc_now(), "", identity))
             # Timestamps have second precision, so rowid breaks ties for rapid refreshes.
-            old = self.connection.execute("select id from snapshots where kind=? order by created_at desc, rowid desc limit -1 offset 20", (kind,)).fetchall()
+            retention = 3 if kind == "selection" else 20
+            old = self.connection.execute(
+                "select id from snapshots where kind=? and term=? and profile_id is ? and notice_id is ? "
+                "order by created_at desc,rowid desc limit -1 offset ?",
+                (kind, term, profile_id, notice_id, retention),
+            ).fetchall()
             # Keep refresh diagnostics while allowing retention to remove the referenced snapshot.
             self.connection.executemany("update refresh_attempts set snapshot_id=null where snapshot_id=?", ((row[0],) for row in old))
             self.connection.executemany("delete from snapshots where id=?", ((row[0],) for row in old))
@@ -273,6 +305,41 @@ class WorkspaceDatabase:
     def _snapshot_dict(row: sqlite3.Row) -> dict[str, Any]:
         return {"id": row["id"], "kind": row["kind"], "term": row["term"], "profile_id": row["profile_id"], "notice_id": row["notice_id"], "source": row["source"], "source_at": row["source_at"], "created_at": row["created_at"], "payload": json.loads(row["payload"])}
 
+    def record_execution(self, context: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+        identity, now = uuid.uuid4().hex, utc_now()
+        values = (
+            identity, now, str(context.get("section_id") or ""),
+            str(context.get("course_name") or ""), str(context.get("category") or ""),
+            str(result.get("status") or "unknown"), str(sanitize_for_storage(result.get("message") or ""))[:500],
+            str(context.get("snapshot_id") or ""), str(context.get("notice_id") or ""), 0,
+        )
+        with self.connection:
+            self.connection.execute("insert into execution_history values(?,?,?,?,?,?,?,?,?,?)", values)
+        return self.execution_history()[0]
+
+    def execution_history(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.connection.execute(
+            "select * from execution_history order by created_at desc,rowid desc"
+        ).fetchall()]
+
+    def unresolved_execution(self, section_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "select * from execution_history where section_id=? and result='unknown' and resolved=0 "
+            "order by created_at desc,rowid desc limit 1", (section_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def resolve_execution(self, identity: str) -> bool:
+        with self.connection:
+            cursor = self.connection.execute(
+                "update execution_history set resolved=1 where id=? and result='unknown'", (identity,)
+            )
+        return cursor.rowcount == 1
+
+    def clear_execution_history(self) -> None:
+        with self.connection:
+            self.connection.execute("delete from execution_history")
+
     def reset_personal_workspace(self) -> None:
         """Remove identity-bound facts before another student can use the workspace."""
         with self.connection:
@@ -280,6 +347,7 @@ class WorkspaceDatabase:
             self.connection.execute("delete from refresh_attempts")
             self.connection.execute("delete from plans")
             self.connection.execute("delete from execution_tasks")
+            self.connection.execute("delete from execution_history")
             self.connection.execute("delete from snapshots")
             self.connection.execute("delete from profiles")
 

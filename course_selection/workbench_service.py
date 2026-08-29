@@ -146,10 +146,29 @@ class WorkbenchService:
             "page_size": 20,
         }
 
-    def state(self, *, session_state: str, csrf_token: str | None = None) -> dict[str, Any]:
+    def state(self, *, session_state: str | dict[str, Any], active_task: dict[str, Any] | None = None, csrf_token: str | None = None) -> dict[str, Any]:
         selection = self.database.latest_snapshot("selection")
         timetable = self.database.latest_snapshot("timetable")
         progress_snapshot = self.database.latest_snapshot("progress")
+        profile = self.database.current_profile() or {}
+        notice = self.database.confirmed_notice() or {}
+
+        def snapshot_status(kind: str, snapshot: dict[str, Any] | None) -> dict[str, Any]:
+            if not snapshot:
+                return {"status": "missing", "reason": "尚无本地快照", "source_at": ""}
+            reasons: list[str] = []
+            if snapshot.get("profile_id") and snapshot.get("profile_id") != profile.get("version_id"):
+                reasons.append("学生画像已变化")
+            if kind == "selection":
+                if snapshot.get("notice_id") != notice.get("version_id"):
+                    reasons.append("选课通知已变化")
+                if (snapshot.get("payload") or {}).get("contract_version") != "hitwh-jwts-selection-query-v1":
+                    reasons.append("查询契约已变化")
+            return {
+                "status": "historical" if reasons else "current",
+                "reason": "、".join(reasons), "source_at": snapshot.get("source_at", ""),
+            }
+
         result: dict[str, Any] = {
             "login_configuration": self.login_configuration(),
             "profile": self.database.current_profile(),
@@ -162,8 +181,19 @@ class WorkbenchService:
             },
             "latest_plan": self.database.latest_plan(),
             "graduation_progress": self.graduation_progress(),
-            "stale": {"selection": is_stale(selection, 1800), "timetable": is_stale(timetable, 86400), "progress": is_stale(progress_snapshot, 86400)},
-            "academic_session": {"state": session_state},
+            "snapshot_status": {
+                "selection": snapshot_status("selection", selection),
+                "timetable": snapshot_status("timetable", timetable),
+                "progress": snapshot_status("progress", progress_snapshot),
+            },
+            "stale": {
+                "selection": snapshot_status("selection", selection)["status"] != "current",
+                "timetable": snapshot_status("timetable", timetable)["status"] != "current",
+                "progress": snapshot_status("progress", progress_snapshot)["status"] != "current",
+            },
+            "academic_session": session_state if isinstance(session_state, dict) else {"state": session_state},
+            "active_task": active_task,
+            "execution_history": self.database.execution_history(),
         }
         if csrf_token is not None:
             result["csrf_token"] = csrf_token
@@ -286,6 +316,9 @@ class WorkbenchService:
         query_term = str(section.get("query_term") or "")
         if not category or not query_term:
             raise ValueError("教学班缺少查询类别或学期来源")
+        unresolved = self.database.unresolved_execution(section_id)
+        if unresolved:
+            raise ValueError("该教学班上次执行结果未知，请先核实并解除阻断")
         if category not in self.refresh_context().get("allowed_categories", []):
             raise ValueError("教学班类别不在当前通知白名单中")
         return {
