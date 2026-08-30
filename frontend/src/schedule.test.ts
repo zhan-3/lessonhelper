@@ -8,6 +8,7 @@ import {
   expandScheduleItems,
   expandWeekSpec,
   formatWeekGroup,
+  enrolledRequirementFilter,
   requirementFilterFor,
   planningFilterFor,
   queryFilterFor,
@@ -131,6 +132,14 @@ describe("schedule parsing", () => {
       candidateOption({ identity: "section-c", course_code: "HIST", name: "四史专题", category: "文化素质", credits: "2.0" }, 2),
     ];
     expect(projectedCourseCredits(options, [{ code: "HIST", name: "四史专题" }], "文化素质")).toBe(2);
+  });
+
+  it("classifies current enrollment without treating own required courses as cross-major", () => {
+    expect(enrolledRequirementFilter("文理通识-文化素质教育课", "任选")).toBe("文化素质");
+    expect(enrolledRequirementFilter("创新研修课", "选修")).toBe("创新创业");
+    expect(enrolledRequirementFilter("跨专业发展课程", "任选")).toBe("跨专业");
+    expect(enrolledRequirementFilter("专业基础课（包括大类平台课）", "必修")).toBeNull();
+    expect(enrolledRequirementFilter("专业核心课", "任选")).toBeNull();
   });
 
   it("maps query source codes to planning filters ahead of raw labels", () => {

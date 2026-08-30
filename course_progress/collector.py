@@ -123,7 +123,6 @@ def load_checkpoint(path: Path) -> CollectionCheckpoint:
             category=str(item["category"]),
             credits=float(item["credits"]),
             passed=bool(item["passed"]),
-            in_progress=bool(item.get("in_progress", False)),
         )
         for item in payload.get("records", [])
     )

@@ -221,7 +221,6 @@ class CollectorTests(unittest.TestCase):
                     "任选",
                     "文理通识-文化素质教育课",
                     1.0,
-                    False,
                     True,
                 ),
             ),

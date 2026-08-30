@@ -222,6 +222,19 @@ export function requirementFilterFor(category: string): Exclude<RequirementFilte
   return null;
 }
 
+/** Classify current enrollment facts without treating the student's own major courses as cross-major. */
+export function enrolledRequirementFilter(
+  category: string,
+  nature: string,
+): Exclude<RequirementFilter, "全部"> | null {
+  if (/必修/.test(nature)) return null;
+  const value = category.replace(/\s/g, "");
+  if (/创新创业|创新实验|创新研修|创业课程/.test(value)) return "创新创业";
+  if (/文化素质|素质教育|文理通识-文化素质/.test(value)) return "文化素质";
+  if (/外专业|跨专业/.test(value)) return "跨专业";
+  return null;
+}
+
 /** Prefer the query source code (authoritative), then fall back to the raw label. */
 export function planningFilterFor(option: { queryCode?: string; category: string }): Exclude<RequirementFilter, "全部"> | null {
   return queryFilterFor(option.queryCode ?? "") ?? requirementFilterFor(option.category);

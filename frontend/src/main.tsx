@@ -640,8 +640,8 @@ function App() {
         <header className="data-drawer-heading"><div><small>教务数据中心</small><h2 id="data-drawer-title">刷新与连接</h2><p>远程读取会保留最近一次完整快照，不会因失败清空现有数据。</p></div><button ref={drawerCloseRef} className="drawer-close" onClick={() => setDataDrawerOpen(false)} aria-label="关闭数据操作面板">关闭</button></header>
         <section className="drawer-actions" aria-label="数据操作">
           <button onClick={() => run("connect")} disabled={remoteBusy}><span>连接教务</span><small>验证当前教务会话</small></button>
-          <button onClick={() => run("refresh-timetable")} disabled={remoteBusy}><span>刷新课表</span><small>{statusLabel("timetable")}</small></button>
-          <button onClick={() => run("refresh-progress")} disabled={remoteBusy}><span>同步学分进度</span><small>含已选待成绩 · {statusLabel("progress")}</small></button>
+          <button onClick={() => run("refresh-timetable")} disabled={remoteBusy}><span>刷新课表</span><small>含本学期已选 · {statusLabel("timetable")}</small></button>
+          <button onClick={() => run("refresh-progress")} disabled={remoteBusy}><span>同步已修学分</span><small>{statusLabel("progress")}</small></button>
           <button onClick={() => run("refresh-selection")} disabled={remoteBusy || !state.confirmed_notice}><span>刷新待选课程</span><small>{state.confirmed_notice ? statusLabel("selection") : "需先确认官方通知"}</small></button>
           {state.capabilities?.development_diagnostics && <button className="secondary" onClick={() => run("observe-navigation")} disabled={remoteBusy}><span>诊断监听</span><small>开发诊断工具</small></button>}
         </section>

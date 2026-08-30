@@ -82,13 +82,21 @@ class TimetableObservationResult:
     status: str
     term: str = ""
     entries: tuple[dict[str, Any], ...] = ()
+    enrolled_courses: tuple[dict[str, Any], ...] = ()
     source_kind: str = "personal-timetable-api"
     trace: AcademicRequestTrace = field(default_factory=AcademicRequestTrace.empty)
     error: str = ""
 
     @classmethod
-    def complete(cls, *, term: str, entries: list[dict[str, Any]], trace: AcademicRequestTrace) -> TimetableObservationResult:
-        return cls(status="complete", term=term, entries=tuple(entries), trace=trace)
+    def complete(
+        cls, *, term: str, entries: list[dict[str, Any]],
+        enrolled_courses: list[dict[str, Any]] | None = None,
+        trace: AcademicRequestTrace,
+    ) -> TimetableObservationResult:
+        return cls(
+            status="complete", term=term, entries=tuple(entries),
+            enrolled_courses=tuple(enrolled_courses or ()), trace=trace,
+        )
 
     @classmethod
     def incomplete(cls, error: str, *, trace: AcademicRequestTrace | None = None) -> TimetableObservationResult:
@@ -103,6 +111,7 @@ class TimetableObservationResult:
             "status": self.status,
             "term": self.term,
             "entries": list(self.entries),
+            "enrolled_courses": list(self.enrolled_courses),
             "source_kind": self.source_kind,
         }
 

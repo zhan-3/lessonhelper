@@ -9,6 +9,11 @@ from course_selection.personal_timetable import (
     personal_timetable_parameters,
 )
 
+ENROLLMENT_HTML = """
+<table><tr><th>学年学期</th><th>课程代码</th><th>课程名称</th><th>课程类别</th><th>课程性质</th><th>学分</th></tr>
+<tr><td>2026-2027-1</td><td>ART1</td><td>舞蹈欣赏</td><td>文理通识-文化素质教育课</td><td>任选</td><td>2</td></tr></table>
+"""
+
 
 class PersonalTimetableParserTests(unittest.TestCase):
     def test_request_body_contains_only_verified_fields(self):
@@ -163,11 +168,12 @@ class PersonalTimetableParserTests(unittest.TestCase):
 
             def evaluate(self, script, arguments):
                 self.evaluate_calls.append((script, arguments))
+                enrollment = arguments["url"].endswith("/kbcx/queryXsxkXq")
                 return {
                     "status": 200,
                     "url": arguments["url"],
-                    "requestBody": "fhlj=kbcx%2FqueryGrkb&xnxq=2026-20271",
-                    "body": html,
+                    "requestBody": "fhlj=kbcx%2FqueryGrkb&xnxq=2026-20271&zc=1" if enrollment else "fhlj=kbcx%2FqueryGrkb&xnxq=2026-20271",
+                    "body": ENROLLMENT_HTML if enrollment else html,
                 }
 
         class Session:
@@ -193,14 +199,19 @@ class PersonalTimetableParserTests(unittest.TestCase):
         self.assertEqual("complete", result.status)
         self.assertEqual("personal-timetable-api", result.source_kind)
         self.assertEqual(1, len(result.entries))
+        self.assertEqual("ART1", result.enrolled_courses[0]["code"])
         endpoint = session.open_calls[0][0]
         self.assertEqual("/kbcx/queryGrkb", endpoint.split("/http/abc123", 1)[1])
         self.assertEqual(endpoint, page.evaluate_calls[0][1]["url"])
         self.assertEqual({}, page.evaluate_calls[0][1]["overrides"])
-        self.assertTrue(result.trace.events[0].url.endswith("/kbcx/queryGrkb"))
         self.assertEqual(
-            ("fhlj", "xnxq"), result.trace.events[1].field_names
+            {"zc": "1", "xnxq": "2026-20271"},
+            page.evaluate_calls[1][1]["overrides"],
         )
+        self.assertEqual(["pageRwh"], page.evaluate_calls[1][1]["remove"])
+        self.assertTrue(result.trace.events[0].url.endswith("/kbcx/queryGrkb"))
+        self.assertEqual(("fhlj", "xnxq"), result.trace.events[1].field_names)
+        self.assertEqual(("fhlj", "xnxq", "zc"), result.trace.events[-1].field_names)
 
     def test_gateway_trace_records_retry_navigation_after_page_fetch_failure(self):
         from playwright.sync_api import Error as PlaywrightError
@@ -225,11 +236,12 @@ class PersonalTimetableParserTests(unittest.TestCase):
                 self.attempts += 1
                 if self.attempts == 1:
                     raise PlaywrightError("query form unavailable after authentication")
+                enrollment = arguments["url"].endswith("/kbcx/queryXsxkXq")
                 return {
                     "status": 200,
                     "url": arguments["url"],
-                    "requestBody": "fhlj=kbcx%2FqueryGrkb&xnxq=2026-20271",
-                    "body": html,
+                    "requestBody": "fhlj=kbcx%2FqueryGrkb&xnxq=2026-20271&zc=1" if enrollment else "fhlj=kbcx%2FqueryGrkb&xnxq=2026-20271",
+                    "body": ENROLLMENT_HTML if enrollment else html,
                 }
 
         page = Page()
@@ -247,7 +259,7 @@ class PersonalTimetableParserTests(unittest.TestCase):
         )
 
         self.assertEqual("complete", result.status)
-        self.assertEqual(["GET", "GET", "POST"], [event.method for event in result.trace.events])
+        self.assertEqual(["GET", "GET", "POST", "GET", "POST"], [event.method for event in result.trace.events])
 
     def test_gateway_rejects_timetable_for_a_different_requested_term(self):
         html = """

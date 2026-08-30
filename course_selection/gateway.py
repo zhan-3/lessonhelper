@@ -10,7 +10,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from course_progress.session import AcademicBrowserSession, WebVpnSessionExpiredError
 
@@ -24,6 +24,9 @@ _ACADEMIC_PROXY_PATH = (
 )
 ACADEMIC_HEALTH_URL = (
     "https://webvpn.hitwh.edu.cn" + _ACADEMIC_PROXY_PATH + "kbcx/queryGrkb"
+)
+CURRENT_ENROLLMENT_URL = (
+    "https://webvpn.hitwh.edu.cn" + _ACADEMIC_PROXY_PATH + "kbcx/queryXsxkXq"
 )
 
 
@@ -444,7 +447,6 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                         "completed_credits": item.completed_credits,
                         "remaining_credits": item.remaining_credits,
                         "courses": [asdict(course) for course in item.courses],
-                        "in_progress_courses": [asdict(course) for course in item.in_progress_courses],
                     }
                     for item in report.progress
                 ],
@@ -474,6 +476,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             AuthenticatedAcademicClient,
         )
 
+        from .current_enrollment import parse_current_enrollment_html
         from .personal_timetable import parse_timetable_grid_html
 
         page = getattr(self, "_academic_page", None)
@@ -494,7 +497,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             timeout_seconds=min(15, timeout),
             cancelled=cancelled,
         )
-        progress("reading", {"target": "timetable", "contract_version": "personal-timetable-v1"})
+        progress("reading", {"target": "timetable", "contract_version": "timetable-enrollment-v1"})
         try:
             client.get("/kbcx/queryGrkb")
             response = client.post_page_form("/kbcx/queryGrkb", retry_read_once=True)
@@ -502,22 +505,41 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             trace_requests.extend(client.trace_requests)
             progress("interface_unconfirmed", {"target": "timetable", "message": str(error)[:160]})
             return {"status": "interface_unconfirmed", "entries": [], "reason": str(error)[:160], "_trace_requests": trace_requests}
-        trace_requests.extend(client.trace_requests)
         if response.status != 200:
+            trace_requests.extend(client.trace_requests)
             return {"status": "entry_unreachable", "entries": [], "http_status": response.status, "_trace_requests": trace_requests}
-        html = response.body
         try:
             entries = parse_timetable_grid_html(
-                html, expected_term=str(context.get("term") or "") or None
+                response.body, expected_term=str(context.get("term") or "") or None
             )
-        except ValueError as error:
+            # This fixed read contract was manually verified against
+            # 「周课表查询 → 学生选课信息查询」.  It supplies the course
+            # category, nature and credits that the timetable grid omits.
+            term_values = parse_qs(response.request_body).get("xnxq", [])
+            overrides = {"zc": "1"}
+            if term_values:
+                overrides["xnxq"] = term_values[0]
+            client.get(CURRENT_ENROLLMENT_URL)
+            enrollment_response = client.post_page_form(
+                CURRENT_ENROLLMENT_URL,
+                overrides=overrides,
+                remove=("pageRwh",),
+                retry_read_once=True,
+            )
+            if enrollment_response.status != 200:
+                raise ValueError(f"已选课程查询返回 HTTP {enrollment_response.status}")
+            enrolled_courses = parse_current_enrollment_html(enrollment_response.body)
+        except (AcademicClientError, TimeoutError, ValueError) as error:
+            trace_requests.extend(client.trace_requests)
             progress("interface_unconfirmed", {"target": "timetable", "message": str(error)})
             return {"status": "interface_unconfirmed", "entries": [], "reason": str(error), "_trace_requests": trace_requests}
+        trace_requests.extend(client.trace_requests)
         term = entries[0].term if entries else str(context.get("term") or "")
         from .timetable import timetable_snapshot_payload
         payload = timetable_snapshot_payload(
-            entries, source_name="/kbcx/queryGrkb", source_kind="personal-timetable-api",
+            entries, source_name="/kbcx/queryGrkb + /kbcx/queryXsxkXq", source_kind="personal-timetable-api",
         )
+        payload["enrolled_courses"] = [asdict(course) for course in enrolled_courses]
         return {"status": "complete", "term": term, "source_kind": "personal-timetable-api", "_trace_requests": trace_requests, **payload}
 
     def observe_timetable(self, request, progress: Progress, cancelled: Cancelled):
@@ -535,7 +557,10 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         if result.get("status") != "complete":
             return TimetableObservationResult.incomplete(str(result.get("reason") or result.get("status")), trace=trace)
         return TimetableObservationResult.complete(
-            term=str(result.get("term") or request.term), entries=list(result.get("entries", ())), trace=trace,
+            term=str(result.get("term") or request.term),
+            entries=list(result.get("entries", ())),
+            enrolled_courses=list(result.get("enrolled_courses", ())),
+            trace=trace,
         )
 
     def observe_manual(self, request, progress: Progress, cancelled: Cancelled, finished: Cancelled):

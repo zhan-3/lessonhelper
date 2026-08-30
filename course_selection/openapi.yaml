@@ -140,7 +140,7 @@ components:
         credits: {type: number}
     RequirementProgress:
       type: object
-      required: [key, label, required_credits, completed_credits, remaining_credits, courses, in_progress_courses]
+      required: [key, label, required_credits, completed_credits, remaining_credits, courses]
       properties:
         key: {type: string}
         label: {type: string}
@@ -148,7 +148,6 @@ components:
         completed_credits: {type: number}
         remaining_credits: {type: number}
         courses: {type: array, items: {$ref: '#/components/schemas/CompletedCourseFact'}}
-        in_progress_courses: {type: array, items: {$ref: '#/components/schemas/CompletedCourseFact'}}
     GraduationProgressReport:
       type: object
       required: [data_complete, progress]

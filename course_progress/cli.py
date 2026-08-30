@@ -144,7 +144,6 @@ def _progress_report_data(collection, report) -> dict:
                 "completed_credits": item.completed_credits,
                 "remaining_credits": item.remaining_credits,
                 "courses": [asdict(course) for course in item.courses],
-                "in_progress_courses": [asdict(course) for course in item.in_progress_courses],
             }
             for item in report.progress
         ],
