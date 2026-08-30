@@ -62,6 +62,30 @@ const waitForTask = (task: Task): Promise<Task> => new Promise(resolve => {
   }, 600);
 });
 
+type PendingConfirm = { title: string; detail?: string; confirmLabel?: string; onConfirm: () => void };
+
+type QueueStep = { goal: string; attempts: Array<{ sectionId: string; label: string }> };
+
+function ConfirmDialog({ pending, onConfirm, onCancel }: { pending: PendingConfirm; onConfirm: () => void; onCancel: () => void }) {
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    confirmRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onCancel]);
+  return <div className="confirm-layer">
+    <button className="confirm-backdrop" onClick={onCancel} aria-label="取消" />
+    <div className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+      <h3 id="confirm-title">{pending.title}</h3>
+      {pending.detail && <div className="confirm-detail">{pending.detail}</div>}
+      <div className="confirm-actions"><button className="secondary" onClick={onCancel}>取消</button><button ref={confirmRef} onClick={onConfirm}>{pending.confirmLabel ?? "确认"}</button></div>
+    </div>
+  </div>;
+}
+
 function App() {
   const [state, setState] = useState<WorkbenchState | null>(null);
   const [candidates, setCandidates] = useState<CandidateNotice[]>([]);
@@ -71,6 +95,7 @@ function App() {
   const [queueRunning, setQueueRunning] = useState(false);
   const [queueResults, setQueueResults] = useState<QueueResult[]>([]);
   const [dragGoalIndex, setDragGoalIndex] = useState<number | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const lastSelectionTerm = useRef<string | null>(null);
   const [plan, setPlan] = useState<Record<string, unknown> | null>(null);
   const [message, setMessage] = useState("");
@@ -82,6 +107,8 @@ function App() {
   const drawerTriggerRef = useRef<HTMLButtonElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
   const goalsHydrated = useRef(false);
+
+  const askConfirm = (title: string, detail: string | undefined, confirmLabel: string | undefined, onConfirm: () => void) => setPendingConfirm({ title, detail, confirmLabel, onConfirm });
 
   const load = useCallback(async () => {
     const [response, notices] = await Promise.all([
@@ -151,8 +178,13 @@ function App() {
     }
   };
 
-  const clearLogin = async () => {
-    if (!state || !window.confirm("清除自动登录并重置当前学生的画像、课程快照和规划？官方通知会保留。")) return;
+  const clearLogin = () => {
+    if (!state) return;
+    askConfirm("清除自动登录？", "清除自动登录并重置当前学生的画像、课程快照和规划；官方通知会保留。", undefined, () => void clearLoginConfirmed());
+  };
+
+  const clearLoginConfirmed = async () => {
+    if (!state) return;
     const response = await fetch("/api/login-configuration", {
       method: "DELETE",
       headers: jsonHeaders(state.csrf_token),
@@ -165,14 +197,8 @@ function App() {
     } else setMessage("无法清除自动登录配置");
   };
 
-  const run = async (operation: string) => {
+  const submitTask = async (operation: string) => {
     if (!state) return;
-    if (operation === "refresh-selection") {
-      const status = state.snapshot_status?.selection;
-      const windows = (state.confirmed_notice?.windows as Array<{ category_codes?: string[] }> | undefined) ?? [];
-      const categories = windows.flatMap(window => window.category_codes ?? []);
-      if (!window.confirm(`强制刷新待选课程？\n上次完整刷新：${status?.source_at || "无"}\n查询类别：${new Set(categories).size}\n\n这会访问学校系统。`)) return;
-    }
     const response = await fetch("/api/tasks", {
       method: "POST",
       headers: jsonHeaders(state.csrf_token),
@@ -184,6 +210,18 @@ function App() {
       return;
     }
     setTask(created);
+  };
+
+  const run = (operation: string) => {
+    if (!state) return;
+    if (operation === "refresh-selection") {
+      const status = state.snapshot_status?.selection;
+      const windows = (state.confirmed_notice?.windows as Array<{ category_codes?: string[] }> | undefined) ?? [];
+      const categories = windows.flatMap(window => window.category_codes ?? []);
+      askConfirm("强制刷新待选课程？", `上次完整刷新：${formatSourceTime(status?.source_at)}\n查询类别：${new Set(categories).size}\n\n这会访问学校系统。`, undefined, () => void submitTask("refresh-selection"));
+      return;
+    }
+    void submitTask(operation);
   };
 
   useEffect(() => {
@@ -198,6 +236,11 @@ function App() {
     }, 600);
     return () => window.clearInterval(timer);
   }, [task, state, load]);
+
+  const refreshLocalPage = async () => {
+    await load();
+    setMessage("本地页面已刷新");
+  };
 
   const discoverOfficialNotices = async () => {
     if (!state) return;
@@ -240,9 +283,13 @@ function App() {
     if (!response.ok) setMessage("当前任务无法完成监听");
   };
 
-  const executeSection = async (sectionId: string, courseName: string) => {
+  const executeSection = (sectionId: string, courseName: string) => {
     if (!state?.snapshots.selection) return;
-    if (!window.confirm(`确认提交一次选课请求？\n${courseName}\n教学班：${sectionId}\n\n系统不会自动重试。`)) return;
+    askConfirm("确认提交一次选课请求？", `${courseName}\n教学班：${sectionId}\n\n系统不会自动重试。`, undefined, () => void submitSection(sectionId));
+  };
+
+  const submitSection = async (sectionId: string) => {
+    if (!state?.snapshots.selection) return;
     const response = await fetch("/api/executions/selection", {
       method: "POST",
       headers: jsonHeaders(state.csrf_token),
@@ -267,8 +314,13 @@ function App() {
     await load();
   };
 
-  const clearHistory = async () => {
-    if (!state || !window.confirm("清除全部本地选课执行历史？")) return;
+  const clearHistory = () => {
+    if (!state) return;
+    askConfirm("清除全部本地选课执行历史？", undefined, undefined, () => void clearHistoryConfirmed());
+  };
+
+  const clearHistoryConfirmed = async () => {
+    if (!state) return;
     await fetch("/api/executions", { method: "DELETE", headers: jsonHeaders(state.csrf_token) });
     await load();
   };
@@ -408,10 +460,10 @@ function App() {
     return null;
   };
 
-  const runQueue = async () => {
+  const runQueue = () => {
     if (!state || queueRunning || remoteBusy || !goals.length) return;
     const snapshotId = state.snapshots.selection.id;
-    const steps = goals.map(goal => {
+    const steps: QueueStep[] = goals.map(goal => {
       const course = planCourses.find(candidate => candidate.identity === goal.course_identity);
       const available = course?.sections ?? [];
       return {
@@ -423,7 +475,11 @@ function App() {
       };
     });
     const preview = steps.map((step, index) => `${index + 1}. ${step.goal}${step.attempts.length ? `：依次尝试 ${step.attempts.length} 个教学班` : "（无可执行教学班）"}`).join("\n");
-    if (!window.confirm(`按优先级提交选课，共 ${steps.length} 个课程目标：\n\n${preview}\n\n每个教学班只提交一次、不会自动重试；某目标成功后自动跳到下一个目标。基于当前待选课程快照执行。`)) return;
+    askConfirm("按优先级提交选课", `${steps.length} 个课程目标：\n\n${preview}\n\n每个教学班只提交一次、不会自动重试；某目标成功后自动跳到下一个目标。基于当前待选课程快照执行。`, undefined, () => void executeQueue(steps, snapshotId));
+  };
+
+  const executeQueue = async (steps: QueueStep[], snapshotId: string) => {
+    if (!state) return;
     const results: QueueResult[] = [];
     setQueueResults([]);
     setQueueRunning(true);
@@ -592,7 +648,7 @@ function App() {
           <button onClick={() => run("refresh-timetable")} disabled={remoteBusy}><span>刷新课表</span><small>{statusLabel("timetable")}</small></button>
           <button onClick={() => run("refresh-progress")} disabled={remoteBusy}><span>刷新毕业进度</span><small>{statusLabel("progress")}</small></button>
           <button onClick={() => run("refresh-selection")} disabled={remoteBusy || !state.confirmed_notice}><span>刷新待选课程</span><small>{state.confirmed_notice ? statusLabel("selection") : "需先确认官方通知"}</small></button>
-          <button className="secondary" onClick={load}><span>刷新本地页面</span><small>不访问学校系统</small></button>
+          <button className="secondary" onClick={refreshLocalPage}><span>刷新本地页面</span><small>不访问学校系统</small></button>
           {state.capabilities?.development_diagnostics && <button className="secondary" onClick={() => run("observe-navigation")} disabled={remoteBusy}><span>诊断监听</span><small>开发诊断工具</small></button>}
         </section>
         {activeTask && <section className="drawer-task" aria-live="polite"><small>当前任务</small><strong>{activeTask.operation} · {activeTask.state}</strong><span>{taskProgressLabel(activeTask.progress) || `开始于 ${activeTask.created_at ?? "—"}`}</span><div>{activeTask.operation === "observe-navigation" && <button onClick={finishObservation}>完成监听</button>}{activeTask.task_kind !== "execution" && <button className="danger" onClick={cancel}>取消任务</button>}</div></section>}
@@ -602,6 +658,7 @@ function App() {
         {state.execution_history && state.execution_history.length > 0 && <section className="drawer-history" aria-label="选课执行记录"><small>选课执行记录</small>{state.execution_history.map(item => <div className="drawer-history-item" key={item.id}><strong>{item.course_name || item.section_id}</strong><span>{item.created_at} · {item.result}{item.message ? ` · ${item.message}` : ""}</span>{item.result === "unknown" && !item.resolved && <button onClick={() => resolveUnknown(item.id)}>已核实，解除阻断</button>}</div>)}<button className="danger" onClick={clearHistory}>清除执行记录</button></section>}
       </aside>
     </div>}
+    {pendingConfirm && <ConfirmDialog pending={pendingConfirm} onConfirm={() => { const action = pendingConfirm.onConfirm; setPendingConfirm(null); action(); }} onCancel={() => setPendingConfirm(null)} />}
 
     <section className="queue-panel" aria-labelledby="queue-title">
       <header className="queue-heading">
