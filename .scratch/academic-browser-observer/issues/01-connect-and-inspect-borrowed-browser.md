@@ -4,12 +4,12 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** automated-test verified (Python core and local HTTP adapter)
 
-- [ ] An explicit HTTP or WebSocket CDP endpoint connects successfully; the Extension never scans local ports or silently selects another browser.
-- [ ] Connection state is classified as borrowed and exposes detach semantics without any remote-browser close option.
-- [ ] The model-callable interface can connect, inspect basic page targets, and disconnect through the same observation seam used by tests.
-- [ ] The returned inventory is bounded and omits full URLs, page content, credentials, cookies, and personal values.
-- [ ] Disconnect leaves the fixture browser process and its pre-existing tabs alive and usable.
-- [ ] Repeated connect, inspect, and disconnect calls return typed, deterministic outcomes rather than creating duplicate ownership.
-- [ ] Automated tests cross the public observation seam and verify browser-visible outcomes rather than private CDP helpers.
+- [x] An explicit HTTP or WebSocket CDP endpoint connects successfully; the observer never scans local ports or silently selects another browser.
+- [x] Connection state is classified as borrowed and exposes detach semantics without any remote-browser close option.
+- [x] The HTTP adapter can connect, inspect basic page targets, and disconnect through the same observation seam used by tests.
+- [x] The returned inventory is bounded and omits full URLs, page content, credentials, cookies, and personal values.
+- [x] Disconnect leaves the fixture browser process and its pre-existing tabs alive and usable.
+- [x] Repeated connect, inspect, and disconnect calls return typed, deterministic outcomes rather than creating duplicate ownership.
+- [x] Automated tests cross the public observation seam and verify browser-visible outcomes rather than private CDP helpers.

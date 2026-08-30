@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from flask import Flask, abort, jsonify, request, send_from_directory
 
+from .browser_observer import BorrowedBrowserObserver
 from .gateway import AcademicGateway, PlaywrightAcademicGateway
 from .notice_discovery import DEFAULT_NOTICE_INDEX_URL
 from .persistence import WorkspaceDatabase
@@ -28,6 +29,7 @@ def create_workbench_app(
     login_root: Path | str | None = None,
     require_login_configuration: bool = False,
     development_diagnostics: bool | None = None,
+    browser_observer: BorrowedBrowserObserver | None = None,
 ) -> Flask:
     root = Path(root)
     resolved_login_root = Path(login_root) if login_root else (
@@ -40,6 +42,7 @@ def create_workbench_app(
             root.parent / "course-progress", root, cdp_url=cdp_url,
         )
     service = ObservationService(database, gateway_factory)
+    observer = browser_observer or BorrowedBrowserObserver(session_id="workbench")
     core = WorkbenchService(
         database,
         progress_report_path=resolved_login_root / "progress-report.json",
@@ -66,6 +69,7 @@ def create_workbench_app(
     app.extensions["workspace_database"] = database
     app.extensions["observation_service"] = service
     app.extensions["workbench_service"] = core
+    app.extensions["browser_observer"] = observer
 
     @app.before_request
     def protect_local_service():
@@ -138,6 +142,25 @@ def create_workbench_app(
         except (OSError, RuntimeError) as error:
             return jsonify({"error": str(error)}), 409
         return "", 204
+
+    @app.post("/api/browser-observer/connect")
+    def connect_browser_observer():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or not isinstance(body.get("endpoint"), str):
+            return jsonify({"error": "an explicit CDP endpoint is required"}), 400
+        try:
+            result = observer.connect(body["endpoint"])
+        except (OSError, RuntimeError, ValueError) as error:
+            return jsonify({"status": "failed", "error": str(error)}), 400
+        return jsonify(result.to_dict())
+
+    @app.get("/api/browser-observer/targets")
+    def inspect_browser_observer():
+        return jsonify(observer.inspect().to_dict())
+
+    @app.post("/api/browser-observer/disconnect")
+    def disconnect_browser_observer():
+        return jsonify(observer.disconnect().to_dict())
 
     @app.post("/api/tasks")
     def submit_task():
