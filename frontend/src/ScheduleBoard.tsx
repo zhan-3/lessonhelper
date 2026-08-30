@@ -15,6 +15,7 @@ import {
   progressFilterByKey,
   progressKeysByQueryCode,
   projectedCourseCredits,
+  selectedCandidateOptions,
   weekItems,
   type CandidateOption,
   type RequirementFilter,
@@ -49,12 +50,13 @@ const readCalibration = (term: string): WeekCalibration | null => {
   }
 };
 
-export function ScheduleBoard({ timetable, selection, graduationProgress, selectionWindows, studentGrade, previewKeys, onTogglePreview, onExecuteSection, executionPending }: {
+export function ScheduleBoard({ timetable, selection, graduationProgress, selectionWindows, studentGrade, executionHistory, previewKeys, onTogglePreview, onExecuteSection, executionPending }: {
   timetable: WorkbenchState["snapshots"]["timetable"];
   selection: WorkbenchState["snapshots"]["selection"];
   graduationProgress?: WorkbenchState["graduation_progress"];
   selectionWindows: SelectionWindow[];
   studentGrade: string;
+  executionHistory: Array<Record<string, unknown>>;
   previewKeys: string[];
   onTogglePreview: (key: string) => void;
   onExecuteSection?: (sectionId: string, courseName: string) => void;
@@ -105,6 +107,13 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
   }, [term, maxWeek]);
 
   const previewOptions = candidateOptions.filter(option => previewKeys.includes(option.key));
+  const selectedOptions = selectedCandidateOptions(
+    candidateOptions,
+    (timetable?.payload.entries as Record<string, unknown>[] | undefined) ?? [],
+    executionHistory,
+  );
+  const selectedIdentities = new Set(selectedOptions.map(option => `${option.courseCode || option.name}`.trim().toLowerCase()));
+  const queuedOptions = previewOptions.filter(option => !selectedIdentities.has(`${option.courseCode || option.name}`.trim().toLowerCase()));
   const unknownCount = [...current, ...candidateOptions.flatMap(option => option.meetings)].filter(item => item.unknown).length;
   // 进度面板与待选课程同步：只展示本次选课查询覆盖的培养要求。
   const syncedProgress = (() => {
@@ -192,21 +201,33 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
 
   return <section className="schedule-panel">
     <section className="progress-band" aria-label="毕业进度规划参考">
-      <div className="progress-band-heading"><strong>毕业进度规划参考</strong><small>基于 2026 指南 · 非学校正式毕业审核</small></div>
+      <div className="progress-band-heading"><strong>毕业进度规划参考</strong><small>公开规则 + 本地快照 · 非学校正式毕业审核</small></div>
       {syncedProgress.length ? <div className="progress-band-inner">{syncedProgress.map(item => {
         const filter = progressFilterByKey[item.key];
         const confirmedCredits = item.completed_credits ?? 0;
-        const requiredCredits = item.required_credits ?? 0;
-        const projectedCredits = filter ? projectedCourseCredits(previewOptions, completedCourses, filter) : 0;
-        const expectedCredits = confirmedCredits + projectedCredits;
+        const requiredCredits = item.key === "cultural_quality" && studentGrade === "2021" ? 10 : (item.required_credits ?? 0);
+        const selectedCredits = filter ? projectedCourseCredits(selectedOptions, completedCourses, filter) : 0;
+        const selectedFacts = selectedOptions.map(option => ({ code: option.courseCode, name: option.name }));
+        const queuedCredits = filter ? projectedCourseCredits(queuedOptions, [...completedCourses, ...selectedFacts], filter) : 0;
+        const expectedCredits = confirmedCredits + selectedCredits + queuedCredits;
         const remainingCredits = Math.max(0, requiredCredits - expectedCredits);
+        const width = (credits: number, before = 0) => requiredCredits > 0 ? `${Math.max(0, Math.min(credits, requiredCredits - before)) / requiredCredits * 100}%` : "0%";
+        const culturalRule = studentGrade === "2021"
+          ? "2021级：总计≥10学分、覆盖≥4模块；讲座最多计1学分"
+          : ["2022", "2023", "2024"].includes(studentGrade)
+            ? `总计≥8学分；D类≥2、四史≥1门（均计入总额，四史${fourHistoriesComplete ? "已完成" : "待核对"}）`
+            : "D类、四史和讲座是总额内的子约束；当前年级请按个人培养方案核对";
+        const rule = item.key === "cultural_quality" ? culturalRule
+          : item.key === "innovation_and_practice" || item.key === "innovation" ? "创新创业+社会实践合计≥6，社会实践≥1；创新创业单项最低值待按个人方案核对"
+            : item.key === "outside_major_elective" ? (studentGrade === "2025" ? "跨专业发展≥10；项目驱动超出10学分的部分可按规定转入创新实践" : ["2022", "2023", "2024"].includes(studentGrade) ? "跨专业发展≥10，通常须选定一个体系并在体系内修满" : "外专业/跨专业口径随年级变化，请按个人培养方案核对") : "";
         return <article className="progress-card" key={item.key}>
-          <header><strong>{item.label}</strong><span>{formatCredits(confirmedCredits)}/{formatCredits(requiredCredits)} 学分</span></header>
-          {requiredCredits > 0 && <progress max={requiredCredits} value={Math.min(expectedCredits, requiredCredits)} />}
-          <p>{remainingCredits > 0 ? `还差 ${formatCredits(remainingCredits)} 学分` : "总学分已满足"}{projectedCredits > 0 && ` · 预览后 ${formatCredits(expectedCredits)}`}{item.key === "cultural_quality" && ` · 四史${fourHistoriesComplete ? "已完成" : "待完成"} · D 类 2 学分待核对`}</p>
-          <p className="progress-courses">{item.courses.length ? item.courses.map(course => <span key={`${course.code}-${course.name}`}>{course.name} · {formatCredits(course.credits)}</span>) : <span>暂无已确认课程</span>}</p>
+          <header><strong>{item.key === "outside_major_elective" ? "跨专业发展课程" : item.label}</strong><span>预计 {formatCredits(expectedCredits)}/{formatCredits(requiredCredits)} 学分</span></header>
+          {requiredCredits > 0 && <div className="credit-meter" role="progressbar" aria-label={`${item.label}预计学分`} aria-valuemin={0} aria-valuemax={requiredCredits} aria-valuenow={Math.min(expectedCredits, requiredCredits)}><span className="confirmed" style={{ width: width(confirmedCredits) }} /><span className="selected" style={{ width: width(selectedCredits, confirmedCredits) }} /><span className="queued" style={{ width: width(queuedCredits, confirmedCredits + selectedCredits) }} /></div>}
+          <p>{remainingCredits > 0 ? `还差 ${formatCredits(remainingCredits)} 学分` : "总学分已满足"} · <b className="credit-confirmed">已确认 {formatCredits(confirmedCredits)}</b>{selectedCredits > 0 && <> · <b className="credit-selected">本学期已选 +{formatCredits(selectedCredits)}</b></>}{queuedCredits > 0 && <> · <b className="credit-queued">队列 +{formatCredits(queuedCredits)}</b></>}</p>
+          {rule && <p className="requirement-rule">{rule}</p>}
+          <p className="progress-courses">{item.courses.map(course => <span className="confirmed-course" key={`${course.code}-${course.name}`}>{course.name} · {formatCredits(course.credits)}</span>)}{filter && selectedOptions.filter(option => planningFilterFor(option) === filter && !courseAlreadyCompleted(option, completedCourses)).map(option => <span className="selected-course" key={`selected-${option.key}`}>{option.name} · {formatCredits(option.credits)}</span>)}{filter && queuedOptions.filter(option => planningFilterFor(option) === filter && !courseAlreadyCompleted(option, [...completedCourses, ...selectedFacts])).map(option => <span className="queued-course" key={`queued-${option.key}`}>{option.name} · {formatCredits(option.credits)}</span>)}{!item.courses.length && !selectedCredits && !queuedCredits && <span>暂无已确认或预计课程</span>}</p>
         </article>;
-      })}</div> : <div className="progress-band-inner"><article className="progress-card unavailable"><strong>尚未同步已修课程</strong><span>当前只能计算本次预览，不能判断真实缺口。</span></article></div>}
+      })}</div> : <div className="progress-band-inner"><article className="progress-card unavailable"><strong>尚未同步已修课程</strong><span>同步后可区分已确认、本学期已选与队列估值。</span></article></div>}
       {graduationProgress?.status === "incomplete" && <small>已修课程数据不完整，当前缺口只能作为下限参考。</small>}
     </section>
 

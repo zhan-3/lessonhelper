@@ -218,6 +218,7 @@ def evaluate_progress(
 _TABLE_REQUIREMENTS = {
     "本专业选修": "major_elective",
     "外专业选修": "outside_major_elective",
+    "跨专业发展课程": "outside_major_elective",
     "文化素质课程": "cultural_quality",
 }
 
@@ -274,7 +275,7 @@ def _bucket(course: CompletedCourse) -> str | None:
         return "innovation"
     if category == "本专业选修":
         return "major_elective"
-    if category == "外专业选修":
+    if category in {"外专业选修", "跨专业发展课程"}:
         return "outside_major_elective"
     if category == "社会实践":
         return "social_practice"

@@ -189,8 +189,17 @@ h1 { font-size: clamp(34px, 4vw, 48px); font-weight: 500; margin: 8px 0; letter-
 .progress-band-inner { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; max-width: 1080px; margin: 0 auto; }
 .progress-card { border: 1px solid #384246; background: #171b1d; border-radius: 6px; padding: 10px 12px; min-width: 0; }
 .progress-card header { display: flex; justify-content: space-between; gap: 12px; color: #dce7e4; font-size: 12px; }
-.progress-card progress { display: block; width: 100%; height: 6px; margin: 9px 0 7px; accent-color: #78c8aa; }
+.credit-meter { display: flex; width: 100%; height: 6px; margin: 9px 0 7px; overflow: hidden; border-radius: 999px; background: #2a3235; }
+.credit-meter span { display: block; height: 100%; transition: width 180ms ease; }
+.credit-meter .confirmed { background: #78c8aa; }
+.credit-meter .selected { background: #61aee8; }
+.credit-meter .queued { background: #d6a85e; }
 .progress-card p { margin: 0 0 6px; color: #aeb8b8; font-size: 11px; line-height: 1.45; }
+.progress-card p b { font-weight: 600; }
+.credit-confirmed, .confirmed-course { color: #8ed3b7; }
+.credit-selected, .selected-course { color: #7fc1f0; }
+.credit-queued, .queued-course { color: #e4bd78; }
+.progress-card .requirement-rule { padding-top: 5px; border-top: 1px solid #30383b; color: #bbc5c4; }
 .progress-card .progress-courses { display: flex; flex-wrap: wrap; gap: 3px 10px; max-height: 72px; overflow-y: auto; margin: 0; }
 .progress-card .progress-courses span { white-space: nowrap; }
 .progress-card.unavailable { display: flex; flex-direction: column; gap: 4px; color: #eacb8a; }

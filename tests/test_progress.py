@@ -120,7 +120,8 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(values["major_elective"], 3.0)
         self.assertEqual(values["outside_major_elective"], 10.0)
         self.assertEqual(values["cultural_quality"], 8.0)
-        self.assertEqual(values["innovation"], 4.0)
+        self.assertNotIn("innovation", values)
+        self.assertEqual(values["innovation_and_practice"], 6.0)
         self.assertEqual(values["social_practice"], 1.0)
 
     def test_excludes_mandatory_courses_and_keeps_course_details(self):
@@ -136,7 +137,6 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(progress["cultural_quality"].completed_credits, 2.0)
         self.assertEqual(progress["cultural_quality"].remaining_credits, 6.0)
         self.assertEqual(progress["cultural_quality"].courses[0].name, "四史专题")
-        self.assertEqual(progress["innovation"].completed_credits, 1.5)
         self.assertEqual(progress["innovation_and_practice"].completed_credits, 1.5)
 
 
