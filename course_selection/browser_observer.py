@@ -78,11 +78,22 @@ class BorrowedBrowserObserver:
             raise ValueError("an explicit HTTP or WebSocket CDP endpoint is required")
         with self._owners_lock:
             owner = self._owners.get(self.session_id)
-            if owner is not None and owner is not self and owner.connected:
+            if owner is not None and owner is not self:
                 return ObserverResult(
                     "already_connected", "borrowed browser is already connected",
                     owner._connection_data(),
                 )
+            if self.connected:
+                if endpoint != self._endpoint:
+                    return ObserverResult(
+                        "already_connected", "borrowed browser is already connected",
+                        {"connection": "borrowed", "endpoint_changed": True},
+                        ("disconnect before connecting to another endpoint",),
+                    )
+                return ObserverResult("already_connected", "borrowed browser is already connected", self._connection_data())
+            # Reserve the session before the potentially slow CDP handshake;
+            # another thread cannot create a second borrowed attachment.
+            self._owners[self.session_id] = self
         if self.connected:
             if endpoint != self._endpoint:
                 return ObserverResult(
@@ -92,16 +103,28 @@ class BorrowedBrowserObserver:
                 )
             return ObserverResult("already_connected", "borrowed browser is already connected", self._connection_data())
 
+        if self._playwright is not None:
+            stale_playwright, self._playwright = self._playwright, None
+            self._browser = None
+            stale_playwright.stop()
+
         from playwright.sync_api import sync_playwright
 
         playwright = sync_playwright().start()
         try:
             browser = playwright.chromium.connect_over_cdp(endpoint)
         except Exception:
+            with self._owners_lock:
+                if self._owners.get(self.session_id) is self:
+                    del self._owners[self.session_id]
             # Stopping Playwright only tears down this client connection; no
             # browser close is attempted when attachment fails.
             playwright.stop()
-            raise
+            return ObserverResult(
+                "failed", "unable to connect to the supplied CDP endpoint",
+                warnings=("verify the browser is running and the endpoint is reachable",),
+                next_actions=("check the explicit endpoint, then retry once",),
+            )
         self._playwright, self._browser, self._endpoint = playwright, browser, endpoint
         with self._owners_lock:
             self._owners[self.session_id] = self
@@ -120,18 +143,42 @@ class BorrowedBrowserObserver:
                 next_actions=("connect with an explicit CDP endpoint",),
             )
         targets: list[dict[str, Any]] = []
+        limit_reached = False
+
+        def append_target(target: dict[str, Any]) -> bool:
+            nonlocal limit_reached
+            targets.append(target)
+            if len(targets) > self.max_targets:
+                limit_reached = True
+                return False
+            return True
+
         for context in self._browser.contexts:
             for page in context.pages:
-                targets.append(self._page_target(page))
+                if not append_target(self._page_target(page)):
+                    break
                 for frame in page.frames[1:]:
-                    targets.append(self._frame_target(frame))
+                    if not append_target(self._frame_target(frame)):
+                        break
+                if limit_reached:
+                    break
+            if limit_reached:
+                break
             for worker in getattr(context, "service_workers", []):
-                targets.append(self._worker_target(worker, "service_worker"))
+                if not append_target(self._worker_target(worker, "service_worker")):
+                    break
+            if limit_reached:
+                break
             for page in context.pages:
                 for worker in getattr(page, "workers", []):
-                    targets.append(self._worker_target(worker, "worker"))
+                    if not append_target(self._worker_target(worker, "worker")):
+                        break
+                if limit_reached:
+                    break
+            if limit_reached:
+                break
         targets.sort(key=lambda item: (item["kind"], item["url_shape"], item.get("frame_depth", 0)))
-        truncated = len(targets) > self.max_targets
+        truncated = limit_reached
         targets = targets[: self.max_targets]
         return ObserverResult(
             "partial" if truncated else "complete",
