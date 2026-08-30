@@ -1,8 +1,7 @@
 import unittest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 from course_selection.planning import build_read_only_plan
-
 
 NOW = datetime(2026, 8, 26, tzinfo=timezone.utc)
 

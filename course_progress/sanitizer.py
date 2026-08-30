@@ -119,8 +119,7 @@ def sanitize_data(value: Any, *, parent_key: object | None = None) -> Any:
         normalised_keys = {_normalise_key(key) for key in value}
         personal_context = any(
             key in _PERSONAL_KEYS
-            or key.startswith("student")
-            or key.startswith("user")
+            or key.startswith(("student", "user"))
             for key in normalised_keys
         )
         return {

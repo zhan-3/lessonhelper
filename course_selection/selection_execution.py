@@ -1,0 +1,92 @@
+"""Guarded, single-submit execution contract for HITWH course selection."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import urlencode
+
+from course_progress.academic_client import AuthenticatedAcademicClient
+
+from .selection_entry import extract_course_sections_from_html
+
+_ALERT = re.compile(r"\balert\s*\(\s*(['\"])(.*?)\1\s*\)", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class SelectionExecutionResult:
+    status: str
+    message: str
+    section_id: str
+    category: str
+    term: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "status": self.status,
+            "message": self.message,
+            "section_id": self.section_id,
+            "category": self.category,
+            "term": self.term,
+        }
+
+
+def classify_selection_execution_html(html: str) -> tuple[str, str]:
+    """Classify the server alert without retaining the returned HTML."""
+    alerts = [" ".join(match.group(2).split()) for match in _ALERT.finditer(html)]
+    message = next((item for item in alerts if item), "")
+    if "选课成功" in message:
+        return "selected", message
+    if "总容量已满" in message:
+        return "capacity_full", message
+    if message:
+        return "rejected", message
+    return "unknown", "未识别到选课结果"
+
+
+class VerifiedSelectionExecutionAdapter:
+    """Reload one exact category and submit one exact page-provided rwh once."""
+
+    def execute(
+        self,
+        page: Any,
+        *,
+        section_id: str,
+        category: str,
+        term_value: str,
+        authenticate,
+        source_page: int = 1,
+    ) -> SelectionExecutionResult:
+        if not section_id or not category or not term_value:
+            raise ValueError("section_id, category and term are required")
+        client = AuthenticatedAcademicClient(
+            page, authenticate=authenticate, timeout_seconds=15,
+        )
+        entry = f"/xsxk/queryXsxkList?{urlencode({'pageXklb': category, 'pageXnxq': term_value})}"
+        client.get(entry)
+        page_number = max(1, int(source_page or 1))
+        overrides = {"rwh": "", "pageXklb": category, "pageXnxq": term_value}
+        remove: tuple[str, ...] = ()
+        if page_number > 1:
+            overrides.update({"pageNo": str(page_number), "pageSize": "20"})
+        else:
+            remove = ("pageNo", "pageSize")
+        query = client.post_page_form(
+            "/xsxk/queryXsxkList", overrides=overrides, remove=remove,
+        )
+        if query.status != 200:
+            raise RuntimeError("重新查询教学班失败")
+        matching = [
+            item for item in extract_course_sections_from_html(query.body)
+            if item.action_rwh == section_id
+        ]
+        if len(matching) != 1 or not matching[0].execution_ready:
+            raise RuntimeError("教学班已不在当前待选课程中")
+        response = client.post_page_form(
+            "/xsxk/saveXsxk",
+            overrides={"rwh": section_id, "pageXklb": category, "pageXnxq": term_value},
+            remove=("pageNo", "pageSize"),
+        )
+        status, message = classify_selection_execution_html(response.body)
+        return SelectionExecutionResult(status, message, section_id, category, term_value)

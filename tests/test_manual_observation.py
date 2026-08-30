@@ -1,6 +1,9 @@
 import unittest
 
-from course_selection.manual_observation import ManualObservationPolicy, summarize_json_structure
+from course_selection.manual_observation import (
+    ManualObservationPolicy,
+    summarize_json_structure,
+)
 
 
 class ManualObservationPolicyTests(unittest.TestCase):

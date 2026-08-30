@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import re
-from html.parser import HTMLParser
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
-from .categories import CATEGORY_LABELS, NOTICE_CATEGORY_PATTERNS
-
+from .categories import NOTICE_CATEGORY_PATTERNS
 
 REQUIRED_FIELDS = ("term", "selection_type", "opens_at", "closes_at")
 SELECTION_KEYWORDS = (
@@ -143,7 +142,7 @@ def notice_semester_label(notice: SelectionNotice) -> str:
 
 def _window_datetime(groups: tuple[str, ...], offset: int) -> str:
     year, month, day, hour, minute = (int(value) for value in groups[offset : offset + 5])
-    return datetime(year, month, day, hour, minute).strftime("%Y-%m-%d %H:%M")
+    return datetime(year, month, day, hour, minute).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 def _window_action(category_text: str, method_text: str) -> str:
@@ -250,21 +249,20 @@ def fetch_notice_text_in_browser(
     if login_timeout_seconds <= 0:
         raise ValueError("认证等待时间必须大于 0")
 
-    with sync_playwright() as playwright:
-        with AcademicBrowserSession(
-            playwright,
-            browser_name=browser,
-            profile_root=profile_root,
-            persistent=False,
-        ) as session:
-            page = session.open_authenticated(
-                source_url, timeout_seconds=login_timeout_seconds
-            )
-            page.wait_for_timeout(500)
-            text = page.locator("body").inner_text(timeout=10_000).strip()
-            if not text:
-                raise ValueError("通知页面没有读取到正文")
-            return text
+    with sync_playwright() as playwright, AcademicBrowserSession(
+        playwright,
+        browser_name=browser,
+        profile_root=profile_root,
+        persistent=False,
+    ) as session:
+        page = session.open_authenticated(
+            source_url, timeout_seconds=login_timeout_seconds
+        )
+        page.wait_for_timeout(500)
+        text = page.locator("body").inner_text(timeout=10_000).strip()
+        if not text:
+            raise ValueError("通知页面没有读取到正文")
+        return text
 
 
 def _first_line(text: str) -> str:

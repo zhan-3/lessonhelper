@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,18 +13,10 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 from playwright.sync_api import BrowserContext, Error, Playwright, Response
 
 from course_progress.capture import CaptureStore
-from course_progress.collector import resolve_academic_url
 from course_progress.sanitizer import sanitize_text, sanitize_url
-from course_progress.sanitizer import sanitize_request_body
 from course_progress.session import AcademicBrowserSession
 from course_selection.categories import CATEGORY_MENU_KEYWORDS, COURSE_CATEGORIES
 from course_selection.manual_observation import is_official_authentication_request
-from course_selection.selection_entry import (
-    classify_selection_html,
-    observation_to_dict,
-    selection_page_count,
-)
-
 
 TARGET_TIMETABLE = "timetable"
 TARGET_SELECTION = "selection"
@@ -131,43 +123,6 @@ def _academic_pages(context: BrowserContext) -> list[Any]:
         if (urlsplit(page.url).hostname or "").lower() not in {"127.0.0.1", "localhost", "::1"}
     ]
 
-_FETCH_SELECTION_PAGE = """
-async ({url, category, semesterLabel, pageNo, pageCount}) => {
-  const form = document.querySelector('form#queryform, form[name="queryform"]');
-  if (!form) throw new Error('未找到选课查询表单');
-  const parameters = new URLSearchParams(new FormData(form));
-  parameters.set('rwh', '');
-  parameters.set('pageXklb', category);
-  if (pageNo !== null) {
-    parameters.set('pageNo', String(pageNo));
-    parameters.set('pageSize', '20');
-    parameters.set('pageCount', String(pageCount));
-  } else {
-    parameters.delete('pageNo');
-    parameters.delete('pageSize');
-    parameters.delete('pageCount');
-  }
-  const semester = Array.from(form.querySelectorAll('select[name="pageXnxq"] option'))
-    .find(option => option.textContent.replace(/[\s年]|学期/g, '') === semesterLabel);
-  if (!semester) throw new Error(`通知学期不在页面选项中: ${semesterLabel}`);
-  parameters.set('pageXnxq', semester.value);
-  const response = await fetch(url, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    body: parameters.toString(),
-    redirect: 'follow',
-  });
-  return {
-    status: response.status,
-    url: response.url,
-    requestBody: parameters.toString(),
-    body: await response.text(),
-  };
-}
-"""
-
-
 @dataclass(frozen=True)
 class DiscoveryControl:
     score: int
@@ -187,10 +142,6 @@ class DiscoveryReport:
     blocked_requests: int
     candidates_path: Path
     click_log_path: Path
-    selection_query_path: Path | None
-    # Structured selection results are returned directly to the caller.  The
-    # JSON path is retained only as a read-only diagnostic artifact.
-    selection_query_payload: dict[str, Any] | None = None
 
 
 def score_discovery_control(
@@ -326,7 +277,7 @@ class InterfaceDiscovery:
     ):
         if target not in TARGET_KEYWORDS:
             raise ValueError(f"未知发现目标：{target}")
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         self.target = target
         self.output_root = output_root / "discovery" / target / stamp
         self.store = CaptureStore(self.output_root)
@@ -597,107 +548,6 @@ class InterfaceDiscovery:
             )
             return False
 
-    def _query_selection_page(self) -> tuple[dict[str, Any] | None, Path | None]:
-        if (
-            self.target != TARGET_SELECTION
-            or not self.allowed_selection_categories
-            or not self.notice_semester
-        ):
-            return None, None
-        for page in self.target_pages:
-            for frame in page.frames:
-                if not self._frame_matches_target(frame):
-                    continue
-                endpoint = resolve_academic_url(frame.url, "/xsxk/queryXsxkList")
-                queries: list[dict[str, Any]] = []
-                for category in self.allowed_selection_categories:
-                    pages: list[dict[str, Any]] = []
-                    sections: dict[str, Any] = {}
-                    expected_pages = 1
-                    complete = True
-                    try:
-                        for page_number in range(1, 51):
-                            if page_number > expected_pages:
-                                break
-                            result = frame.evaluate(
-                                _FETCH_SELECTION_PAGE,
-                                {
-                                    "url": endpoint,
-                                    "category": category,
-                                    "semesterLabel": self.notice_semester,
-                                    # The initial search omits pagination fields. The
-                                    # legacy page form sends all three fields only
-                                    # when following a pagination link.
-                                    "pageNo": None if page_number == 1 else page_number,
-                                    "pageCount": expected_pages,
-                                },
-                            )
-                            html = str(result["body"])
-                            if page_number == 1:
-                                expected_pages = min(selection_page_count(html), 50)
-                            observation = classify_selection_html(
-                                int(result["status"]),
-                                html,
-                                request_url=str(result.get("url") or endpoint),
-                                expected_windows=self.allowed_selection_windows.get(category, ()),
-                            )
-                            for section in observation.sections:
-                                sections.setdefault(section.identity, section)
-                            pages.append(
-                                {
-                                    "page": page_number,
-                                    "observation": observation_to_dict(observation),
-                                }
-                            )
-                        queries.append(
-                            {
-                                "category": category,
-                                "semester": self.notice_semester,
-                                "method": "POST",
-                                "url": sanitize_url(str(result.get("url") or endpoint)),
-                                "request_body": sanitize_request_body(
-                                    str(result.get("requestBody") or "")
-                                ),
-                                "page_count": expected_pages,
-                                "pages_fetched": len(pages),
-                                "complete": complete and len(pages) == expected_pages,
-                                "record_count": len(sections),
-                                "sections": [asdict(section) for section in sections.values()],
-                                "pages": pages,
-                            }
-                        )
-                        print(
-                            f"课程查询：{category} 共 {len(pages)}/{expected_pages} 页，"
-                            f"解析 {len(sections)} 条课程记录"
-                        )
-                    except (Error, KeyError, TypeError, ValueError) as error:
-                        complete = False
-                        queries.append(
-                            {
-                                "category": category,
-                                "semester": self.notice_semester,
-                                "complete": False,
-                                "page_count": expected_pages,
-                                "pages_fetched": len(pages),
-                                "record_count": len(sections),
-                                "sections": [asdict(section) for section in sections.values()],
-                                "pages": pages,
-                                "error": str(error)[:160],
-                            }
-                        )
-                        print(f"课程查询失败 [{category}]：{str(error)[:160]}")
-                payload = {"queries": queries}
-                # Keep this file for operator diagnostics only.  Callers must
-                # consume ``payload`` in memory so stale JSON can never be
-                # mistaken for application state.
-                query_path = self.output_root / "selection-query.json"
-                query_path.write_text(
-                    json.dumps(payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                return payload, query_path
-        return None, None
-
     def run(
         self,
         context: BrowserContext,
@@ -848,7 +698,6 @@ class InterfaceDiscovery:
             json.dumps(self.visual_log, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        selection_query_payload, selection_query_path = self._query_selection_page()
         candidates = self.store.write_candidates()
         print(f"自动点击：{clicks}；捕获 JSON：{self.captured}")
         print(f"点击审计：{self.output_root / 'clicks.json'}")
@@ -861,8 +710,6 @@ class InterfaceDiscovery:
             blocked_requests=self.blocked_requests,
             candidates_path=candidates,
             click_log_path=self.output_root / "clicks.json",
-            selection_query_path=selection_query_path,
-            selection_query_payload=selection_query_payload,
         )
 
 

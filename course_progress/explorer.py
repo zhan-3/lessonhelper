@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -13,11 +14,7 @@ from playwright.sync_api import BrowserContext, Error, Playwright, Response
 
 from .capture import CaptureStore
 
-DEFAULT_PORTAL_URL = (
-    "https://webvpn.hitwh.edu.cn/https/"
-    "77726476706e69737468656265737421f9e15192693861446900c7a99c406d36e9/"
-    "portal/#!/service"
-)
+DEFAULT_PORTAL_URL = "https://webvpn.hitwh.edu.cn/"
 
 SHARED_PROFILE_NAME = "playwright-chromium-profile"
 PROFILE_LOCK_MARKERS = (
@@ -39,11 +36,24 @@ def _is_profile_lock_error(error: Error) -> bool:
 
 def _is_login_url(url: str) -> bool:
     lowered = url.lower()
-    return (
+    if (
         "authserver/login" in lowered
         or "logincas" in lowered
         or "loginnocas" in lowered
         or "#!/login" in lowered
+        or "logoutbyipchange" in lowered
+    ):
+        return True
+    # The WebVPN server answers unauthenticated or IP-kicked sessions with
+    # "302 -> /login" (sometimes /login?logoutByIpChange=true).  Recognise that
+    # login page for the host we authenticate against, and nothing else.
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    return (
+        parsed.hostname == "webvpn.hitwh.edu.cn"
+        and parsed.path.rstrip("/").lower() == "/login"
     )
 
 
@@ -140,11 +150,20 @@ def launch_browser_context(
     playwright: Playwright, browser_name: str, profile_dir: Path
 ) -> BrowserContext:
     profile_dir.mkdir(parents=True, exist_ok=True)
+    browser_args = ["--start-maximized"]
+    debug_port = os.environ.get("ACADEMIC_BROWSER_DEBUG_PORT", "").strip()
+    if debug_port:
+        if not debug_port.isdigit() or not 1024 <= int(debug_port) <= 65535:
+            raise ValueError("ACADEMIC_BROWSER_DEBUG_PORT must be a port from 1024 to 65535")
+        browser_args.extend([
+            "--remote-debugging-address=127.0.0.1",
+            f"--remote-debugging-port={debug_port}",
+        ])
     options: dict[str, Any] = {
         "user_data_dir": str(profile_dir),
         "headless": False,
         "no_viewport": True,
-        "args": ["--start-maximized"],
+        "args": browser_args,
     }
     if browser_name == "chrome":
         options["channel"] = "chrome"
@@ -198,10 +217,9 @@ class PortalExplorer:
 
         content_type = response.headers.get("content-type", "")
         content_length = response.headers.get("content-length")
-        if content_length and content_length.isdigit():
-            if int(content_length) > self.max_response_bytes:
-                self.skipped_large += 1
-                return
+        if content_length and content_length.isdigit() and int(content_length) > self.max_response_bytes:
+            self.skipped_large += 1
+            return
 
         try:
             body = response.body()
@@ -353,5 +371,5 @@ class PortalExplorer:
 
 
 def make_capture_session(root: Path) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return root / stamp

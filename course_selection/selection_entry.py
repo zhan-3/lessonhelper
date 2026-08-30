@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from course_progress.sanitizer import (
     is_sensitive_key,
@@ -17,7 +18,6 @@ from course_progress.sanitizer import (
     sanitize_request_body,
     sanitize_url,
 )
-
 
 STATUS_LOGIN_REQUIRED = "login_required"
 STATUS_ENTRY_UNREACHABLE = "entry_unreachable"
@@ -58,6 +58,11 @@ class SelectionCourseSection:
     requirements: str = ""
     selected_count: str = ""
     capacity_count: str = ""
+    # Only a page-provided saveXsxk identity may drive execution.
+    action_rwh: str = ""
+    action_name: str = ""
+    execution_ready: bool = False
+    meetings: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -216,6 +221,31 @@ def _schedule_from_class_info(value: str) -> str:
     return re.sub(r"^上课信息[:：]\s*", "", value).strip("◇ ")
 
 
+def _schedule_meetings(value: str) -> tuple[dict[str, Any], ...]:
+    """Normalize only explicit Chinese weekday/period facts; ambiguity stays unknown."""
+    weekdays = "一二三四五六日"
+    meetings: list[dict[str, Any]] = []
+    for match in re.finditer(
+        r"(?:\[([^\]]+?)周\])?[^星期周]*?(?:星期|周)\s*([一二三四五六日天1-7])"
+        r"[^第\d]*第?\s*(\d+)\s*[,，\-~至]\s*(\d+)\s*节",
+        value,
+    ):
+        raw_weeks, raw_day, raw_start, raw_end = match.groups()
+        weeks: list[int] = []
+        if raw_weeks:
+            parity = "odd" if "单" in raw_weeks else "even" if "双" in raw_weeks else "all"
+            for token in re.split(r"[,，]", re.sub(r"[单双]", "", raw_weeks)):
+                bounds = re.match(r"\s*(\d+)\s*[-~至]\s*(\d+)\s*$", token)
+                values = range(int(bounds.group(1)), int(bounds.group(2)) + 1) if bounds else ([int(token)] if token.strip().isdigit() else [])
+                weeks.extend(week for week in values if parity == "all" or (week % 2 == 1) == (parity == "odd"))
+        day = 7 if raw_day == "天" else int(raw_day) if raw_day.isdigit() else weekdays.index(raw_day) + 1
+        meetings.append({
+            "day": day, "start": int(raw_start), "end": int(raw_end),
+            "weeks": sorted(set(weeks)),
+        })
+    return tuple(meetings)
+
+
 def selection_page_count(html: str) -> int:
     """Return the server-rendered result page count, defaulting to one."""
     match = re.search(
@@ -249,7 +279,7 @@ def extract_course_sections_from_html(html: str) -> tuple[SelectionCourseSection
         if headers is None or len(row) < max(headers.values()) + 1:
             continue
 
-        def value(name: str) -> str:
+        def value(name: str, headers=headers, row=row) -> str:
             index = headers.get(name)
             return row[index].text.strip() if index is not None else ""
 
@@ -260,8 +290,14 @@ def extract_course_sections_from_html(html: str) -> tuple[SelectionCourseSection
         class_info = value("上课信息")
         selected_count, capacity_count = _split_capacity(value("已选/容量"))
         attribute_text = " ".join(cell.attributes for cell in row)
-        task_match = re.search(r"saveXsxk\d?\(['\"]([^'\"]+)", attribute_text)
-        identity = task_match.group(1) if task_match else "|".join(
+        action_match = re.search(
+            r"\b(saveXsxk\d?)\s*\(\s*['\"]([^'\"]+)['\"]",
+            attribute_text,
+            flags=re.IGNORECASE,
+        )
+        action_name = action_match.group(1) if action_match else ""
+        action_rwh = action_match.group(2) if action_match else ""
+        identity = action_rwh or "|".join(
             part for part in (course_code, name, class_info) if part
         )
         if identity in seen:
@@ -287,6 +323,10 @@ def extract_course_sections_from_html(html: str) -> tuple[SelectionCourseSection
                 requirements=value("选课要求"),
                 selected_count=selected_count,
                 capacity_count=capacity_count,
+                action_rwh=action_rwh,
+                action_name=action_name,
+                execution_ready=bool(action_rwh),
+                meetings=_schedule_meetings(_schedule_from_class_info(class_info)),
             )
         )
     return tuple(sections)
@@ -303,7 +343,12 @@ def _selection_window(html: str) -> tuple[datetime, datetime] | None:
     )
     if not match:
         return None
-    return tuple(datetime.strptime(value, "%Y-%m-%d %H:%M") for value in match.groups())
+    # Naive school-notice timestamps are interpreted in the local timezone so
+    # comparisons against `current` stay consistent.
+    return tuple(
+        datetime.strptime(value, "%Y-%m-%d %H:%M").astimezone()
+        for value in match.groups()
+    )
 
 
 def classify_selection_html(
@@ -318,7 +363,7 @@ def classify_selection_html(
     sections = extract_course_sections_from_html(html)
     lowered = html.lower()
     window = _selection_window(html)
-    current = now or datetime.now()
+    current = (now or datetime.now(timezone.utc)).astimezone()
     expected_pairs = {
         (getattr(item, "opens_at", ""), getattr(item, "closes_at", ""))
         for item in expected_windows
@@ -524,7 +569,6 @@ class SelectionEntryExplorer:
             text = (page.locator("body").inner_text(timeout=500) or "").lower()
         except Exception:
             return False
-        selection_type = getattr(self.notice, "selection_type", "")
         return selection_page_matches_notice(text, self.notice)
 
     def _has_terminal_selection_observation(self) -> bool:

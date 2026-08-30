@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Iterable, Mapping
 
 
 @dataclass(frozen=True)
@@ -218,6 +218,7 @@ def evaluate_progress(
 _TABLE_REQUIREMENTS = {
     "本专业选修": "major_elective",
     "外专业选修": "outside_major_elective",
+    "跨专业发展课程": "outside_major_elective",
     "文化素质课程": "cultural_quality",
 }
 
@@ -244,7 +245,7 @@ def parse_requirements(markdown: str | Path) -> tuple[Requirement, ...]:
         if key and re.search(r"\d+(?:\.\d+)?\s*学分", cells[1]):
             found[key] = Requirement(key, cells[0], _credits(cells[1]))
 
-    cultural = re.search(r"文化素质课程.*?毕业前最低要求为\s*\*\*(\d+(?:\.\d+)?)\s*学分", text, re.S)
+    cultural = re.search(r"文化素质课程.*?毕业前最低要求为\s*\*\*(\d+(?:\.\d+)?)\s*学分", text, re.DOTALL)
     if cultural:
         found["cultural_quality"] = Requirement("cultural_quality", "文化素质课程", float(cultural.group(1)))
 
@@ -274,7 +275,7 @@ def _bucket(course: CompletedCourse) -> str | None:
         return "innovation"
     if category == "本专业选修":
         return "major_elective"
-    if category == "外专业选修":
+    if category in {"外专业选修", "跨专业发展课程"}:
         return "outside_major_elective"
     if category == "社会实践":
         return "social_practice"

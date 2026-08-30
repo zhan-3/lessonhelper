@@ -6,13 +6,38 @@ from course_selection.selection_entry import (
     STATUS_LOGIN_REQUIRED,
     STATUS_READY,
     STATUS_ROUND_NOT_OPEN,
-    classify_selection_response,
     classify_selection_html,
+    classify_selection_response,
     extract_course_sections_from_html,
     observe_json_exchange,
     selection_page_count,
     selection_page_matches_notice,
 )
+
+
+def _section(identity: str, category: str) -> object:
+    from dataclasses import dataclass
+
+    @dataclass
+    class Section:
+        identity: str
+        category: str
+        name: str
+
+    return Section(identity=identity, category=category, name="经济学原理")
+
+
+class SelectionQuerySourceTests(unittest.TestCase):
+    def test_flattened_sections_carry_query_source_for_planning_filters(self):
+        from course_selection.selection_query import _sections_with_query_source
+
+        sections = {"a|b|c": _section("a|b|c", "专业核心课")}
+        stamped = _sections_with_query_source(sections, "xsxk", semester="2026-20271", page=3)
+        self.assertEqual(stamped["a|b|c"]["query_code"], "xsxk")
+        self.assertEqual(stamped["a|b|c"]["query_term"], "2026-20271")
+        self.assertEqual(stamped["a|b|c"]["query_page"], 3)
+        self.assertEqual(stamped["a|b|c"]["query_label"], "外专业课程")
+        self.assertEqual(stamped["a|b|c"]["category"], "专业核心课")
 
 
 class SelectionEntryTests(unittest.TestCase):
@@ -40,10 +65,14 @@ class SelectionEntryTests(unittest.TestCase):
 
         self.assertEqual(len(sections), 1)
         self.assertEqual(sections[0].identity, "TASK-9")
+        self.assertEqual(sections[0].action_rwh, "TASK-9")
+        self.assertEqual(sections[0].action_name, "saveXsxk1")
+        self.assertTrue(sections[0].execution_ready)
         self.assertEqual(sections[0].course_code, "GE101")
         self.assertEqual(sections[0].teacher, "李老师")
         self.assertEqual(sections[0].selected_count, "18")
         self.assertEqual(sections[0].capacity_count, "30")
+        self.assertEqual(sections[0].meetings, ({"day": 1, "start": 1, "end": 2, "weeks": []},))
 
     def test_parses_teacher_prefix_and_removes_it_from_schedule(self):
         html = self.COURSE_HTML.replace(
@@ -55,6 +84,18 @@ class SelectionEntryTests(unittest.TestCase):
 
         self.assertEqual(section.teacher, "李可欣")
         self.assertEqual(section.time, "[10-17周]星期一第3,4节")
+        self.assertEqual(
+            section.meetings,
+            ({"day": 1, "start": 3, "end": 4, "weeks": list(range(10, 18))},),
+        )
+
+    def test_fallback_identity_is_not_marked_executable(self):
+        html = self.COURSE_HTML.replace("saveXsxk1('TASK-9')", "showCourse('GE101')")
+
+        section = extract_course_sections_from_html(html)[0]
+
+        self.assertFalse(section.execution_ready)
+        self.assertEqual(section.action_rwh, "")
 
     def test_reads_page_count_and_does_not_flatten_composite_capacity(self):
         html = self.COURSE_HTML.replace(
@@ -82,7 +123,7 @@ class SelectionEntryTests(unittest.TestCase):
         observation = classify_selection_html(
             200,
             empty,
-            now=datetime(2026, 8, 25, 12, 0),
+            now=datetime(2026, 8, 25, 12, 0).astimezone(),
         )
 
         self.assertEqual(observation.status, STATUS_ROUND_NOT_OPEN)
@@ -149,12 +190,13 @@ class SelectionEntryTests(unittest.TestCase):
         self.assertEqual(contract.response_fields, ("courseId", "courseName"))
 
     def test_selection_cli_requires_a_confirmed_notice(self):
-        from course_selection.cli import build_parser
+        from course_selection.cli import explore_entry_cmd
 
-        args = build_parser().parse_args(["explore-entry", "--wait-seconds", "3"])
+        context = explore_entry_cmd.make_context(
+            "explore-entry", ["--wait-seconds", "3"]
+        )
 
-        self.assertEqual(args.command, "explore-entry")
-        self.assertEqual(args.wait_seconds, 3)
+        self.assertEqual(3, context.params["wait_seconds"])
 
     def test_requires_notice_specific_text_before_accepting_a_selection_page(self):
         class Notice:

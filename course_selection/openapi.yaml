@@ -7,6 +7,12 @@ paths:
         '200':
           description: Local persisted workbench state
           content: {application/json: {schema: {$ref: '#/components/schemas/WorkbenchState'}}}
+  /api/login-configuration:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LoginConfigurationRequest'}}}}
+      responses: {'201': {description: DPAPI-protected login saved}, '400': {description: Invalid login configuration}}
+    delete:
+      responses: {'204': {description: Saved login cleared}}
   /api/tasks:
     post:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TaskRequest'}}}}
@@ -18,6 +24,19 @@ paths:
   /api/plans/latest:
     get:
       responses: {'200': {description: Latest persisted read-only plan}, '404': {description: No plan}}
+  /api/executions:
+    get:
+      responses: {'200': {description: Local redacted execution history}}
+    delete:
+      responses: {'204': {description: Execution history cleared}}
+  /api/executions/{identity}/resolve:
+    post:
+      parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
+      responses: {'200': {description: Unknown execution resolved}, '404': {description: Unknown execution not found}}
+  /api/executions/selection:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SelectionExecutionRequest'}}}}
+      responses: {'202': {description: Explicitly confirmed single execution queued}, '409': {description: Confirmation or applicability check failed}}
   /api/tasks/{identity}:
     get:
       parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
@@ -32,9 +51,10 @@ paths:
   /api/notices/candidates:
     get:
       responses: {'200': {description: Candidate notice versions}}
+  /api/notices/discover:
     post:
-      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: true}}}}
-      responses: {'201': {description: Candidate notice saved}}
+      requestBody: {required: false, content: {application/json: {schema: {type: object, properties: {index_url: {type: string, format: uri}}}}}}
+      responses: {'201': {description: Matching official notice pages downloaded, parsed, and saved}, '400': {description: Official notice source could not be read}}
   /api/notices/{identity}/confirm:
     post:
       parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
@@ -45,26 +65,151 @@ paths:
       responses: {'201': {description: Timetable snapshot imported}}
 components:
   schemas:
+    LoginConfigurationRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string, maxLength: 64}
+        password: {type: string, format: password, maxLength: 256}
     TaskRequest:
       type: object
       required: [operation]
       properties:
-        operation: {type: string, enum: [connect, refresh-selection, refresh-timetable, observe-navigation]}
+        operation: {type: string, enum: [connect, refresh-selection, refresh-timetable, refresh-progress, observe-navigation]}
         context: {type: object, additionalProperties: true}
     PlanRequest:
       type: object
       required: [goals]
       properties:
         goals: {type: array, items: {type: object, additionalProperties: true}}
+    SelectionExecutionRequest:
+      type: object
+      required: [section_id, snapshot_id, confirmation]
+      properties:
+        section_id: {type: string}
+        snapshot_id: {type: string}
+        confirmation: {type: string, description: Must exactly equal section_id}
+    LoginConfiguration:
+      type: object
+      required: [state, configured]
+      properties:
+        state: {type: string, enum: [missing, configured, invalid]}
+        configured: {type: boolean}
+        masked_username: {type: string}
+        message: {type: string}
+    Task:
+      type: object
+      required: [id, state]
+      properties:
+        id: {type: string}
+        operation: {type: string}
+        task_kind: {type: string, enum: [observation, execution]}
+        state: {type: string}
+        progress: {type: object, additionalProperties: true}
+        error: {type: string}
+    CandidateNotice:
+      type: object
+      required: [version_id, status]
+      properties:
+        version_id: {type: string}
+        status: {type: string}
+        title: {type: string}
+        term: {type: string}
+        query_eligible: {type: boolean}
+      additionalProperties: true
+    Snapshot:
+      type: object
+      required: [id, kind, term, source, source_at, payload]
+      properties:
+        id: {type: string}
+        kind: {type: string}
+        term: {type: string}
+        profile_id: {type: string, nullable: true}
+        notice_id: {type: string, nullable: true}
+        source: {type: string}
+        source_at: {type: string}
+        created_at: {type: string}
+        payload: {type: object, additionalProperties: true}
+    CompletedCourseFact:
+      type: object
+      required: [code, name, category, credits]
+      properties:
+        code: {type: string}
+        name: {type: string}
+        category: {type: string}
+        credits: {type: number}
+    RequirementProgress:
+      type: object
+      required: [key, label, required_credits, completed_credits, remaining_credits, courses]
+      properties:
+        key: {type: string}
+        label: {type: string}
+        required_credits: {type: number}
+        completed_credits: {type: number}
+        remaining_credits: {type: number}
+        courses: {type: array, items: {$ref: '#/components/schemas/CompletedCourseFact'}}
+    GraduationProgressReport:
+      type: object
+      required: [data_complete, progress]
+      properties:
+        generated_at: {type: string}
+        baseline_version: {type: string}
+        data_complete: {type: boolean}
+        progress: {type: array, items: {$ref: '#/components/schemas/RequirementProgress'}}
+    GraduationProgress:
+      type: object
+      required: [status, report]
+      properties:
+        status: {type: string, enum: [ready, incomplete, missing, invalid, not_applicable]}
+        report: {$ref: '#/components/schemas/GraduationProgressReport', nullable: true}
+        snapshot: {$ref: '#/components/schemas/Snapshot', nullable: true}
     WorkbenchState:
       type: object
-      required: [snapshots, stale, academic_session, csrf_token]
+      required: [login_configuration, profile, confirmed_notice, snapshots, snapshot_changes, latest_plan, graduation_progress, stale, snapshot_status, academic_session, active_task, execution_history, csrf_token]
       properties:
+        login_configuration: {$ref: '#/components/schemas/LoginConfiguration'}
         profile: {type: object, nullable: true, additionalProperties: true}
         confirmed_notice: {type: object, nullable: true, additionalProperties: true}
-        snapshots: {type: object, additionalProperties: true}
+        snapshots:
+          type: object
+          required: [selection, timetable, progress]
+          properties:
+            selection: {$ref: '#/components/schemas/Snapshot', nullable: true}
+            timetable: {$ref: '#/components/schemas/Snapshot', nullable: true}
+            progress: {$ref: '#/components/schemas/Snapshot', nullable: true}
+        snapshot_changes:
+          type: object
+          required: [selection, timetable, progress]
+          properties:
+            selection: {type: object, nullable: true, additionalProperties: true}
+            timetable: {type: object, nullable: true, additionalProperties: true}
+            progress: {type: object, nullable: true, additionalProperties: true}
         latest_plan: {type: object, nullable: true, additionalProperties: true}
-        graduation_progress: {type: object, additionalProperties: true}
-        stale: {type: object, additionalProperties: {type: boolean}}
-        academic_session: {type: object, properties: {state: {type: string}}}
+        graduation_progress: {$ref: '#/components/schemas/GraduationProgress'}
+        stale:
+          type: object
+          required: [selection, timetable, progress]
+          properties:
+            selection: {type: boolean}
+            timetable: {type: boolean}
+            progress: {type: boolean}
+        snapshot_status:
+          type: object
+          additionalProperties:
+            type: object
+            required: [status, reason, source_at]
+            properties:
+              status: {type: string, enum: [current, historical, incomplete, missing]}
+              reason: {type: string}
+              source_at: {type: string}
+        academic_session:
+          type: object
+          required: [state, browser, webvpn, last_verified_at]
+          properties:
+            state: {type: string}
+            browser: {type: string}
+            webvpn: {type: string}
+            last_verified_at: {type: string}
+        active_task: {$ref: '#/components/schemas/Task', nullable: true}
+        execution_history: {type: array, items: {type: object, additionalProperties: true}}
         csrf_token: {type: string}

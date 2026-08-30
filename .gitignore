@@ -9,8 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# Linter/formatter caches
+# Tool and test caches
+.pytest_cache/
 .ruff_cache/
+.uv-cache/
+.codegraph/
 
 # Playwright session state (contains auth tokens)
 storage_state.json
@@ -39,3 +42,11 @@ frontend/node_modules/
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+
+# Local tool artifacts (agent sessions, design critiques, runtime logs)
+.omo/
+.impeccable/
+.scratch/verify/
+
+# Local environment overrides (may contain secrets)
+.env

@@ -10,21 +10,21 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+from .academic_client import AuthenticatedAcademicClient
 from .collector import (
     CollectionCheckpoint,
-    PlaywrightGradeCollector,
+    FixedGradeReader,
     load_checkpoint,
     save_checkpoint,
-    wait_for_reauthentication,
 )
 from .explorer import (
     DEFAULT_PORTAL_URL,
     PortalExplorer,
-    launch_browser_context,
     make_capture_session,
     resolve_profile_dir,
 )
 from .progress import RequirementBaseline, evaluate_progress, parse_requirements
+from .session import AcademicBrowserSession
 
 DEFAULT_PRIVATE_ROOT = Path(".private/course-progress")
 DEFAULT_REQUIREMENTS = Path("docs/校园培养方案解读（2026年版）.md")
@@ -163,57 +163,60 @@ def run_collect(args: argparse.Namespace) -> int:
         raise SystemExit(f"要求基线不存在：{args.requirements}")
 
     private_root = args.private_root.resolve()
-    profile_dir = resolve_profile_dir(private_root)
-    profile_dir.mkdir(parents=True, exist_ok=True)
     output_path = private_root / "progress-report.json"
 
-    with sync_playwright() as playwright:
-        context = launch_browser_context(playwright, args.browser, profile_dir)
-        try:
-            page = context.pages[0] if context.pages else context.new_page()
-            page.goto(args.url, wait_until="domcontentloaded", timeout=60_000)
-            print("正在检查已有会话；会话失效时请在浏览器中完成统一身份认证。")
-            checkpoint_path = private_root / "collection-checkpoint.json"
-            checkpoint = load_checkpoint(checkpoint_path)
-            checkpoint_state = checkpoint
+    with sync_playwright() as playwright, AcademicBrowserSession(
+        playwright, browser_name=args.browser, profile_root=private_root
+    ) as session:
+        page = session.open_portal_application(
+            args.url,
+            "新教务系统",
+            timeout_seconds=args.login_timeout_seconds,
+        )
+        print("正在检查已有会话；会话失效时请在浏览器中完成统一身份认证。")
+        checkpoint_path = private_root / "collection-checkpoint.json"
+        checkpoint = load_checkpoint(checkpoint_path)
+        checkpoint_state = checkpoint
 
-            def save_page_checkpoint(
-                semester,
-                page_number: int,
-                page_count: int,
-                page_records,
-            ) -> None:
-                nonlocal checkpoint_state
-                checkpoint_state = CollectionCheckpoint(
-                    records=checkpoint_state.records + tuple(page_records),
-                    completed_pages=tuple(
-                        sorted(
-                            set(checkpoint_state.completed_pages)
-                            | {(semester.value, page_number)}
-                        )
-                    ),
-                    page_counts=tuple(
-                        sorted(
-                            (
-                                dict(checkpoint_state.page_counts)
-                                | {semester.value: page_count}
-                            ).items()
-                        )
-                    ),
-                )
-                save_checkpoint(checkpoint_path, checkpoint_state)
-
-            collection = PlaywrightGradeCollector(page_size=args.page_size).collect(
-                page,
-                frame_timeout_seconds=args.login_timeout_seconds,
-                on_session_expired=lambda: wait_for_reauthentication(
-                    page, args.login_timeout_seconds
+        def save_page_checkpoint(
+            semester,
+            page_number: int,
+            page_count: int,
+            page_records,
+        ) -> None:
+            nonlocal checkpoint_state
+            checkpoint_state = CollectionCheckpoint(
+                records=checkpoint_state.records + tuple(page_records),
+                completed_pages=tuple(
+                    sorted(
+                        set(checkpoint_state.completed_pages)
+                        | {(semester.value, page_number)}
+                    )
                 ),
-                on_page_data=save_page_checkpoint,
-                checkpoint=checkpoint,
+                page_counts=tuple(
+                    sorted(
+                        (
+                            dict(checkpoint_state.page_counts)
+                            | {semester.value: page_count}
+                        ).items()
+                    )
+                ),
             )
-        finally:
-            context.close()
+            save_checkpoint(checkpoint_path, checkpoint_state)
+
+        client = AuthenticatedAcademicClient(
+            page,
+            authenticate=lambda url, target: session.open_authenticated(
+                url, timeout_seconds=args.login_timeout_seconds, page=target
+            ),
+            timeout_seconds=min(15, args.login_timeout_seconds),
+        )
+        collection = FixedGradeReader(
+            client, page_size=args.page_size
+        ).collect(
+            on_page_data=save_page_checkpoint,
+            checkpoint=checkpoint,
+        )
 
     baseline = RequirementBaseline(
         version=args.baseline_version,
