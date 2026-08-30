@@ -1,143 +1,148 @@
-# lab-scraper
+# LessonHelper
 
-HITWH（哈尔滨工业大学威海）校园自动化工具集，包含三个部分：
+HITWH（哈尔滨工业大学威海）校园自动化工具集，提供本地化的选课规划、实验预约和毕业进度分析能力。
 
-1. **选课工作台** — 本地只读的教务选课规划工具：导入选课通知 → 确认选课窗口 →
-   导入课表 → 只读发现选课接口 → 规划课程目标
-2. **实验室抢课** — 开放式实验系统自动预约：CAS SSO 登录、会话持久化、监控抢座
-3. **毕业进度** — 学业成绩与毕业要求匹配，估算剩余学业任务
+> 本项目面向个人学习与研究用途。请遵守学校系统使用规范，不要高频请求、绕过验证码或自动提交未经确认的操作。
 
-所有认证信息仅在本地加密保存（Windows DPAPI），数据不上传。
+## 功能
+
+- **选课工作台**：解析选课通知、导入课表、识别时间冲突、读取待选课程并在用户确认后提交单个教学班。
+- **实验预约**：通过 HIT CAS 统一身份认证预约开放式实验，可单次尝试或定时监控。
+- **毕业进度**：读取个人教务数据，按培养要求估算课程和学分缺口。
+- **本地优先**：认证信息、Cookie、课表和教务快照保存在本机，不上传到项目服务器。
+
+## 安全与隐私
+
+- 登录信息使用 Windows DPAPI 加密保存，仅当前 Windows 用户可解密。
+- 浏览器会话、个人数据和预约结果不会提交到 Git。
+- 工作台默认只监听 `127.0.0.1`，远程操作必须由用户明确触发。
+- 每位使用者必须使用自己的 CAS 账号登录；不要分享 `.private/`、`.env` 或 `storage_state.json`。
 
 ## 快速开始
 
+### 环境要求
+
+- Windows
+- Python >= 3.10
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)
+
+### 安装
+
 ```powershell
-# 1. 安装依赖（含 dev 工具）
-uv sync
+# 克隆仓库
+git clone https://github.com/zhan-3/lessonhelper.git
+cd lessonhelper
 
-# 2. 首次使用安装浏览器内核（Playwright 需要）
-uv run playwright install chromium
-
-# 3. 查看可用命令
-uv run course-selection --help
+# 安装 Python 依赖和 Playwright Chromium
+setup.cmd
 ```
 
-要求 Python >= 3.10（项目用 `.python-version` 固定版本，`uv sync` 自动处理）。
-
-## 分享给其他用户
-
-推荐通过 Git 仓库分享源码，不要分享个人登录状态或本地数据。仓库中不应包含
-`.private/`、`.env`、`storage_state.json`、课表文件或预约结果；每位使用者都应在
-自己的电脑上完成 CAS 登录。
-
-Windows 用户首次使用：
+也可以手动执行：
 
 ```powershell
-setup.cmd
+uv sync
+uv run playwright install chromium
+```
+
+### 首次配置
+
+```powershell
+# 配置教务系统登录信息（本地 DPAPI 加密）
 uv run course-selection configure-login
+
+# 配置学生画像，年级按实际情况填写
 uv run course-selection configure-profile --grade 2025
 ```
 
-之后双击 `start-workbench.cmd`，或运行 `uv run course-selection cas-book`。
+### 启动工作台
 
-> 要求：Windows、Python >= 3.10，以及已安装的 [uv](https://docs.astral.sh/uv/)。
-> `setup.cmd` 会安装项目依赖和 Playwright Chromium 浏览器内核。
+```powershell
+uv run course-selection workbench
+```
+
+也可以双击 `start-workbench.cmd`。工作台默认地址为 <http://127.0.0.1:5000>。
 
 ## 常用命令
 
 ### 选课工作台
 
 | 命令 | 说明 |
-|------|------|
-| `uv run course-selection workbench` | 启动本地工作台（默认 `http://127.0.0.1:5000`，离线启动） |
-| `uv run course-selection dev-workbench` | 开发模式：持久 Chromium + 源码热重启（watchfiles） |
-| `uv run course-selection configure-profile --grade 2025` | 保存本地学生画像 |
+| --- | --- |
+| `uv run course-selection workbench` | 启动本地工作台 |
+| `uv run course-selection dev-workbench` | 开发模式，保留浏览器和登录状态并支持热重启 |
 | `uv run course-selection explore-entry` | 只读探测选课入口 |
-| `uv run course-selection discover-timetable` | 自动点击发现课表只读接口 |
-| `uv run course-selection discover-selection` | 自动点击发现选课只读接口 |
+| `uv run course-selection discover-timetable` | 发现课表只读接口 |
+| `uv run course-selection discover-selection` | 诊断选课只读接口 |
 | `uv run course-selection analyze-interface --target student-profile` | 分析学生画像接口契约 |
 
-Windows 下双击 `start-workbench.cmd` 也可启动工作台（无控制台窗口）。
+### 实验预约
 
-### 实验室抢课（cas-book）
+```powershell
+# 使用默认目标课程进行一次预约尝试
+uv run course-selection cas-book
 
-| 命令 | 说明 |
-|------|------|
-| `uv run course-selection cas-book` | 单次尝试所有目标课程 |
-| `uv run course-selection cas-book --monitor` | 监控模式，每 5 秒查一轮，最长 120 分钟 |
-| `uv run course-selection cas-book --monitor --interval=3` | 自定义监控间隔（秒） |
-| `uv run course-selection cas-book --course "DIY电磁混合磁悬浮"` | 只预约指定课程 |
-| `uv run course-selection cas-book --login-only` | 仅登录并保存会话 |
+# 监控模式
+uv run course-selection cas-book --monitor --interval=5
 
-首次运行会在浏览器中手动登录 CAS，成功后会话保存到 `storage_state.json`，
-后续自动复用；会话失效时才会再次要求登录。
+# 指定课程
+uv run course-selection cas-book --course "DIY电磁混合磁悬浮"
 
-### 登录配置
+# 只登录并保存实验系统会话
+uv run course-selection cas-book --login-only
+```
 
-| 命令 | 说明 |
-|------|------|
-| `uv run course-selection configure-login` | 保存 WebVPN 登录信息（DPAPI 加密） |
+实验系统首次使用时会打开浏览器，用户需要在 HIT CAS 页面完成登录。会话保存在本地，失效后需要重新认证。
+
+### 毕业进度
+
+```powershell
+uv run python -m course_progress --help
+```
+
+详细说明见 [`docs/course-progress-explorer.md`](docs/course-progress-explorer.md)。
+
+## 为什么默认显示浏览器
+
+本项目目前**不提供默认后台/无头操作模式**，这是有意设计：
+
+- CAS 登录可能需要验证码或人工确认；
+- 用户需要看到实际页面，避免误提交选课或预约；
+- 部分校园系统对无头浏览器和高频访问更敏感；
+- 登录失效时，后台进程无法可靠地完成重新认证。
+
+技术上，在已有有效会话的情况下可以增加 headless 模式，但它不能消除首次登录、验证码和会话失效时的人工步骤，也不建议把它作为默认行为。后续如增加，也应设计为“用户先可见登录，之后可选后台运行”，并保留明确的停止和失败保护。
 
 ## 配置
 
-配置项通过环境变量或项目根目录 `.env` 文件提供（模板见 `.env.example`），
-环境变量优先级高于 `.env`。
+配置通过环境变量或项目根目录 `.env` 提供，模板见 [`.env.example`](.env.example)。
+
+常用配置：
 
 | 变量 | 默认值 | 说明 |
-|------|--------|------|
+| --- | --- | --- |
 | `WORKBENCH_PORT` | `5000` | 工作台端口 |
-| `WORKBENCH_HOST` | `127.0.0.1` | 工作台监听地址（仅回环） |
-| `WORKBENCH_PRIVATE_ROOT` | `.private/academic-selection` | 选课工作区数据目录 |
-| `PROGRESS_PROFILE_ROOT` | `.private/course-progress` | 教务登录与进度数据目录 |
-| `ACADEMIC_BROWSER_DEBUG_PORT` | `9222` | dev-workbench CDP 调试端口 |
-| `ACADEMIC_WORKBENCH_DEV_DIAGNOSTICS` | `0` | 开发诊断开关 |
-| `CAS_BOOK_POLL_INTERVAL` | `5` | 抢课监控间隔（秒） |
-| `CAS_BOOK_MAX_POLL_MINUTES` | `120` | 抢课监控最长时长（分钟） |
+| `WORKBENCH_HOST` | `127.0.0.1` | 工作台监听地址 |
+| `WORKBENCH_PRIVATE_ROOT` | `.private/academic-selection` | 工作台本地数据目录 |
+| `PROGRESS_PROFILE_ROOT` | `.private/course-progress` | 教务登录和进度数据目录 |
 | `CAS_BOOK_BASE_URL` | `http://openlab.hitwh.edu.cn` | 实验系统入口 |
-| `ACADEMIC_BROWSER_CDP_URL` | — | 复用外部浏览器 CDP 地址 |
+| `CAS_BOOK_POLL_INTERVAL` | `5` | 实验监控间隔（秒） |
+| `CAS_BOOK_MAX_POLL_MINUTES` | `120` | 实验监控最长时间（分钟） |
 
-## 测试与开发
-
-```powershell
-uv run pytest tests/        # 运行全部测试（196 个）
-```
-
-开发工作台 `dev-workbench` 会启动一个长期持有的 Chromium（profile 持久化），
-并监控 `course_selection/` 与 `course_progress/` 下的 Python 源码变化：
-只重启工作台进程，浏览器标签页、登录状态和 CDP 连接保持不变。
-进行中的教务任务完成前不会触发重启；`Ctrl+C` 关闭工作台和浏览器，保留本地数据。
-
-## 架构
-
-```
-course_selection/         选课工作台
-├── cli.py                click 命令入口（course-selection / lab-book）
-├── application.py        waitress 服务器 + 可见 Chromium 外壳
-├── workbench.py          回环 Flask 适配层（CSRF/CSP 防护）
-├── gateway.py            Playwright 教务网关（只读边界）
-├── discovery.py          接口发现（拦截疑似选课/退课/保存请求）
-├── tasks.py              观察任务与执行任务队列（SQLite 持久化）
-├── config.py             集中配置（环境变量 + .env）
-└── dev_workbench.py      开发监督：持久 Chromium + watchfiles 热重启
-
-course_progress/          教务成绩与毕业进度
-openlab_cas_book.py       实验室抢课旧入口（shim，转发到 cas-book 子命令）
-frontend/                 Vite 前端构建产物来源
-tests/                    测试（196 passed）
-```
-
-## 安全边界
-
-- 工作台只监听 `127.0.0.1`，带 CSRF token 与 CSP 头防护
-- 接口发现只自动点击导航/查询控件，疑似选课、退课、保存请求会被拦截
-- 选课执行任务必须用户明确确认具体教学班后才提交
-- 登录信息用 Windows DPAPI 加密，仅当前用户可解密；`.private/` 不入库
-- 会话状态 `storage_state.json` 包含登录令牌，已在 `.gitignore` 中排除
-
-## 兼容旧入口
-
-`openlab_cas_book.py` 保留为转发脚本，旧用法仍然可用：
+## 开发与测试
 
 ```powershell
-uv run python openlab_cas_book.py --monitor --interval=3
+uv sync
+uv run pytest tests/
 ```
+
+前端源码位于 `frontend/`，构建后的工作台静态资源位于 `course_selection/workbench_static/`。
+
+项目结构和教务领域约定见 [`CONTEXT.md`](CONTEXT.md)；选课工作台详细说明见 [`docs/academic-selection.md`](docs/academic-selection.md)。
+
+## 项目状态
+
+当前版本适合个人本地使用。学校页面、认证流程和选课规则可能变化，任何真实环境操作都应先人工核验，并从低风险操作开始。
+
+## 许可证
+
+本仓库当前尚未声明开源许可证。未经作者另行授权，不应将代码用于再分发或商业用途。
