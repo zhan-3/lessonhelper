@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import os
 import secrets
 import tempfile
@@ -70,6 +71,9 @@ def create_workbench_app(
     app.extensions["observation_service"] = service
     app.extensions["workbench_service"] = core
     app.extensions["browser_observer"] = observer
+    # Process reload/shutdown detaches the client connection; it never closes
+    # the borrowed browser.  Registering once per app is safe and idempotent.
+    atexit.register(observer.disconnect)
 
     @app.before_request
     def protect_local_service():

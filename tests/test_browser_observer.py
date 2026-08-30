@@ -1,6 +1,7 @@
 import json
 import socket
 import subprocess
+import tempfile
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,7 +40,8 @@ def test_borrowed_observer_inspects_and_detaches_without_closing_browser():
         executable = Path(playwright.chromium.executable_path)
     # Launch outside Playwright: the observer must attach to an independently
     # owned browser, not to a browser object from the same sync API instance.
-    profile = Path.cwd() / ".tmp-observer-profile"
+    profile_directory = tempfile.TemporaryDirectory()
+    profile = Path(profile_directory.name)
     process = subprocess.Popen([
         str(executable), "--headless=new", "--no-sandbox",
         f"--remote-debugging-port={cdp_port}", "--user-data-dir=" + str(profile),
@@ -70,5 +72,4 @@ def test_borrowed_observer_inspects_and_detaches_without_closing_browser():
         process.wait(timeout=5)
         server.shutdown()
         server.server_close()
-        import shutil
-        shutil.rmtree(profile, ignore_errors=True)
+        profile_directory.cleanup()

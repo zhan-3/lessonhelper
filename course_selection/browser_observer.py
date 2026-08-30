@@ -7,12 +7,21 @@ calls ``Browser.close``.  A connection made here is always borrowed.
 
 from __future__ import annotations
 
+import hashlib
 import re
+import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlsplit
 
 _ENDPOINT = re.compile(r"^(https?://|ws://|wss://)[^\s]+$", re.IGNORECASE)
+
+
+def _synchronized(method):
+    def wrapped(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 @dataclass(frozen=True)
@@ -38,10 +47,18 @@ class ObserverResult:
 class BorrowedBrowserObserver:
     """Attach to one already-running browser for read-only target inspection."""
 
-    def __init__(self, *, session_id: str = "default") -> None:
+    _owners: ClassVar[dict[str, BorrowedBrowserObserver]] = {}
+    _owners_lock = threading.RLock()
+    MAX_TARGETS = 100
+
+    def __init__(self, *, session_id: str = "default", max_targets: int = MAX_TARGETS) -> None:
         if not session_id or len(session_id) > 128:
             raise ValueError("session_id must be a non-empty bounded value")
+        if not 1 <= max_targets <= self.MAX_TARGETS:
+            raise ValueError("max_targets must be between 1 and 100")
         self.session_id = session_id
+        self.max_targets = max_targets
+        self._lock = threading.RLock()
         self._playwright: Any | None = None
         self._browser: Any | None = None
         self._endpoint = ""
@@ -53,11 +70,19 @@ class BorrowedBrowserObserver:
         except Exception:
             return False
 
+    @_synchronized
     def connect(self, endpoint: str) -> ObserverResult:
         """Connect only to *endpoint*; repeated calls are idempotent."""
         endpoint = str(endpoint or "").strip()
         if not endpoint or not _ENDPOINT.match(endpoint):
             raise ValueError("an explicit HTTP or WebSocket CDP endpoint is required")
+        with self._owners_lock:
+            owner = self._owners.get(self.session_id)
+            if owner is not None and owner is not self and owner.connected:
+                return ObserverResult(
+                    "already_connected", "borrowed browser is already connected",
+                    owner._connection_data(),
+                )
         if self.connected:
             if endpoint != self._endpoint:
                 return ObserverResult(
@@ -78,12 +103,16 @@ class BorrowedBrowserObserver:
             playwright.stop()
             raise
         self._playwright, self._browser, self._endpoint = playwright, browser, endpoint
+        with self._owners_lock:
+            self._owners[self.session_id] = self
         return ObserverResult("connected", "connected to borrowed browser", self._connection_data())
 
+    @_synchronized
     def inspect(self) -> ObserverResult:
         """Inspect the current target set through the public observation seam."""
         return self.inventory()
 
+    @_synchronized
     def inventory(self) -> ObserverResult:
         if not self.connected:
             return ObserverResult(
@@ -102,11 +131,16 @@ class BorrowedBrowserObserver:
                 for worker in getattr(page, "workers", []):
                     targets.append(self._worker_target(worker, "worker"))
         targets.sort(key=lambda item: (item["kind"], item["url_shape"], item.get("frame_depth", 0)))
+        truncated = len(targets) > self.max_targets
+        targets = targets[: self.max_targets]
         return ObserverResult(
-            "complete", f"inventoried {len(targets)} browser targets",
+            "partial" if truncated else "complete",
+            f"inventoried {len(targets)} browser targets",
             {"connection": "borrowed", "target_count": len(targets), "targets": targets},
+            ("target inventory limit reached",) if truncated else (),
         )
 
+    @_synchronized
     def disconnect(self) -> ObserverResult:
         """Detach this client without closing the remote browser or its tabs."""
         if self._playwright is None:
@@ -114,6 +148,9 @@ class BorrowedBrowserObserver:
         playwright, self._playwright = self._playwright, None
         self._browser = None
         self._endpoint = ""
+        with self._owners_lock:
+            if self._owners.get(self.session_id) is self:
+                del self._owners[self.session_id]
         playwright.stop()
         return ObserverResult("disconnected", "detached from borrowed browser", {"connection": "borrowed"})
 
@@ -129,7 +166,9 @@ class BorrowedBrowserObserver:
         # remains useful for distinguishing portal origins without exposing
         # page content or personal path values.
         depth = len([part for part in parsed.path.split("/") if part])
-        return f"{parsed.scheme.lower()}://{parsed.hostname.lower()}/<path:{depth}>"
+        host = parsed.hostname.lower()
+        host_fingerprint = hashlib.sha256(host.encode("utf-8")).hexdigest()[:12]
+        return f"{parsed.scheme.lower()}://<host:{host_fingerprint}>/<path:{depth}>"
 
     @classmethod
     def _page_target(cls, page: Any) -> dict[str, Any]:
