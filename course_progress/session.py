@@ -169,6 +169,7 @@ class AcademicBrowserSession:
         page = page or self._default_academic_page()
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         page.wait_for_timeout(3_000)
+        reauthenticated = False
         if _is_login_url(page.url) and "logincas" not in page.url.lower():
             # Any WebVPN login page (legacy "#!/login", plain "/login", or the
             # logoutByIpChange kick page) means this context's cookies no longer
@@ -176,6 +177,7 @@ class AcademicBrowserSession:
             # unified-authentication flow with a clean ticket.
             print("登录状态：WebVPN 会话已失效，切换到统一身份认证。")
             self.context.clear_cookies()
+            reauthenticated = True
             page.goto(
                 WEBVPN_CAS_ENTRY_URL,
                 wait_until="domcontentloaded",
@@ -217,6 +219,7 @@ class AcademicBrowserSession:
                         )
                         stable_checks = 0
                         healed = True
+                        reauthenticated = True
                 if (
                     not healed
                     and cas_renavigate_attempts < CAS_RENAVIGATE_LIMIT
@@ -258,12 +261,19 @@ class AcademicBrowserSession:
                         # Permit one delayed retry, never an unbounded submit loop.
                         auto_login_attempts += 1
                         next_auto_login_at = now + 3.0
+                        reauthenticated = True
             else:
                 stable_checks += 1
                 if stable_checks >= 4:
-                    self.private_root.mkdir(parents=True, exist_ok=True)
-                    self.context.storage_state(path=str(self.auth_state_path))
-                    print("登录状态：已更新，下次将优先直接复用。")
+                    # Persist only after an actual re-authentication: persistent
+                    # contexts keep cookies in the profile dir, and a healthy
+                    # session's storage state is unchanged.  Printing on every
+                    # navigation made multi-page reads look like repeated logins.
+                    if reauthenticated or not getattr(self, "persistent", True):
+                        self.private_root.mkdir(parents=True, exist_ok=True)
+                        self.context.storage_state(path=str(self.auth_state_path))
+                    if reauthenticated:
+                        print("登录状态：已更新，下次将优先直接复用。")
                     return current
             current.wait_for_timeout(500)
         raise TimeoutError("等待统一身份认证超时")
