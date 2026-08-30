@@ -516,10 +516,29 @@ function App() {
   const terminalStates = ["succeeded", "failed", "cancelled", "interface_unconfirmed"];
   const activeTask = state.active_task ?? (task && !terminalStates.includes(task.state) ? task : null);
   const remoteBusy = Boolean(activeTask);
+  const formatSourceTime = (iso?: string): string => {
+    if (!iso) return "无记录";
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return iso;
+    const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+    if (seconds < 60) return "刚刚";
+    if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
+    if (seconds < 172800) return "昨天";
+    if (seconds < 604800) return `${Math.floor(seconds / 86400)} 天前`;
+    const date = new Date(then);
+    const sameYear = date.getFullYear() === new Date().getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return sameYear ? `${month}-${day}` : `${date.getFullYear()}-${month}-${day}`;
+  };
   const statusLabel = (kind: "selection" | "timetable" | "progress") => {
     const value = state.snapshot_status?.[kind];
     const labels: Record<string, string> = { current: "当前", historical: "历史", incomplete: "不完整", missing: "缺失" };
-    return `${labels[value?.status ?? "missing"] ?? value?.status}${value?.source_at ? ` · ${value.source_at}` : ""}${value?.reason ? ` · ${value.reason}` : ""}`;
+    const status = labels[value?.status ?? "missing"] ?? value?.status ?? "缺失";
+    const time = value?.source_at ? ` · ${formatSourceTime(value.source_at)}` : "";
+    const reason = value?.reason ? ` · ${value.reason}` : "";
+    return `${status}${time}${reason}`;
   };
   const grade = String(state.profile?.grade ?? "");
   const selectionWindows = selectionWindowsForGrade(
@@ -578,7 +597,7 @@ function App() {
         </section>
         {activeTask && <section className="drawer-task" aria-live="polite"><small>当前任务</small><strong>{activeTask.operation} · {activeTask.state}</strong><span>{taskProgressLabel(activeTask.progress) || `开始于 ${activeTask.created_at ?? "—"}`}</span><div>{activeTask.operation === "observe-navigation" && <button onClick={finishObservation}>完成监听</button>}{activeTask.task_kind !== "execution" && <button className="danger" onClick={cancel}>取消任务</button>}</div></section>}
         {task && !activeTask && <section className="drawer-task" aria-live="polite"><small>最近任务</small><strong>{task.operation} · {task.state}</strong>{task.error && <span>{task.error}{task.task_kind === "observation" && task.operation !== "connect" && "；旧快照仍然保留"}</span>}{taskProgressLabel(task.progress) && <span>{taskProgressLabel(task.progress)}</span>}</section>}
-        <section className="drawer-snapshots" aria-label="快照状态"><article><small>课表</small><strong>{statusLabel("timetable")}</strong></article><article><small>待选课程</small><strong>{statusLabel("selection")}</strong></article><article><small>毕业进度</small><strong>{statusLabel("progress")}</strong></article></section>
+        <section className="drawer-snapshots" aria-label="快照状态"><article title={state.snapshot_status?.timetable?.source_at}><small>课表</small><strong>{statusLabel("timetable")}</strong></article><article title={state.snapshot_status?.selection?.source_at}><small>待选课程</small><strong>{statusLabel("selection")}</strong></article><article title={state.snapshot_status?.progress?.source_at}><small>毕业进度</small><strong>{statusLabel("progress")}</strong></article></section>
         <section className="drawer-session" aria-label="教务会话"><small>教务会话</small><strong>{state.login_configuration.masked_username} · {state.academic_session.state}</strong><span>浏览器 {state.academic_session.browser ?? "未知"} · WebVPN {state.academic_session.webvpn ?? "未知"}{state.academic_session.last_verified_at && ` · 验证于 ${state.academic_session.last_verified_at}`}</span><div><button onClick={clearLogin}>重新配置登录</button></div></section>
         {state.execution_history && state.execution_history.length > 0 && <section className="drawer-history" aria-label="选课执行记录"><small>选课执行记录</small>{state.execution_history.map(item => <div className="drawer-history-item" key={item.id}><strong>{item.course_name || item.section_id}</strong><span>{item.created_at} · {item.result}{item.message ? ` · ${item.message}` : ""}</span>{item.result === "unknown" && !item.resolved && <button onClick={() => resolveUnknown(item.id)}>已核实，解除阻断</button>}</div>)}<button className="danger" onClick={clearHistory}>清除执行记录</button></section>}
       </aside>
