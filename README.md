@@ -24,6 +24,25 @@ uv run course-selection --help
 
 要求 Python >= 3.10（项目用 `.python-version` 固定版本，`uv sync` 自动处理）。
 
+## 分享给其他用户
+
+推荐通过 Git 仓库分享源码，不要分享个人登录状态或本地数据。仓库中不应包含
+`.private/`、`.env`、`storage_state.json`、课表文件或预约结果；每位使用者都应在
+自己的电脑上完成 CAS 登录。
+
+Windows 用户首次使用：
+
+```powershell
+setup.cmd
+uv run course-selection configure-login
+uv run course-selection configure-profile --grade 2025
+```
+
+之后双击 `start-workbench.cmd`，或运行 `uv run course-selection cas-book`。
+
+> 要求：Windows、Python >= 3.10，以及已安装的 [uv](https://docs.astral.sh/uv/)。
+> `setup.cmd` 会安装项目依赖和 Playwright Chromium 浏览器内核。
+
 ## 常用命令
 
 ### 选课工作台
