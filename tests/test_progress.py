@@ -33,6 +33,28 @@ class ProgressTests(unittest.TestCase):
             ),
         )
 
+    def test_ungraded_current_course_is_exposed_as_in_progress_credit(self):
+        records = parse_grade_html(
+            """
+            <table><tr><th>学年学期</th><th>课程代码</th><th>课程名称</th>
+            <th>课程性质</th><th>课程类别</th><th>学分</th><th>最终成绩</th></tr>
+            <tr><td>2026秋季</td><td>NEW1</td><td>新选课程</td><td>任选</td>
+            <td>文理通识-文化素质教育课</td><td>2.0</td><td></td></tr></table>
+            """
+        )
+        baseline = RequirementBaseline(
+            version="guide-2026",
+            requirements=(Requirement("cultural_quality", "文化素质课程", 8.0),),
+            category_mapping={"文理通识-文化素质教育课": "cultural_quality"},
+        )
+
+        report = evaluate_progress(records, baseline)
+
+        self.assertTrue(records[0].in_progress)
+        self.assertEqual(report.progress[0].completed_credits, 0.0)
+        self.assertEqual(report.progress[0].in_progress_courses[0].code, "NEW1")
+        self.assertEqual(report.progress[0].in_progress_courses[0].credits, 2.0)
+
     def test_evaluates_only_unique_passed_non_mandatory_courses(self):
         baseline = RequirementBaseline(
             version="guide-2026",

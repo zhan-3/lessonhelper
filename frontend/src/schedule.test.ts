@@ -12,7 +12,6 @@ import {
   planningFilterFor,
   queryFilterFor,
   projectedCourseCredits,
-  selectedCandidateOptions,
   selectionCategoryLabel,
   selectionWindowDisplay,
   selectionWindowsForGrade,
@@ -132,20 +131,6 @@ describe("schedule parsing", () => {
       candidateOption({ identity: "section-c", course_code: "HIST", name: "四史专题", category: "文化素质", credits: "2.0" }, 2),
     ];
     expect(projectedCourseCredits(options, [{ code: "HIST", name: "四史专题" }], "文化素质")).toBe(2);
-  });
-
-  it("identifies newly selected candidates from verified history or the current timetable", () => {
-    const options = [
-      candidateOption({ identity: "section-a", course_code: "ART1", name: "艺术史", category: "文化素质", credits: "2.0" }, 0),
-      candidateOption({ identity: "section-b", course_code: "INNO1", name: "创新研修", category: "创新创业", credits: "1.0" }, 1),
-      candidateOption({ identity: "section-c", course_code: "OTHER", name: "未选课程", category: "文化素质", credits: "2.0" }, 2),
-    ];
-    const selected = selectedCandidateOptions(
-      options,
-      [{ course_code: "ART1", course_name: "艺术史" }],
-      [{ section_id: "section-b", result: "selected" }, { section_id: "section-c", result: "unknown" }],
-    );
-    expect(selected.map(option => option.key)).toEqual(["section-a", "section-b"]);
   });
 
   it("maps query source codes to planning filters ahead of raw labels", () => {

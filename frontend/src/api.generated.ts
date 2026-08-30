@@ -703,6 +703,7 @@ export interface components {
             completed_credits: number;
             remaining_credits: number;
             courses: components["schemas"]["CompletedCourseFact"][];
+            in_progress_courses: components["schemas"]["CompletedCourseFact"][];
         };
         GraduationProgressReport: {
             generated_at?: string;

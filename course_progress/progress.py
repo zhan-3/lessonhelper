@@ -28,6 +28,9 @@ class AcademicRecord:
     category: str
     credits: float
     passed: bool
+    # A blank final-grade cell is a current, selected course rather than a
+    # failed course. Keep the distinction without retaining the grade itself.
+    in_progress: bool = False
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,7 @@ class Progress:
     requirement: Requirement
     completed_credits: float
     courses: tuple[CompletedCourse, ...]
+    in_progress_courses: tuple[CompletedCourse, ...] = ()
 
     @property
     def remaining_credits(self) -> float:
@@ -105,6 +109,11 @@ def _is_passing_grade(value: str) -> bool:
         return normalized in {"优秀", "良好", "中等", "及格", "合格", "通过", "免修"}
 
 
+def _is_in_progress_grade(value: str) -> bool:
+    """Recognise only explicit absence of a final grade, never a failing grade."""
+    return value.strip() in {"", "-", "--", "—", "暂无", "未录入"}
+
+
 def parse_grade_html(html: str) -> tuple[AcademicRecord, ...]:
     """Extract completion facts from one /cjcx/queryQmcj HTML page."""
     parser = _TableParser()
@@ -141,6 +150,7 @@ def parse_grade_html(html: str) -> tuple[AcademicRecord, ...]:
                     category=row[positions["课程类别"]],
                     credits=float(row[positions["学分"]]),
                     passed=_is_passing_grade(row[positions["最终成绩"]]),
+                    in_progress=_is_in_progress_grade(row[positions["最终成绩"]]),
                 )
             )
         except (TypeError, ValueError):
@@ -151,9 +161,10 @@ def parse_grade_html(html: str) -> tuple[AcademicRecord, ...]:
 def evaluate_progress(
     records: Iterable[AcademicRecord], baseline: RequirementBaseline
 ) -> ProgressReport:
-    """Evaluate confirmed course progress against one requirement baseline."""
+    """Evaluate confirmed and selected-without-grade courses separately."""
+    all_records = tuple(records)
     by_identity: dict[str, list[AcademicRecord]] = defaultdict(list)
-    for record in records:
+    for record in all_records:
         if not record.passed:
             continue
         identity = record.code.strip() or " ".join(record.name.lower().split())
@@ -194,6 +205,24 @@ def evaluate_progress(
             continue
         grouped[requirement_key].append(course)
 
+    # Current courses with an explicitly blank final-grade field are selected
+    # facts. They contribute to estimates, but never to confirmed completion.
+    in_progress_grouped: dict[str, list[CompletedCourse]] = defaultdict(list)
+    in_progress_seen: set[str] = set()
+    for record in all_records:
+        if not record.in_progress or record.nature.strip() == "必修":
+            continue
+        identity = record.code.strip() or " ".join(record.name.lower().split())
+        if identity in by_identity or identity in in_progress_seen:
+            continue
+        requirement_key = baseline.category_mapping.get(record.category.strip())
+        if requirement_key is None:
+            continue
+        in_progress_seen.add(identity)
+        in_progress_grouped[requirement_key].append(
+            CompletedCourse(record.code, record.name, record.nature, record.category, record.credits)
+        )
+
     progress_items: list[Progress] = []
     for requirement in baseline.requirements:
         contribution_keys = requirement.contribution_keys or (requirement.key,)
@@ -202,11 +231,17 @@ def evaluate_progress(
             for key in dict.fromkeys(contribution_keys)
             for course in grouped.get(key, ())
         )
+        selected = tuple(
+            course
+            for key in dict.fromkeys(contribution_keys)
+            for course in in_progress_grouped.get(key, ())
+        )
         progress_items.append(
             Progress(
                 requirement,
                 sum(course.credits for course in matched),
                 matched,
+                selected,
             )
         )
     progress = tuple(progress_items)

@@ -20,6 +20,8 @@ GRADE_HTML = """
 <th>课程类别</th><th>学分</th><th>最终成绩</th></tr>
 <tr><td>2025-20261</td><td>ART1</td><td>艺术史</td><td>选修</td>
 <td>文理通识-文化素质教育课</td><td>2</td><td>通过</td></tr>
+<tr><td>2025-20261</td><td>ART2</td><td>舞蹈欣赏</td><td>选修</td>
+<td>文理通识-文化素质教育课</td><td>1</td><td></td></tr>
 </table>
 """
 
@@ -128,9 +130,11 @@ class AcademicClientTests(unittest.TestCase):
 
         self.assertEqual("complete", result.status)
         self.assertTrue(session.opened[0][0].endswith("/cjcx/queryQmcj"))
-        self.assertEqual(2, result.payload["report"]["progress"][2]["completed_credits"])
+        cultural = result.payload["report"]["progress"][2]
+        self.assertEqual(2, cultural["completed_credits"])
+        self.assertEqual("ART2", cultural["in_progress_courses"][0]["code"])
         self.assertEqual("2025-2026 春季", updates[0][1]["semester"])
-        self.assertEqual(1, updates[0][1]["records"])
+        self.assertEqual(2, updates[0][1]["records"])
 
 
 if __name__ == "__main__":

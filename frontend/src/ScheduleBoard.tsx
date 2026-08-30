@@ -15,7 +15,6 @@ import {
   progressFilterByKey,
   progressKeysByQueryCode,
   projectedCourseCredits,
-  selectedCandidateOptions,
   weekItems,
   type CandidateOption,
   type RequirementFilter,
@@ -50,13 +49,12 @@ const readCalibration = (term: string): WeekCalibration | null => {
   }
 };
 
-export function ScheduleBoard({ timetable, selection, graduationProgress, selectionWindows, studentGrade, executionHistory, previewKeys, onTogglePreview, onExecuteSection, executionPending }: {
+export function ScheduleBoard({ timetable, selection, graduationProgress, selectionWindows, studentGrade, previewKeys, onTogglePreview, onExecuteSection, executionPending }: {
   timetable: WorkbenchState["snapshots"]["timetable"];
   selection: WorkbenchState["snapshots"]["selection"];
   graduationProgress?: WorkbenchState["graduation_progress"];
   selectionWindows: SelectionWindow[];
   studentGrade: string;
-  executionHistory: Array<Record<string, unknown>>;
   previewKeys: string[];
   onTogglePreview: (key: string) => void;
   onExecuteSection?: (sectionId: string, courseName: string) => void;
@@ -107,13 +105,6 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
   }, [term, maxWeek]);
 
   const previewOptions = candidateOptions.filter(option => previewKeys.includes(option.key));
-  const selectedOptions = selectedCandidateOptions(
-    candidateOptions,
-    (timetable?.payload.entries as Record<string, unknown>[] | undefined) ?? [],
-    executionHistory,
-  );
-  const selectedIdentities = new Set(selectedOptions.map(option => `${option.courseCode || option.name}`.trim().toLowerCase()));
-  const queuedOptions = previewOptions.filter(option => !selectedIdentities.has(`${option.courseCode || option.name}`.trim().toLowerCase()));
   const unknownCount = [...current, ...candidateOptions.flatMap(option => option.meetings)].filter(item => item.unknown).length;
   // 进度面板与待选课程同步：只展示本次选课查询覆盖的培养要求。
   const syncedProgress = (() => {
@@ -206,10 +197,11 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
         const filter = progressFilterByKey[item.key];
         const confirmedCredits = item.completed_credits ?? 0;
         const requiredCredits = item.key === "cultural_quality" && studentGrade === "2021" ? 10 : (item.required_credits ?? 0);
-        const selectedCredits = filter ? projectedCourseCredits(selectedOptions, completedCourses, filter) : 0;
-        const selectedFacts = selectedOptions.map(option => ({ code: option.courseCode, name: option.name }));
-        const queuedCredits = filter ? projectedCourseCredits(queuedOptions, [...completedCourses, ...selectedFacts], filter) : 0;
-        const expectedCredits = confirmedCredits + selectedCredits + queuedCredits;
+        const inProgressCourses = item.in_progress_courses ?? [];
+        const inProgressCredits = inProgressCourses.reduce((total, course) => total + course.credits, 0);
+        const queuedCredits = filter ? projectedCourseCredits(previewOptions, [...completedCourses, ...inProgressCourses], filter) : 0;
+        const estimatedCredits = inProgressCredits + queuedCredits;
+        const expectedCredits = confirmedCredits + estimatedCredits;
         const remainingCredits = Math.max(0, requiredCredits - expectedCredits);
         const width = (credits: number, before = 0) => requiredCredits > 0 ? `${Math.max(0, Math.min(credits, requiredCredits - before)) / requiredCredits * 100}%` : "0%";
         const culturalRule = studentGrade === "2021"
@@ -221,11 +213,12 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
           : item.key === "innovation_and_practice" || item.key === "innovation" ? "创新创业+社会实践合计≥6，社会实践≥1；创新创业单项最低值待按个人方案核对"
             : item.key === "outside_major_elective" ? (studentGrade === "2025" ? "跨专业发展≥10；项目驱动超出10学分的部分可按规定转入创新实践" : ["2022", "2023", "2024"].includes(studentGrade) ? "跨专业发展≥10，通常须选定一个体系并在体系内修满" : "外专业/跨专业口径随年级变化，请按个人培养方案核对") : "";
         return <article className="progress-card" key={item.key}>
-          <header><strong>{item.key === "outside_major_elective" ? "跨专业发展课程" : item.label}</strong><span>预计 {formatCredits(expectedCredits)}/{formatCredits(requiredCredits)} 学分</span></header>
-          {requiredCredits > 0 && <div className="credit-meter" role="progressbar" aria-label={`${item.label}预计学分`} aria-valuemin={0} aria-valuemax={requiredCredits} aria-valuenow={Math.min(expectedCredits, requiredCredits)}><span className="confirmed" style={{ width: width(confirmedCredits) }} /><span className="selected" style={{ width: width(selectedCredits, confirmedCredits) }} /><span className="queued" style={{ width: width(queuedCredits, confirmedCredits + selectedCredits) }} /></div>}
-          <p>{remainingCredits > 0 ? `还差 ${formatCredits(remainingCredits)} 学分` : "总学分已满足"} · <b className="credit-confirmed">已确认 {formatCredits(confirmedCredits)}</b>{selectedCredits > 0 && <> · <b className="credit-selected">本学期已选 +{formatCredits(selectedCredits)}</b></>}{queuedCredits > 0 && <> · <b className="credit-queued">队列 +{formatCredits(queuedCredits)}</b></>}</p>
+          <header><strong>{item.key === "outside_major_elective" ? "跨专业发展课程" : item.label}</strong><span><b>{formatCredits(expectedCredits)}</b> / {formatCredits(requiredCredits)} 学分</span></header>
+          {requiredCredits > 0 && <div className="credit-meter" role="progressbar" aria-label={`${item.label}预计学分`} aria-valuemin={0} aria-valuemax={requiredCredits} aria-valuenow={Math.min(expectedCredits, requiredCredits)}><span className="confirmed" style={{ width: width(confirmedCredits) }} /><span className="estimated" style={{ width: width(estimatedCredits, confirmedCredits) }} /></div>}
+          <div className="credit-breakdown"><span className="credit-confirmed"><i />已确认 {formatCredits(confirmedCredits)}</span><span className="credit-estimated"><i />已选待成绩 {formatCredits(inProgressCredits)}</span><span className="credit-estimated preview"><i />队列预览 {formatCredits(queuedCredits)}</span></div>
+          <p className="credit-gap">{remainingCredits > 0 ? `按当前估值还差 ${formatCredits(remainingCredits)} 学分` : "按当前估值已满足总学分"}</p>
           {rule && <p className="requirement-rule">{rule}</p>}
-          <p className="progress-courses">{item.courses.map(course => <span className="confirmed-course" key={`${course.code}-${course.name}`}>{course.name} · {formatCredits(course.credits)}</span>)}{filter && selectedOptions.filter(option => planningFilterFor(option) === filter && !courseAlreadyCompleted(option, completedCourses)).map(option => <span className="selected-course" key={`selected-${option.key}`}>{option.name} · {formatCredits(option.credits)}</span>)}{filter && queuedOptions.filter(option => planningFilterFor(option) === filter && !courseAlreadyCompleted(option, [...completedCourses, ...selectedFacts])).map(option => <span className="queued-course" key={`queued-${option.key}`}>{option.name} · {formatCredits(option.credits)}</span>)}{!item.courses.length && !selectedCredits && !queuedCredits && <span>暂无已确认或预计课程</span>}</p>
+          <div className="progress-courses">{item.courses.map(course => <span className="confirmed-course" key={`${course.code}-${course.name}`}><i>已修</i>{course.name} · {formatCredits(course.credits)}</span>)}{inProgressCourses.map(course => <span className="estimated-course" key={`selected-${course.code}-${course.name}`}><i>已选</i>{course.name} · {formatCredits(course.credits)}</span>)}{filter && previewOptions.filter(option => planningFilterFor(option) === filter && !courseAlreadyCompleted(option, [...completedCourses, ...inProgressCourses])).map(option => <span className="estimated-course preview" key={`queued-${option.key}`}><i>预览</i>{option.name} · {formatCredits(option.credits)}</span>)}{!item.courses.length && !inProgressCourses.length && !queuedCredits && <span>暂无已确认或预计课程</span>}</div>
         </article>;
       })}</div> : <div className="progress-band-inner"><article className="progress-card unavailable"><strong>尚未同步已修课程</strong><span>同步后可区分已确认、本学期已选与队列估值。</span></article></div>}
       {graduationProgress?.status === "incomplete" && <small>已修课程数据不完整，当前缺口只能作为下限参考。</small>}

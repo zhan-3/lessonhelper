@@ -370,8 +370,12 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             category_mapping={
                 "本专业选修": "major_elective",
                 "外专业选修": "outside_major_elective",
+                "跨专业发展课程": "outside_major_elective",
                 "文理通识-文化素质教育课": "cultural_quality",
                 "创新研修课": "innovation",
+                "创新实验课": "innovation",
+                "创新创业课程": "innovation",
+                "创业课程": "innovation",
                 "社会实践": "social_practice",
             },
         )
@@ -440,6 +444,7 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                         "completed_credits": item.completed_credits,
                         "remaining_credits": item.remaining_credits,
                         "courses": [asdict(course) for course in item.courses],
+                        "in_progress_courses": [asdict(course) for course in item.in_progress_courses],
                     }
                     for item in report.progress
                 ],

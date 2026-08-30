@@ -628,7 +628,7 @@ function App() {
       </aside>
     </header>
     {message && <p className="notice" role="status">{message}</p>}
-    <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={state.graduation_progress} selectionWindows={(state.confirmed_notice?.windows as SelectionWindow[] | undefined) ?? []} studentGrade={grade} executionHistory={(state.execution_history as Array<Record<string, unknown>> | undefined) ?? []} previewKeys={goals.flatMap(goal => goal.preferences.slice(0, 1).map(preference => preference.section_id))} onTogglePreview={toggleQueueSection} onExecuteSection={executeSection} executionPending={remoteBusy || queueRunning} />
+    <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={state.graduation_progress} selectionWindows={(state.confirmed_notice?.windows as SelectionWindow[] | undefined) ?? []} studentGrade={grade} previewKeys={goals.flatMap(goal => goal.preferences.slice(0, 1).map(preference => preference.section_id))} onTogglePreview={toggleQueueSection} onExecuteSection={executeSection} executionPending={remoteBusy || queueRunning} />
 
     <button ref={drawerTriggerRef} className={`data-drawer-trigger ${remoteBusy ? "is-busy" : ""}`} onClick={() => setDataDrawerOpen(true)} aria-haspopup="dialog" aria-expanded={dataDrawerOpen}>
       <span className="data-trigger-mark" aria-hidden="true" />
@@ -641,7 +641,7 @@ function App() {
         <section className="drawer-actions" aria-label="数据操作">
           <button onClick={() => run("connect")} disabled={remoteBusy}><span>连接教务</span><small>验证当前教务会话</small></button>
           <button onClick={() => run("refresh-timetable")} disabled={remoteBusy}><span>刷新课表</span><small>{statusLabel("timetable")}</small></button>
-          <button onClick={() => run("refresh-progress")} disabled={remoteBusy}><span>刷新毕业进度</span><small>{statusLabel("progress")}</small></button>
+          <button onClick={() => run("refresh-progress")} disabled={remoteBusy}><span>同步学分进度</span><small>含已选待成绩 · {statusLabel("progress")}</small></button>
           <button onClick={() => run("refresh-selection")} disabled={remoteBusy || !state.confirmed_notice}><span>刷新待选课程</span><small>{state.confirmed_notice ? statusLabel("selection") : "需先确认官方通知"}</small></button>
           {state.capabilities?.development_diagnostics && <button className="secondary" onClick={() => run("observe-navigation")} disabled={remoteBusy}><span>诊断监听</span><small>开发诊断工具</small></button>}
         </section>

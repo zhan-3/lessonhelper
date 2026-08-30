@@ -394,26 +394,6 @@ export function projectedCourseCredits(
   return Array.from(projected.values()).reduce((total, credits) => total + credits, 0);
 }
 
-/** Candidate facts that are actually selected, from timetable or a verified execution result. */
-export function selectedCandidateOptions(
-  options: CandidateOption[],
-  currentCourses: Array<Record<string, unknown>>,
-  executions: Array<Record<string, unknown>>,
-): CandidateOption[] {
-  const selectedSections = new Set(executions
-    .filter(item => String(item.result ?? "") === "selected")
-    .map(item => String(item.section_id ?? ""))
-    .filter(Boolean));
-  const currentCodes = new Set(currentCourses.map(item => String(item.course_code ?? "").trim()).filter(Boolean));
-  const currentNames = new Set(currentCourses.map(item => String(item.course_name ?? item.name ?? "").trim().toLowerCase()).filter(Boolean));
-  const selected = new Map<string, CandidateOption>();
-  for (const option of options) {
-    const inTimetable = Boolean(option.courseCode && currentCodes.has(option.courseCode.trim())) || currentNames.has(option.name.trim().toLowerCase());
-    if (selectedSections.has(option.key) || inTimetable) selected.set(courseIdentity(option), option);
-  }
-  return [...selected.values()];
-}
-
 export const activeInWeek = (item: ScheduleItem, week: number) => !item.weeks.length || item.weeks.includes(week);
 
 export function weekItems(items: ScheduleItem[], week: number): ScheduleItem[] {
