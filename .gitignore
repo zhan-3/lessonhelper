@@ -47,6 +47,7 @@ frontend/vite.config.d.ts
 .omo/
 .impeccable/
 .scratch/verify/
+.scratch/academic-browser-observer/eval-results/
 
 # Local environment overrides (may contain secrets)
 .env

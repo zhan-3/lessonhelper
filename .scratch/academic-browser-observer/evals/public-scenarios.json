@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "sensitive_baits": ["EVAL_PASSWORD_NEVER_PUBLISH", "EVAL_STUDENT_2025000000", "EVAL_TOKEN_DO_NOT_LOG"],
+  "scenarios": [
+    {"id": "wrong-page", "failure_class": "wrong_page", "expected_targets": ["business-page"], "expected_requests": ["business-read"], "expected_redirects": []},
+    {"id": "nested-frame", "failure_class": "missing_nested_frame", "expected_targets": ["portal", "nested-business-frame"], "expected_requests": ["nested-read"], "expected_redirects": []},
+    {"id": "frame-confusion", "failure_class": "top_level_vs_frame", "expected_targets": ["shell", "business-frame"], "expected_requests": ["frame-read"], "expected_redirects": []},
+    {"id": "blank-popup", "failure_class": "blank_popup", "expected_targets": ["popup-unresolved"], "expected_requests": [], "expected_redirects": [], "expected_status": "partial"},
+    {"id": "late-capture", "failure_class": "late_capture", "expected_targets": ["business-page"], "expected_requests": ["navigation-bound-read"], "expected_redirects": [], "expected_status": "partial"},
+    {"id": "auth-redirect", "failure_class": "authentication_redirect", "expected_targets": ["protected-page"], "expected_requests": ["protected-read"], "expected_redirects": ["login-to-protected"]},
+    {"id": "false-empty", "failure_class": "false_empty_complete", "expected_targets": ["business-page"], "expected_requests": ["paged-read"], "expected_redirects": [], "expected_status": "partial"},
+    {"id": "partial-pagination", "failure_class": "partial_pagination", "expected_targets": ["business-page"], "expected_requests": ["page-1", "page-2"], "expected_redirects": [], "expected_status": "partial"},
+    {"id": "duplicate-owner", "failure_class": "duplicate_ownership", "expected_targets": ["existing-page"], "expected_requests": [], "expected_redirects": []},
+    {"id": "borrowed-detach", "failure_class": "destructive_detach", "expected_targets": ["existing-page"], "expected_requests": [], "expected_redirects": []}
+  ]
+}
