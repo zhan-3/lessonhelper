@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 from urllib.parse import urlsplit
 
+from .browser_redaction import TraceRedactor
+
 _ENDPOINT = re.compile(r"^(https?://|ws://|wss://)[^\s]+$", re.IGNORECASE)
 
 
@@ -54,6 +56,8 @@ class _Trace:
     checkpoint: int = 0
     listeners: list[tuple[Any, str, Callable[..., Any]]] = field(default_factory=list)
     dropped_events: int = 0
+    redaction_error: str = ""
+    redactor: TraceRedactor = field(default_factory=TraceRedactor, repr=False)
 
 
 class BorrowedBrowserObserver:
@@ -159,6 +163,8 @@ class BorrowedBrowserObserver:
             self._listen(context, "response", self._on_response)
             self._listen(context, "requestfailed", self._on_request_failed)
             self._listen(context, "page", self._on_page)
+            for page in context.pages:
+                self._listen(page, "console", self._on_console)
         return ObserverResult("observing", "observation started before external browser activity", {"trace_id": trace.identity, "target_count": len(trace.started_targets)})
 
     @_synchronized
@@ -180,6 +186,7 @@ class BorrowedBrowserObserver:
                 # A target may have detached concurrently; the trace is still
                 # discarded and the borrowed browser remains untouched.
                 logging.getLogger(__name__).debug("listener cleanup ignored: %s", error)
+        trace.redactor.close()
         self._trace = None
         return result
 
@@ -188,6 +195,10 @@ class BorrowedBrowserObserver:
         if self._trace is not None:
             self._trace.listeners.append((target, event_name, callback))
 
+    def _redaction_failed(self, error: Exception) -> None:
+        if self._trace is not None:
+            self._trace.redaction_error = str(error)[:160]
+
     def _record(self, event: dict[str, Any]) -> None:
         trace = self._trace
         if trace is None:
@@ -195,7 +206,14 @@ class BorrowedBrowserObserver:
         if len(trace.events) >= self.max_events:
             trace.dropped_events += 1
             return
-        trace.events.append({"sequence": len(trace.events) + 1, **event})
+        if trace.redaction_error:
+            return
+        try:
+            safe_event = trace.redactor.redact_value(event)
+        except (RuntimeError, TypeError, ValueError) as error:
+            trace.redaction_error = str(error)[:160]
+            return
+        trace.events.append({"sequence": len(trace.events) + 1, **safe_event})
 
     @classmethod
     def _request_context(cls, request: Any) -> dict[str, Any]:
@@ -209,17 +227,36 @@ class BorrowedBrowserObserver:
 
     def _on_request(self, request: Any) -> None:
         redirected = getattr(request, "redirected_from", None)
-        self._record({"kind": "request", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, "redirected_from": self._safe_url_shape(redirected.url) if redirected else None, **self._request_context(request)})
+        try:
+            post_data = getattr(request, "post_data", None)
+            content_type = getattr(request, "headers", {}).get("content-type", "")
+            safe_body = self._trace.redactor.redact_body(post_data, content_type) if self._trace is not None and post_data is not None else None
+            safe_headers = self._trace.redactor.redact_headers(getattr(request, "headers", {})) if self._trace is not None else {}
+            self._record({"kind": "request", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, "redirected_from": self._safe_url_shape(redirected.url) if redirected else None, "request_body": safe_body, "headers": safe_headers, **self._request_context(request)})
+        except (RuntimeError, TypeError, ValueError) as error:
+            self._redaction_failed(error)
 
     def _on_response(self, response: Any) -> None:
-        request = response.request
-        self._record({"kind": "response", "method": request.method, "url_shape": self._safe_url_shape(response.url), "status": response.status, "resource_type": request.resource_type, **self._request_context(request)})
+        try:
+            request = response.request
+            headers = self._trace.redactor.redact_headers(response.headers) if self._trace is not None else {}
+            self._record({"kind": "response", "method": request.method, "url_shape": self._safe_url_shape(response.url), "status": response.status, "resource_type": request.resource_type, "headers": headers, **self._request_context(request)})
+        except (RuntimeError, TypeError, ValueError) as error:
+            self._redaction_failed(error)
 
     def _on_request_failed(self, request: Any) -> None:
         self._record({"kind": "request_failed", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, **self._request_context(request)})
 
     def _on_page(self, page: Any) -> None:
         self._record({"kind": "target_created", "target": self._page_target(page)})
+
+    def _on_console(self, message: Any) -> None:
+        try:
+            values = [argument.json_value() for argument in getattr(message, "args", [])]
+            safe_values = self._trace.redactor.redact_console(values) if self._trace is not None else []
+            self._record({"kind": "console", "type": getattr(message, "type", "unknown"), "values": safe_values})
+        except (RuntimeError, TypeError, ValueError) as error:
+            self._redaction_failed(error)
 
     def _target_keys(self) -> set[str]:
         result = self.inventory()
@@ -240,13 +277,18 @@ class BorrowedBrowserObserver:
                     pages[0].wait_for_timeout(1)
                 except Exception as error:
                     logging.getLogger(__name__).debug("event pump ignored: %s", error)
-        events = trace.events[trace.checkpoint:]
+        events = [] if trace.redaction_error else trace.events[trace.checkpoint:]
         trace.checkpoint = len(trace.events)
         current = self._target_keys()
         added = sorted(current - trace.started_targets)
         removed = sorted(trace.started_targets - current)
-        status = "complete" if trace.dropped_events == 0 else "partial"
-        return ObserverResult("stopped" if final else status, "observation stopped" if final else "observation checkpoint", {"trace_id": trace.identity, "events": events, "target_changes": {"added": added, "removed": removed}, "event_count": len(events), "dropped_events": trace.dropped_events}, ("event limit reached",) if trace.dropped_events else ())
+        status = "complete" if trace.dropped_events == 0 and not trace.redaction_error else "partial"
+        warnings = []
+        if trace.dropped_events:
+            warnings.append("event limit reached")
+        if trace.redaction_error:
+            warnings.append("redaction failed; evidence publication was blocked")
+        return ObserverResult("stopped" if final and not warnings else status, "observation stopped" if final else "observation checkpoint", {"trace_id": trace.identity, "events": events, "target_changes": {"added": added, "removed": removed}, "event_count": len(events), "dropped_events": trace.dropped_events}, tuple(warnings))
 
     @_synchronized
     def inspect(self) -> ObserverResult:
