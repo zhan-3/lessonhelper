@@ -4,7 +4,7 @@
 
 **Blocked by:** 01/Safely connect to and inspect a borrowed browser
 
-**Status: automated-test verified (core lifecycle; live redirect fixture pending)
+**Status:** automated-test verified (core lifecycle; live redirect fixture pending)
 
 - [x] Observation starts before the actor operates and captures navigation-bound requests that would be lost by late inspection.
 - [ ] Requests, responses, redirects, loader identity, frame identity, target identity, and initiator class remain correlated across navigation. (Core currently captures request/response and redirect shape; loader/frame/initiator enrichment remains pending.)
