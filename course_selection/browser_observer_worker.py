@@ -36,7 +36,12 @@ class BorrowedBrowserObserverWorker:
 
     def _run(self) -> None:
         while True:
-            call = self._calls.get()
+            try:
+                call = self._calls.get(timeout=0.02)
+            except queue.Empty:
+                self._observer.pump_events()
+                self._observer.enforce_budgets()
+                continue
             if call is None:
                 return
             try:

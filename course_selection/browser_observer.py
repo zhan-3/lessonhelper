@@ -11,6 +11,7 @@ import hashlib
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -59,6 +60,7 @@ class _Trace:
     redaction_error: str = ""
     missing_evidence: set[str] = field(default_factory=set)
     redactor: TraceRedactor = field(default_factory=TraceRedactor, repr=False)
+    started_at: float = field(default_factory=time.monotonic)
 
 
 class BorrowedBrowserObserver:
@@ -68,13 +70,16 @@ class BorrowedBrowserObserver:
     _owners_lock = threading.RLock()
     MAX_TARGETS = 100
 
-    def __init__(self, *, session_id: str = "default", max_targets: int = MAX_TARGETS) -> None:
+    def __init__(self, *, session_id: str = "default", max_targets: int = MAX_TARGETS, max_runtime_seconds: float = 600) -> None:
         if not session_id or len(session_id) > 128:
             raise ValueError("session_id must be a non-empty bounded value")
         if not 1 <= max_targets <= self.MAX_TARGETS:
             raise ValueError("max_targets must be between 1 and 100")
+        if not 0 < max_runtime_seconds <= 3600:
+            raise ValueError("max_runtime_seconds must be greater than zero and at most 3600")
         self.session_id = session_id
         self.max_targets = max_targets
+        self.max_runtime_seconds = max_runtime_seconds
         self._lock = threading.RLock()
         self._playwright: Any | None = None
         self._browser: Any | None = None
@@ -83,6 +88,10 @@ class BorrowedBrowserObserver:
         self._trace_counter = 0
         self.max_events = 500
         self._target_ids: dict[int, str] = {}
+        self._loader_counter = 0
+        self._request_loaders: dict[int, str] = {}
+        self._frame_loaders: dict[str, str] = {}
+        self._last_terminal_result: ObserverResult | None = None
 
     @property
     def connected(self) -> bool:
@@ -159,6 +168,10 @@ class BorrowedBrowserObserver:
             return ObserverResult("failed", "cannot observe without a borrowed browser connection", next_actions=("connect first",))
         if self._trace is not None:
             return ObserverResult("already_observing", "observation is already active", {"trace_id": self._trace.identity})
+        self._last_terminal_result = None
+        self._request_loaders.clear()
+        self._frame_loaders.clear()
+        self._loader_counter = 0
         self._trace_counter += 1
         trace = _Trace(f"trace-{self._trace_counter}", self._target_keys())
         self._trace = trace
@@ -172,9 +185,32 @@ class BorrowedBrowserObserver:
         return ObserverResult("observing", "observation started before external browser activity", {"trace_id": trace.identity, "target_count": len(trace.started_targets)})
 
     @_synchronized
+    def pump_events(self) -> None:
+        if self._trace is None or not self.connected:
+            return
+        for context in self._browser.contexts:
+            pages = context.pages
+            if pages:
+                try:
+                    pages[0].wait_for_timeout(1)
+                except Exception as error:
+                    self._trace.missing_evidence.add("event_pump")
+                    logging.getLogger(__name__).debug("event pump ignored: %s", error)
+
+    @_synchronized
+    def enforce_budgets(self) -> ObserverResult | None:
+        if self._trace is not None and time.monotonic() - self._trace.started_at > self.max_runtime_seconds:
+            self._trace.missing_evidence.add("runtime_budget_exhausted")
+            return self.stop_observation()
+        return None
+
+    @_synchronized
     def checkpoint(self) -> ObserverResult:
         if self._trace is None:
-            return ObserverResult("failed", "no active observation", next_actions=("start observation first",))
+            return self._last_terminal_result or ObserverResult("failed", "no active observation", next_actions=("start observation first",))
+        if time.monotonic() - self._trace.started_at > self.max_runtime_seconds:
+            self._trace.missing_evidence.add("runtime_budget_exhausted")
+            return self.stop_observation()
         return self._trace_delta(final=False)
 
     @_synchronized
@@ -182,12 +218,14 @@ class BorrowedBrowserObserver:
         if self._trace is None:
             return ObserverResult("cancelled", "no active observation", {"connection": "borrowed"})
         stopped = self.stop_observation()
-        return ObserverResult("cancelled", "observation cancelled locally", stopped.data, stopped.warnings, ("the borrowed browser remains open",))
+        result = ObserverResult("cancelled", "observation cancelled locally", stopped.data, stopped.warnings, ("the borrowed browser remains open",))
+        self._last_terminal_result = result
+        return result
 
     @_synchronized
     def stop_observation(self) -> ObserverResult:
         if self._trace is None:
-            return ObserverResult("stopped", "no active observation", {"delta": {"events": [], "target_changes": []}})
+            return self._last_terminal_result or ObserverResult("stopped", "no active observation", {"delta": {"events": [], "target_changes": []}})
         result = self._trace_delta(final=True)
         trace = self._trace
         for target, event_name, callback in trace.listeners:
@@ -199,6 +237,7 @@ class BorrowedBrowserObserver:
                 logging.getLogger(__name__).debug("listener cleanup ignored: %s", error)
         trace.redactor.close()
         self._trace = None
+        self._last_terminal_result = result
         return result
 
     def _listen(self, target: Any, event_name: str, callback: Callable[..., Any]) -> None:
@@ -224,7 +263,26 @@ class BorrowedBrowserObserver:
         except (RuntimeError, TypeError, ValueError) as error:
             trace.redaction_error = str(error)[:160]
             return
-        trace.events.append({"sequence": len(trace.events) + 1, **safe_event})
+        trace.events.append({"sequence": len(trace.events) + 1, "elapsed_ms": round((time.monotonic() - trace.started_at) * 1000, 3), **safe_event})
+
+    def _loader_identity(self, request: Any) -> str:
+        existing = self._request_loaders.get(id(request))
+        if existing:
+            return existing
+        redirected = getattr(request, "redirected_from", None)
+        if redirected is not None and id(redirected) in self._request_loaders:
+            identity = self._request_loaders[id(redirected)]
+        else:
+            context = self._request_context(request)
+            frame_identity = str(context["frame_identity"])
+            if str(getattr(request, "resource_type", "")) == "document" or frame_identity not in self._frame_loaders:
+                self._loader_counter += 1
+                identity = hashlib.sha256(f"{self.session_id}:loader:{self._loader_counter}".encode()).hexdigest()[:16]
+                self._frame_loaders[frame_identity] = identity
+            else:
+                identity = self._frame_loaders[frame_identity]
+        self._request_loaders[id(request)] = identity
+        return identity
 
     def _request_context(self, request: Any) -> dict[str, Any]:
         frame = getattr(request, "frame", None)
@@ -249,7 +307,7 @@ class BorrowedBrowserObserver:
             content_type = getattr(request, "headers", {}).get("content-type", "")
             safe_body = self._trace.redactor.redact_body(post_data, content_type) if self._trace is not None and post_data is not None else None
             safe_headers = self._trace.redactor.redact_headers(getattr(request, "headers", {})) if self._trace is not None else {}
-            self._record({"kind": "request", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, "redirected_from": self._safe_url_shape(redirected.url) if redirected else None, "request_body": safe_body, "headers": safe_headers, **self._request_context(request)})
+            self._record({"kind": "request", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, "redirected_from": self._safe_url_shape(redirected.url) if redirected else None, "request_body": safe_body, "headers": safe_headers, "loader_identity": self._loader_identity(request), **self._request_context(request)})
         except (RuntimeError, TypeError, ValueError) as error:
             self._redaction_failed(error)
 
@@ -257,12 +315,17 @@ class BorrowedBrowserObserver:
         try:
             request = response.request
             headers = self._trace.redactor.redact_headers(response.headers) if self._trace is not None else {}
-            self._record({"kind": "response", "method": request.method, "url_shape": self._safe_url_shape(response.url), "status": response.status, "resource_type": request.resource_type, "headers": headers, **self._request_context(request)})
+            self._record({"kind": "response", "method": request.method, "url_shape": self._safe_url_shape(response.url), "status": response.status, "resource_type": request.resource_type, "headers": headers, "loader_identity": self._loader_identity(request), **self._request_context(request)})
         except (RuntimeError, TypeError, ValueError) as error:
             self._redaction_failed(error)
 
     def _on_request_failed(self, request: Any) -> None:
-        self._record({"kind": "request_failed", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, **self._request_context(request)})
+        try:
+            self._record({"kind": "request_failed", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, "loader_identity": self._loader_identity(request), **self._request_context(request)})
+        except (RuntimeError, TypeError, ValueError) as error:
+            if self._trace is not None:
+                self._trace.missing_evidence.add("failed_request_provenance")
+            logging.getLogger(__name__).debug("failed request provenance incomplete: %s", error)
 
     def _listen_page(self, page: Any) -> None:
         self._listen(page, "console", self._on_console)
@@ -327,13 +390,7 @@ class BorrowedBrowserObserver:
         # Sync Playwright dispatches protocol events while its connection is
         # pumped. A bounded turn makes externally generated events observable
         # before the delta is materialized.
-        for context in self._browser.contexts:
-            pages = context.pages
-            if pages:
-                try:
-                    pages[0].wait_for_timeout(1)
-                except Exception as error:
-                    logging.getLogger(__name__).debug("event pump ignored: %s", error)
+        self.pump_events()
         events = [] if trace.redaction_error else trace.events[trace.checkpoint:]
         trace.checkpoint = len(trace.events)
         current = self._target_keys()
@@ -374,6 +431,14 @@ class BorrowedBrowserObserver:
             return True
 
         for context in self._browser.contexts:
+            context_identity = self._target_identity_for(context, "context")
+            if not append_target({
+                "kind": "context", "url_shape": "browser-context",
+                "target_identity": context_identity, "parent_identity": None,
+                "relationship": "browser_context", "navigation_state": "active",
+                "capabilities": ["pages", "service_workers", "network"],
+            }):
+                break
             for page in context.pages:
                 if not append_target(self._page_target(page)):
                     break
@@ -385,13 +450,14 @@ class BorrowedBrowserObserver:
             if limit_reached:
                 break
             for worker in getattr(context, "service_workers", []):
-                if not append_target(self._worker_target(worker, "service_worker")):
+                if not append_target(self._worker_target(worker, "service_worker", context_identity)):
                     break
             if limit_reached:
                 break
             for page in context.pages:
+                page_identity = self._target_identity_for(page, "page")
                 for worker in getattr(page, "workers", []):
-                    if not append_target(self._worker_target(worker, "worker")):
+                    if not append_target(self._worker_target(worker, "worker", page_identity)):
                         break
                 if limit_reached:
                     break
@@ -461,13 +527,20 @@ class BorrowedBrowserObserver:
         url_shape = self._safe_url_shape(page.url)
         opener = getattr(page, "opener", None)
         opener_page = opener() if callable(opener) else None
-        parent_identity = self._target_identity_for(opener_page, "page") if opener_page is not None else None
+        context_value = getattr(page, "context", None)
+        context = context_value() if callable(context_value) else context_value
+        if opener_page is not None:
+            parent_identity = self._target_identity_for(opener_page, "page")
+        elif context is not None:
+            parent_identity = self._target_identity_for(context, "context")
+        else:
+            parent_identity = None
         navigation_state = "unresolved_blank" if str(page.url) in {"", "about:blank"} else "committed"
         return {
             "kind": "page", "url_shape": url_shape,
             "target_identity": self._target_identity_for(page, "page"),
             "parent_identity": parent_identity,
-            "relationship": "popup" if parent_identity else "top_level",
+            "relationship": "popup" if opener_page is not None else "top_level",
             "navigation_state": navigation_state,
             "capabilities": ["document", "frames", "network"],
             "frame_count": max(0, len(page.frames) - 1),
@@ -497,11 +570,11 @@ class BorrowedBrowserObserver:
             "capabilities": ["document", "network"],
         }
 
-    def _worker_target(self, worker: Any, kind: str) -> dict[str, Any]:
+    def _worker_target(self, worker: Any, kind: str, parent_identity: str | None = None) -> dict[str, Any]:
         url_shape = self._safe_url_shape(worker.url)
         return {
             "kind": kind, "url_shape": url_shape,
             "target_identity": self._target_identity_for(worker, kind),
-            "parent_identity": None, "relationship": "execution_context",
+            "parent_identity": parent_identity, "relationship": "execution_context",
             "navigation_state": "committed", "capabilities": ["network", "runtime"],
         }

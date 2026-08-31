@@ -27,6 +27,8 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         body = b"<title>fixture</title><p>still alive</p>"
+        if self.path == "/final":
+            body += b"<img src='/probe/after/result'>"
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", str(len(body)))
@@ -81,17 +83,23 @@ def test_borrowed_observer_inspects_and_detaches_without_closing_browser():
         subprocess.run([
             __import__("sys").executable, "-c",
             ("from playwright.sync_api import sync_playwright; import sys; "
-             "p=sync_playwright().start(); b=p.chromium.connect_over_cdp(sys.argv[1]); "
-             "b.contexts[0].pages[0].goto(sys.argv[2]); import time; time.sleep(0.5); p.stop()"),
+             "p=sync_playwright().start(); b=p.chromium.connect_over_cdp(sys.argv[1]); page=b.contexts[0].pages[0]; "
+             "page.evaluate(\"fetch('/probe/before')\"); page.goto(sys.argv[2]); "
+             "page.evaluate(\"fetch('/probe/after/result')\"); page.wait_for_timeout(500); p.stop()"),
             endpoint, f"http://127.0.0.1:{site_port}/start",
         ], capture_output=True, text=True, check=True)
         delta = observer.checkpoint().to_dict()
         assert delta["status"] == "complete"
         events = delta["data"]["events"]
         requests = [event for event in events if event["kind"] == "request"]
-        assert requests
-        assert any(event["redirected_from"] for event in requests)
+        assert len(requests) >= 5
+        assert any("<path:2>" in event["url_shape"] for event in requests)
+        assert any("<path:3>" in event["url_shape"] for event in requests)
+        redirected = [event for event in requests if event["redirected_from"]]
+        assert len(redirected) >= 2
+        assert len({event["loader_identity"] for event in redirected}) == 1
         assert all(event["target_identity"] and event["frame_identity"] for event in requests)
+        assert all("elapsed_ms" in event for event in requests)
         assert observer.stop_observation().status == "stopped"
         assert observer.stop_observation().status == "stopped"
         assert observer.start_observation().status == "observing"
