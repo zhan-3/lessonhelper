@@ -162,6 +162,18 @@ def create_workbench_app(
     def inspect_browser_observer():
         return jsonify(observer.inspect().to_dict())
 
+    @app.post("/api/browser-observer/start")
+    def start_browser_observer():
+        return jsonify(observer.start_observation().to_dict())
+
+    @app.get("/api/browser-observer/checkpoint")
+    def checkpoint_browser_observer():
+        return jsonify(observer.checkpoint().to_dict())
+
+    @app.post("/api/browser-observer/stop")
+    def stop_browser_observer():
+        return jsonify(observer.stop_observation().to_dict())
+
     @app.post("/api/browser-observer/disconnect")
     def disconnect_browser_observer():
         return jsonify(observer.disconnect().to_dict())

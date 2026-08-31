@@ -14,6 +14,16 @@ from course_selection.browser_observer import BorrowedBrowserObserver
 
 class FixtureHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/start":
+            self.send_response(302)
+            self.send_header("Location", "/middle")
+            self.end_headers()
+            return
+        if self.path == "/middle":
+            self.send_response(302)
+            self.send_header("Location", "/final")
+            self.end_headers()
+            return
         body = b"<title>fixture</title><p>still alive</p>"
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
@@ -57,6 +67,22 @@ def test_borrowed_observer_inspects_and_detaches_without_closing_browser():
             except OSError:
                 time.sleep(0.1)
         assert observer.connect(endpoint).status == "connected"
+        assert observer.start_observation().status == "observing"
+        subprocess.run([
+            __import__("sys").executable, "-c",
+            ("from playwright.sync_api import sync_playwright; import sys; "
+             "p=sync_playwright().start(); b=p.chromium.connect_over_cdp(sys.argv[1]); "
+             "b.contexts[0].pages[0].goto(sys.argv[2]); import time; time.sleep(0.5); p.stop()"),
+            endpoint, f"http://127.0.0.1:{site_port}/start",
+        ], capture_output=True, text=True, check=True)
+        delta = observer.checkpoint().to_dict()
+        assert delta["status"] == "complete"
+        events = delta["data"]["events"]
+        requests = [event for event in events if event["kind"] == "request"]
+        assert requests
+        assert any(event["redirected_from"] for event in requests)
+        assert all(event["target_identity"] and event["frame_identity"] for event in requests)
+        assert observer.stop_observation().status == "stopped"
         first = observer.inspect().to_dict()
         assert first["data"]["connection"] == "borrowed"
         assert first["data"]["target_count"] >= 1

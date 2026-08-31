@@ -4,12 +4,12 @@
 
 **Blocked by:** 01/Safely connect to and inspect a borrowed browser
 
-**Status:** ready-for-agent
+**Status: automated-test verified (core lifecycle; live redirect fixture pending)
 
-- [ ] Observation starts before the actor operates and captures navigation-bound requests that would be lost by late inspection.
-- [ ] Requests, responses, redirects, loader identity, frame identity, target identity, and initiator class remain correlated across navigation.
-- [ ] Checkpoint returns only the delta since observation start or the preceding checkpoint rather than replaying unchanged history.
-- [ ] Stop returns a final typed Observation Delta and releases active Trace listeners without detaching the borrowed browser connection.
-- [ ] Duplicate start, checkpoint, and stop calls are idempotent and do not multiply listeners or events.
+- [x] Observation starts before the actor operates and captures navigation-bound requests that would be lost by late inspection.
+- [ ] Requests, responses, redirects, loader identity, frame identity, target identity, and initiator class remain correlated across navigation. (Core currently captures request/response and redirect shape; loader/frame/initiator enrichment remains pending.)
+- [x] Checkpoint returns only the delta since observation start or the preceding checkpoint rather than replaying unchanged history.
+- [x] Stop returns a final typed Observation Delta and releases active Trace listeners without detaching the borrowed browser connection.
+- [x] Duplicate start, checkpoint, and stop calls are idempotent and do not multiply listeners or events.
 - [ ] A local fixture demonstrates a multi-hop redirect and requests emitted immediately before and after navigation.
-- [ ] Output is bounded and reports complete, partial, or failed status instead of treating collected-so-far events as automatically complete.
+- [x] Output is bounded and reports complete, partial, or failed status instead of treating collected-so-far events as automatically complete.

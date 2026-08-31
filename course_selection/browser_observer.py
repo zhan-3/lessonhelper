@@ -8,9 +8,11 @@ calls ``Browser.close``.  A connection made here is always borrowed.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import threading
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
 from urllib.parse import urlsplit
 
@@ -44,6 +46,16 @@ class ObserverResult:
         }
 
 
+@dataclass
+class _Trace:
+    identity: str
+    started_targets: set[str]
+    events: list[dict[str, Any]] = field(default_factory=list)
+    checkpoint: int = 0
+    listeners: list[tuple[Any, str, Callable[..., Any]]] = field(default_factory=list)
+    dropped_events: int = 0
+
+
 class BorrowedBrowserObserver:
     """Attach to one already-running browser for read-only target inspection."""
 
@@ -62,6 +74,9 @@ class BorrowedBrowserObserver:
         self._playwright: Any | None = None
         self._browser: Any | None = None
         self._endpoint = ""
+        self._trace: _Trace | None = None
+        self._trace_counter = 0
+        self.max_events = 500
 
     @property
     def connected(self) -> bool:
@@ -131,6 +146,109 @@ class BorrowedBrowserObserver:
         return ObserverResult("connected", "connected to borrowed browser", self._connection_data())
 
     @_synchronized
+    def start_observation(self) -> ObserverResult:
+        if not self.connected:
+            return ObserverResult("failed", "cannot observe without a borrowed browser connection", next_actions=("connect first",))
+        if self._trace is not None:
+            return ObserverResult("already_observing", "observation is already active", {"trace_id": self._trace.identity})
+        self._trace_counter += 1
+        trace = _Trace(f"trace-{self._trace_counter}", self._target_keys())
+        self._trace = trace
+        for context in self._browser.contexts:
+            self._listen(context, "request", self._on_request)
+            self._listen(context, "response", self._on_response)
+            self._listen(context, "requestfailed", self._on_request_failed)
+            self._listen(context, "page", self._on_page)
+        return ObserverResult("observing", "observation started before external browser activity", {"trace_id": trace.identity, "target_count": len(trace.started_targets)})
+
+    @_synchronized
+    def checkpoint(self) -> ObserverResult:
+        if self._trace is None:
+            return ObserverResult("failed", "no active observation", next_actions=("start observation first",))
+        return self._trace_delta(final=False)
+
+    @_synchronized
+    def stop_observation(self) -> ObserverResult:
+        if self._trace is None:
+            return ObserverResult("stopped", "no active observation", {"delta": {"events": [], "target_changes": []}})
+        result = self._trace_delta(final=True)
+        trace = self._trace
+        for target, event_name, callback in trace.listeners:
+            try:
+                target.remove_listener(event_name, callback)
+            except Exception as error:
+                # A target may have detached concurrently; the trace is still
+                # discarded and the borrowed browser remains untouched.
+                logging.getLogger(__name__).debug("listener cleanup ignored: %s", error)
+        self._trace = None
+        return result
+
+    def _listen(self, target: Any, event_name: str, callback: Callable[..., Any]) -> None:
+        target.on(event_name, callback)
+        if self._trace is not None:
+            self._trace.listeners.append((target, event_name, callback))
+
+    def _record(self, event: dict[str, Any]) -> None:
+        trace = self._trace
+        if trace is None:
+            return
+        if len(trace.events) >= self.max_events:
+            trace.dropped_events += 1
+            return
+        trace.events.append({"sequence": len(trace.events) + 1, **event})
+
+    @classmethod
+    def _request_context(cls, request: Any) -> dict[str, Any]:
+        frame = getattr(request, "frame", None)
+        frame_shape = cls._safe_url_shape(frame.url) if frame is not None else "unknown"
+        target_identity = hashlib.sha256(frame_shape.encode("utf-8")).hexdigest()[:12]
+        frame_identity = hashlib.sha256((frame_shape + ":frame").encode("utf-8")).hexdigest()[:12]
+        resource_type = str(getattr(request, "resource_type", "unknown"))
+        initiator = "worker" if resource_type in {"script", "worker"} and frame is None else "frame" if frame is not None and getattr(frame, "parent_frame", None) is not None else "page"
+        return {"frame_identity": frame_identity, "target_identity": target_identity, "initiator_class": initiator}
+
+    def _on_request(self, request: Any) -> None:
+        redirected = getattr(request, "redirected_from", None)
+        self._record({"kind": "request", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, "redirected_from": self._safe_url_shape(redirected.url) if redirected else None, **self._request_context(request)})
+
+    def _on_response(self, response: Any) -> None:
+        request = response.request
+        self._record({"kind": "response", "method": request.method, "url_shape": self._safe_url_shape(response.url), "status": response.status, "resource_type": request.resource_type, **self._request_context(request)})
+
+    def _on_request_failed(self, request: Any) -> None:
+        self._record({"kind": "request_failed", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, **self._request_context(request)})
+
+    def _on_page(self, page: Any) -> None:
+        self._record({"kind": "target_created", "target": self._page_target(page)})
+
+    def _target_keys(self) -> set[str]:
+        result = self.inventory()
+        if not result.data:
+            return set()
+        return {f"{item['kind']}:{item['url_shape']}" for item in result.data.get("targets", [])}
+
+    def _trace_delta(self, *, final: bool) -> ObserverResult:
+        trace = self._trace
+        assert trace is not None
+        # Sync Playwright dispatches protocol events while its connection is
+        # pumped. A bounded turn makes externally generated events observable
+        # before the delta is materialized.
+        for context in self._browser.contexts:
+            pages = context.pages
+            if pages:
+                try:
+                    pages[0].wait_for_timeout(1)
+                except Exception as error:
+                    logging.getLogger(__name__).debug("event pump ignored: %s", error)
+        events = trace.events[trace.checkpoint:]
+        trace.checkpoint = len(trace.events)
+        current = self._target_keys()
+        added = sorted(current - trace.started_targets)
+        removed = sorted(trace.started_targets - current)
+        status = "complete" if trace.dropped_events == 0 else "partial"
+        return ObserverResult("stopped" if final else status, "observation stopped" if final else "observation checkpoint", {"trace_id": trace.identity, "events": events, "target_changes": {"added": added, "removed": removed}, "event_count": len(events), "dropped_events": trace.dropped_events}, ("event limit reached",) if trace.dropped_events else ())
+
+    @_synchronized
     def inspect(self) -> ObserverResult:
         """Inspect the current target set through the public observation seam."""
         return self.inventory()
@@ -190,6 +308,8 @@ class BorrowedBrowserObserver:
     @_synchronized
     def disconnect(self) -> ObserverResult:
         """Detach this client without closing the remote browser or its tabs."""
+        if self._trace is not None:
+            self.stop_observation()
         if self._playwright is None:
             return ObserverResult("disconnected", "borrowed browser is already detached", {"connection": "borrowed"})
         playwright, self._playwright = self._playwright, None
