@@ -16,6 +16,7 @@ from .browser_observer import BorrowedBrowserObserver
 from .gateway import AcademicGateway, PlaywrightAcademicGateway
 from .notice_discovery import DEFAULT_NOTICE_INDEX_URL
 from .persistence import WorkspaceDatabase
+from .request_contracts import generate_contract_candidates
 from .tasks import ObservationService
 from .timetable import import_timetable, timetable_snapshot_payload
 from .workbench_service import NoticeReadError, WorkbenchService
@@ -173,6 +174,14 @@ def create_workbench_app(
     @app.post("/api/browser-observer/stop")
     def stop_browser_observer():
         return jsonify(observer.stop_observation().to_dict())
+
+    @app.post("/api/browser-observer/candidates")
+    def browser_observer_candidates():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        delta = body.get("delta")
+        return jsonify({"status": "diagnostic", "candidates": generate_contract_candidates(delta)})
 
     @app.post("/api/browser-observer/disconnect")
     def disconnect_browser_observer():
