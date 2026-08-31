@@ -4,7 +4,7 @@
 
 **Blocked by:** 07/Prove observer value with historical and hidden evals
 
-**Status:** ready-for-human
+**Status:** ready-for-human (fail-closed report tooling automated-test verified; live witness not run)
 
 - [ ] The user identifies and authorizes one specific read-only operation before observation starts.
 - [ ] The observer only connects, inventories, starts observation, checkpoints or stops, and disconnects; it does not click, fill, navigate, evaluate arbitrary JavaScript, or submit.
