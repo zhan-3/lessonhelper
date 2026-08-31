@@ -52,7 +52,9 @@ class TraceRedactor:
     def redact_headers(self, headers: dict[str, Any] | None) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for name, value in (headers or {}).items():
-            result[str(name)] = self._replacement(value) if self._is_sensitive_name(str(name)) else str(value)
+            # Header names are useful contract evidence; values are not needed
+            # and may hide URLs, identifiers, cookies, or vendor-specific tokens.
+            result[str(name)] = self._replacement(value)
         return result
 
     def redact_value(self, value: Any, *, field_name: str = "", redact_scalars: bool = False) -> Any:

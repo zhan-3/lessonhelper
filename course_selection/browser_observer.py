@@ -57,6 +57,7 @@ class _Trace:
     listeners: list[tuple[Any, str, Callable[..., Any]]] = field(default_factory=list)
     dropped_events: int = 0
     redaction_error: str = ""
+    missing_evidence: set[str] = field(default_factory=set)
     redactor: TraceRedactor = field(default_factory=TraceRedactor, repr=False)
 
 
@@ -81,6 +82,7 @@ class BorrowedBrowserObserver:
         self._trace: _Trace | None = None
         self._trace_counter = 0
         self.max_events = 500
+        self._target_ids: dict[int, str] = {}
 
     @property
     def connected(self) -> bool:
@@ -164,7 +166,7 @@ class BorrowedBrowserObserver:
             self._listen(context, "requestfailed", self._on_request_failed)
             self._listen(context, "page", self._on_page)
             for page in context.pages:
-                self._listen(page, "console", self._on_console)
+                self._listen_page(page)
         return ObserverResult("observing", "observation started before external browser activity", {"trace_id": trace.identity, "target_count": len(trace.started_targets)})
 
     @_synchronized
@@ -215,12 +217,18 @@ class BorrowedBrowserObserver:
             return
         trace.events.append({"sequence": len(trace.events) + 1, **safe_event})
 
-    @classmethod
-    def _request_context(cls, request: Any) -> dict[str, Any]:
+    def _request_context(self, request: Any) -> dict[str, Any]:
         frame = getattr(request, "frame", None)
-        frame_shape = cls._safe_url_shape(frame.url) if frame is not None else "unknown"
-        target_identity = hashlib.sha256(frame_shape.encode("utf-8")).hexdigest()[:12]
-        frame_identity = hashlib.sha256((frame_shape + ":frame").encode("utf-8")).hexdigest()[:12]
+        if frame is None:
+            target_identity = "unknown"
+            frame_identity = "unknown"
+        elif getattr(frame, "parent_frame", None) is None:
+            page = getattr(frame, "page", None)
+            target_identity = self._target_identity_for(page, "page") if page is not None else self._target_identity_for(frame, "frame")
+            frame_identity = self._target_identity_for(frame, "frame")
+        else:
+            target_identity = self._target_identity_for(frame, "frame")
+            frame_identity = target_identity
         resource_type = str(getattr(request, "resource_type", "unknown"))
         initiator = "worker" if resource_type in {"script", "worker"} and frame is None else "frame" if frame is not None and getattr(frame, "parent_frame", None) is not None else "page"
         return {"frame_identity": frame_identity, "target_identity": target_identity, "initiator_class": initiator}
@@ -247,8 +255,48 @@ class BorrowedBrowserObserver:
     def _on_request_failed(self, request: Any) -> None:
         self._record({"kind": "request_failed", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, **self._request_context(request)})
 
+    def _listen_page(self, page: Any) -> None:
+        self._listen(page, "console", self._on_console)
+        self._listen(page, "framenavigated", self._on_frame_navigated)
+        self._listen(page, "frameattached", self._on_frame_attached)
+        self._listen(page, "framedetached", self._on_frame_detached)
+        self._listen(page, "close", lambda: self._on_page_closed(page))
+
     def _on_page(self, page: Any) -> None:
-        self._record({"kind": "target_created", "target": self._page_target(page)})
+        try:
+            self._listen_page(page)
+            target = self._page_target(page)
+            self._record({"kind": "target_created", "target": target, "navigation_state": target["navigation_state"]})
+        except Exception as error:
+            if self._trace is not None:
+                self._trace.missing_evidence.add("new_page_attachment")
+            logging.getLogger(__name__).debug("new page attachment incomplete: %s", error)
+
+    def _record_frame_event(self, kind: str, frame: Any) -> None:
+        try:
+            descriptor = self._frame_target(frame)
+            self._record({"kind": kind, "target": descriptor, "navigation_state": descriptor["navigation_state"]})
+        except Exception as error:
+            if self._trace is not None:
+                self._trace.missing_evidence.add(kind)
+            logging.getLogger(__name__).debug("frame topology evidence incomplete: %s", error)
+
+    def _on_frame_navigated(self, frame: Any) -> None:
+        self._record_frame_event("target_navigated", frame)
+
+    def _on_frame_attached(self, frame: Any) -> None:
+        self._record_frame_event("target_attached", frame)
+
+    def _on_frame_detached(self, frame: Any) -> None:
+        self._record_frame_event("target_detached", frame)
+
+    def _on_page_closed(self, page: Any) -> None:
+        try:
+            self._record({"kind": "target_closed", "target": self._page_target(page)})
+        except Exception as error:
+            if self._trace is not None:
+                self._trace.missing_evidence.add("closed_page_descriptor")
+            logging.getLogger(__name__).debug("closed page descriptor incomplete: %s", error)
 
     def _on_console(self, message: Any) -> None:
         try:
@@ -262,7 +310,7 @@ class BorrowedBrowserObserver:
         result = self.inventory()
         if not result.data:
             return set()
-        return {f"{item['kind']}:{item['url_shape']}" for item in result.data.get("targets", [])}
+        return {str(item.get("target_identity") or f"{item['kind']}:{item['url_shape']}") for item in result.data.get("targets", [])}
 
     def _trace_delta(self, *, final: bool) -> ObserverResult:
         trace = self._trace
@@ -282,13 +330,15 @@ class BorrowedBrowserObserver:
         current = self._target_keys()
         added = sorted(current - trace.started_targets)
         removed = sorted(trace.started_targets - current)
-        status = "complete" if trace.dropped_events == 0 and not trace.redaction_error else "partial"
+        status = "complete" if trace.dropped_events == 0 and not trace.redaction_error and not trace.missing_evidence else "partial"
         warnings = []
         if trace.dropped_events:
             warnings.append("event limit reached")
         if trace.redaction_error:
             warnings.append("redaction failed; evidence publication was blocked")
-        return ObserverResult("stopped" if final and not warnings else status, "observation stopped" if final else "observation checkpoint", {"trace_id": trace.identity, "events": events, "target_changes": {"added": added, "removed": removed}, "event_count": len(events), "dropped_events": trace.dropped_events}, tuple(warnings))
+        if trace.missing_evidence:
+            warnings.append("required target evidence is incomplete")
+        return ObserverResult("stopped" if final and not warnings else status, "observation stopped" if final else "observation checkpoint", {"trace_id": trace.identity, "events": events, "target_changes": {"added": added, "removed": removed}, "event_count": len(events), "dropped_events": trace.dropped_events, "missing_evidence": sorted(trace.missing_evidence)}, tuple(warnings))
 
     @_synchronized
     def inspect(self) -> ObserverResult:
@@ -379,22 +429,61 @@ class BorrowedBrowserObserver:
         host_fingerprint = hashlib.sha256(host.encode("utf-8")).hexdigest()[:12]
         return f"{parsed.scheme.lower()}://<host:{host_fingerprint}>/<path:{depth}>"
 
-    @classmethod
-    def _page_target(cls, page: Any) -> dict[str, Any]:
+    def _target_identity_for(self, target: Any, kind: str) -> str:
+        key = id(target)
+        identity = self._target_ids.get(key)
+        if identity is None:
+            implementation = getattr(target, "_impl_obj", None)
+            opaque_marker = str(getattr(implementation, "_guid", "")) or str(key)
+            identity = hashlib.sha256(f"{self.session_id}:{kind}:{opaque_marker}".encode()).hexdigest()[:16]
+            self._target_ids[key] = identity
+        return identity
+
+    def _page_target(self, page: Any) -> dict[str, Any]:
+        url_shape = self._safe_url_shape(page.url)
+        opener = getattr(page, "opener", None)
+        opener_page = opener() if callable(opener) else None
+        parent_identity = self._target_identity_for(opener_page, "page") if opener_page is not None else None
+        navigation_state = "unresolved_blank" if str(page.url) in {"", "about:blank"} else "committed"
         return {
-            "kind": "page", "url_shape": cls._safe_url_shape(page.url),
+            "kind": "page", "url_shape": url_shape,
+            "target_identity": self._target_identity_for(page, "page"),
+            "parent_identity": parent_identity,
+            "relationship": "popup" if parent_identity else "top_level",
+            "navigation_state": navigation_state,
+            "capabilities": ["document", "frames", "network"],
             "frame_count": max(0, len(page.frames) - 1),
         }
 
-    @classmethod
-    def _frame_target(cls, frame: Any) -> dict[str, Any]:
+    def _frame_target(self, frame: Any) -> dict[str, Any]:
         depth = 0
         parent = getattr(frame, "parent_frame", None)
         while parent is not None:
             depth += 1
             parent = getattr(parent, "parent_frame", None)
-        return {"kind": "frame", "url_shape": cls._safe_url_shape(frame.url), "frame_depth": depth}
+        url_shape = self._safe_url_shape(frame.url)
+        parent_frame = getattr(frame, "parent_frame", None)
+        if parent_frame is None:
+            parent_identity = None
+        elif getattr(parent_frame, "parent_frame", None) is None:
+            page = getattr(frame, "page", None)
+            parent_identity = self._target_identity_for(page, "page") if page is not None else self._target_identity_for(parent_frame, "frame")
+        else:
+            parent_identity = self._target_identity_for(parent_frame, "frame")
+        return {
+            "kind": "frame", "url_shape": url_shape, "frame_depth": depth,
+            "target_identity": self._target_identity_for(frame, "frame"),
+            "parent_identity": parent_identity,
+            "relationship": "child_frame" if parent_identity else "main_frame",
+            "navigation_state": "unresolved_blank" if str(frame.url) in {"", "about:blank"} else "committed",
+            "capabilities": ["document", "network"],
+        }
 
-    @classmethod
-    def _worker_target(cls, worker: Any, kind: str) -> dict[str, Any]:
-        return {"kind": kind, "url_shape": cls._safe_url_shape(worker.url)}
+    def _worker_target(self, worker: Any, kind: str) -> dict[str, Any]:
+        url_shape = self._safe_url_shape(worker.url)
+        return {
+            "kind": kind, "url_shape": url_shape,
+            "target_identity": self._target_identity_for(worker, kind),
+            "parent_identity": None, "relationship": "execution_context",
+            "navigation_state": "committed", "capabilities": ["network", "runtime"],
+        }
