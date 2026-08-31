@@ -170,13 +170,20 @@ def create_workbench_app(
     def start_browser_observer():
         return jsonify(observer.start_observation().to_dict())
 
+    def observation_payload(result, *, include_candidates: bool = False):
+        payload = result.to_dict()
+        data = payload.get("data")
+        if include_candidates and isinstance(data, dict):
+            data["candidates"] = generate_contract_candidates(data)
+        return payload
+
     @app.get("/api/browser-observer/checkpoint")
     def checkpoint_browser_observer():
-        return jsonify(observer.checkpoint().to_dict())
+        return jsonify(observation_payload(observer.checkpoint(), include_candidates=True))
 
     @app.post("/api/browser-observer/stop")
     def stop_browser_observer():
-        return jsonify(observer.stop_observation().to_dict())
+        return jsonify(observation_payload(observer.stop_observation(), include_candidates=True))
 
     @app.post("/api/browser-observer/cancel")
     def cancel_browser_observer():

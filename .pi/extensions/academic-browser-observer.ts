@@ -21,6 +21,19 @@ type Envelope = {
 function compact(value: Envelope): Envelope {
   const data = value.data ?? {};
   const targets = Array.isArray(data.targets) ? data.targets.slice(0, MAX_TARGETS) : undefined;
+  const candidates = Array.isArray(data.candidates) ? data.candidates.slice(0, 10).map((value) => {
+    const item = value as Record<string, unknown>;
+    return {
+      evidence_identity: item.evidence_identity,
+      method: item.method,
+      path_shape: item.path_shape,
+      count: item.count,
+      score: item.score,
+      completeness: item.completeness,
+      reasons: Array.isArray(item.reasons) ? item.reasons.slice(0, 5) : [],
+      warnings: Array.isArray(item.warnings) ? item.warnings.slice(0, 3) : [],
+    };
+  }) : undefined;
   const changes = data.target_changes as { added?: unknown[]; removed?: unknown[] } | undefined;
   return {
     status: value.status,
@@ -33,6 +46,7 @@ function compact(value: Envelope): Envelope {
       trace_id: data.trace_id,
       target_count: data.target_count,
       targets,
+      candidates,
       event_count: data.event_count,
       dropped_events: data.dropped_events,
       missing_evidence: Array.isArray(data.missing_evidence) ? data.missing_evidence.slice(0, 20) : undefined,
