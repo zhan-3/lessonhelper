@@ -4,11 +4,11 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** automated-test verified (Python core and local HTTP adapter)
+**Status:** automated-test verified (harness-neutral core, local HTTP adapter, and thin Pi Extension)
 
 - [x] An explicit HTTP or WebSocket CDP endpoint connects successfully; the observer never scans local ports or silently selects another browser.
 - [x] Connection state is classified as borrowed and exposes detach semantics without any remote-browser close option.
-- [x] The HTTP adapter can connect, inspect basic page targets, and disconnect through the same observation seam used by tests.
+- [x] The model-callable Pi interface can connect, inspect basic page targets, and disconnect through the same observation seam used by tests.
 - [x] The returned inventory is bounded and omits full URLs, page content, credentials, cookies, and personal values.
 - [x] Disconnect leaves the fixture browser process and its pre-existing tabs alive and usable.
 - [x] Repeated connect, inspect, and disconnect calls return typed, deterministic outcomes rather than creating duplicate ownership.
