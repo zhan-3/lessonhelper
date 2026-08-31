@@ -45,6 +45,7 @@ frontend/vite.config.d.ts
 
 # Local tool artifacts (agent sessions, design critiques, runtime logs)
 .omo/
+.pi/subagents/
 .impeccable/
 .scratch/verify/
 .scratch/academic-browser-observer/eval-results/
