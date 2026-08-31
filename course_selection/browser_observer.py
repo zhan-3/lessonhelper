@@ -97,6 +97,8 @@ class BorrowedBrowserObserver:
         endpoint = str(endpoint or "").strip()
         if not endpoint or not _ENDPOINT.match(endpoint):
             raise ValueError("an explicit HTTP or WebSocket CDP endpoint is required")
+        if (urlsplit(endpoint).hostname or "").lower() not in {"127.0.0.1", "localhost", "::1"}:
+            raise ValueError("the CDP endpoint must be loopback-only")
         with self._owners_lock:
             owner = self._owners.get(self.session_id)
             if owner is not None and owner is not self:
@@ -174,6 +176,13 @@ class BorrowedBrowserObserver:
         if self._trace is None:
             return ObserverResult("failed", "no active observation", next_actions=("start observation first",))
         return self._trace_delta(final=False)
+
+    @_synchronized
+    def cancel_observation(self) -> ObserverResult:
+        if self._trace is None:
+            return ObserverResult("cancelled", "no active observation", {"connection": "borrowed"})
+        stopped = self.stop_observation()
+        return ObserverResult("cancelled", "observation cancelled locally", stopped.data, stopped.warnings, ("the borrowed browser remains open",))
 
     @_synchronized
     def stop_observation(self) -> ObserverResult:
@@ -338,7 +347,8 @@ class BorrowedBrowserObserver:
             warnings.append("redaction failed; evidence publication was blocked")
         if trace.missing_evidence:
             warnings.append("required target evidence is incomplete")
-        return ObserverResult("stopped" if final and not warnings else status, "observation stopped" if final else "observation checkpoint", {"trace_id": trace.identity, "events": events, "target_changes": {"added": added, "removed": removed}, "event_count": len(events), "dropped_events": trace.dropped_events, "missing_evidence": sorted(trace.missing_evidence)}, tuple(warnings))
+        next_actions = ("repeat one bounded observation for the missing evidence",) if warnings else ()
+        return ObserverResult("stopped" if final and not warnings else status, "observation stopped" if final else "observation checkpoint", {"trace_id": trace.identity, "events": events, "target_changes": {"added": added, "removed": removed}, "event_count": len(events), "dropped_events": trace.dropped_events, "missing_evidence": sorted(trace.missing_evidence)}, tuple(warnings), next_actions)
 
     @_synchronized
     def inspect(self) -> ObserverResult:
@@ -395,7 +405,15 @@ class BorrowedBrowserObserver:
             f"inventoried {len(targets)} browser targets",
             {"connection": "borrowed", "target_count": len(targets), "targets": targets},
             ("target inventory limit reached",) if truncated else (),
+            ("narrow the browser target set and inspect again",) if truncated else (),
         )
+
+    @_synchronized
+    def shutdown(self) -> ObserverResult:
+        """Invalidate local trace state and detach idempotently on reload/exit."""
+        if self._trace is not None:
+            self.stop_observation()
+        return self.disconnect()
 
     @_synchronized
     def disconnect(self) -> ObserverResult:

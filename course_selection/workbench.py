@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from flask import Flask, abort, jsonify, request, send_from_directory
 
 from .browser_observer import BorrowedBrowserObserver
+from .browser_observer_worker import BorrowedBrowserObserverWorker
 from .gateway import AcademicGateway, PlaywrightAcademicGateway
 from .notice_discovery import DEFAULT_NOTICE_INDEX_URL
 from .persistence import WorkspaceDatabase
@@ -44,7 +45,9 @@ def create_workbench_app(
             root.parent / "course-progress", root, cdp_url=cdp_url,
         )
     service = ObservationService(database, gateway_factory)
-    observer = browser_observer or BorrowedBrowserObserver(session_id="workbench")
+    observer = BorrowedBrowserObserverWorker(
+        browser_observer or BorrowedBrowserObserver(session_id="workbench")
+    )
     core = WorkbenchService(
         database,
         progress_report_path=resolved_login_root / "progress-report.json",
@@ -74,7 +77,7 @@ def create_workbench_app(
     app.extensions["browser_observer"] = observer
     # Process reload/shutdown detaches the client connection; it never closes
     # the borrowed browser.  Registering once per app is safe and idempotent.
-    atexit.register(observer.disconnect)
+    atexit.register(observer.shutdown)
 
     @app.before_request
     def protect_local_service():
@@ -174,6 +177,10 @@ def create_workbench_app(
     @app.post("/api/browser-observer/stop")
     def stop_browser_observer():
         return jsonify(observer.stop_observation().to_dict())
+
+    @app.post("/api/browser-observer/cancel")
+    def cancel_browser_observer():
+        return jsonify(observer.cancel_observation().to_dict())
 
     @app.post("/api/browser-observer/candidates")
     def browser_observer_candidates():

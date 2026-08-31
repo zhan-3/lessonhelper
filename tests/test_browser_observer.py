@@ -7,9 +7,11 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
 from playwright.sync_api import sync_playwright
 
 from course_selection.browser_observer import BorrowedBrowserObserver
+from course_selection.browser_observer_worker import BorrowedBrowserObserverWorker
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
@@ -41,6 +43,12 @@ def free_port():
         return sock.getsockname()[1]
 
 
+def test_rejects_non_loopback_cdp_endpoints():
+    observer = BorrowedBrowserObserver(session_id="endpoint-policy")
+    with pytest.raises(ValueError, match="loopback"):
+        observer.connect("http://internal.example:9222")
+
+
 def test_borrowed_observer_inspects_and_detaches_without_closing_browser():
     cdp_port, site_port = free_port(), free_port()
     server = ThreadingHTTPServer(("127.0.0.1", site_port), FixtureHandler)
@@ -57,7 +65,7 @@ def test_borrowed_observer_inspects_and_detaches_without_closing_browser():
         f"--remote-debugging-port={cdp_port}", "--user-data-dir=" + str(profile),
         f"http://127.0.0.1:{site_port}/fixture",
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    observer = BorrowedBrowserObserver(session_id="test")
+    observer = BorrowedBrowserObserverWorker(BorrowedBrowserObserver(session_id="test"))
     try:
         endpoint = f"http://127.0.0.1:{cdp_port}/json/version"
         for _ in range(50):
@@ -67,7 +75,9 @@ def test_borrowed_observer_inspects_and_detaches_without_closing_browser():
             except OSError:
                 time.sleep(0.1)
         assert observer.connect(endpoint).status == "connected"
+        assert observer.connect(endpoint).status == "already_connected"
         assert observer.start_observation().status == "observing"
+        assert observer.start_observation().status == "already_observing"
         subprocess.run([
             __import__("sys").executable, "-c",
             ("from playwright.sync_api import sync_playwright; import sys; "
@@ -83,17 +93,22 @@ def test_borrowed_observer_inspects_and_detaches_without_closing_browser():
         assert any(event["redirected_from"] for event in requests)
         assert all(event["target_identity"] and event["frame_identity"] for event in requests)
         assert observer.stop_observation().status == "stopped"
+        assert observer.stop_observation().status == "stopped"
+        assert observer.start_observation().status == "observing"
+        assert observer.cancel_observation().status == "cancelled"
+        assert process.poll() is None
         first = observer.inspect().to_dict()
         assert first["data"]["connection"] == "borrowed"
         assert first["data"]["target_count"] >= 1
         assert "fixture" not in json.dumps(first)
         assert observer.inspect().to_dict() == first
-        assert observer.disconnect().status == "disconnected"
+        assert observer.shutdown().status == "disconnected"
+        assert observer.shutdown().status == "disconnected"
         assert process.poll() is None
         targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{cdp_port}/json/list").read())
         assert targets
     finally:
-        observer.disconnect()
+        observer.shutdown()
         process.terminate()
         process.wait(timeout=5)
         server.shutdown()

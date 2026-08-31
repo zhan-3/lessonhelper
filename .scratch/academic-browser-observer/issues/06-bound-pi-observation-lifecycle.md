@@ -4,13 +4,13 @@
 
 **Blocked by:** 03/Keep sensitive browser evidence out of the model and disk
 
-**Status:** ready-for-agent
+**Status:** automated-test verified (core lifecycle and Pi load; reload/budget matrix pending)
 
-- [ ] One Pi session cannot create multiple competing CDP connections or active traces through repeated tool calls.
-- [ ] Pi cancellation stops local observation work and returns a typed outcome without closing the borrowed browser.
-- [ ] Reload and shutdown finish or invalidate the active Trace, remove listeners, and detach from CDP idempotently.
-- [ ] Reload does not restore a stale live connection or duplicate listeners; later use requires a valid explicit connection state.
+- [x] One Pi session cannot create multiple competing CDP connections or active traces through repeated tool calls.
+- [x] Pi cancellation stops local observation work and returns a typed outcome without closing the borrowed browser.
+- [x] Reload and shutdown finish or invalidate the active Trace, remove listeners, and detach from CDP idempotently.
+- [x] Reload does not restore a stale live connection or duplicate listeners; later use requires a valid explicit connection state.
 - [ ] Runtime, target-count, candidate-count, output-byte, output-line, and recovery budgets end with inspectable typed outcomes.
-- [ ] Pi session persistence contains only sanitized Trace identity, timestamps, completeness, counts, warnings, and compact checkpoints.
-- [ ] Tool results use one shared structured status envelope with safe next actions for blocked, partial, invalid, cancelled, and failed states.
-- [ ] Lifecycle tests verify browser and tab survival after cancellation, reload, shutdown, budget exhaustion, and duplicate calls.
+- [x] Pi session persistence contains only sanitized Trace identity, timestamps, completeness, counts, warnings, and compact checkpoints.
+- [x] Tool results use one shared structured status envelope with safe next actions for blocked, partial, invalid, cancelled, and failed states.
+- [ ] Lifecycle tests verify browser and tab survival after cancellation, reload, shutdown, budget exhaustion, and duplicate calls. (Cancellation, shutdown, duplicate calls, and single-thread ownership are covered; live Pi reload and every budget class remain pending.)
