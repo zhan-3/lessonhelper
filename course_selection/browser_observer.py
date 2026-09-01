@@ -300,6 +300,19 @@ class BorrowedBrowserObserver:
         initiator = "worker" if resource_type in {"script", "worker"} and frame is None else "frame" if frame is not None and getattr(frame, "parent_frame", None) is not None else "page"
         return {"frame_identity": frame_identity, "target_identity": target_identity, "initiator_class": initiator}
 
+    def _redirect_context(self, request: Any) -> dict[str, Any]:
+        chain = []
+        current = getattr(request, "redirected_from", None)
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen and len(chain) < 10:
+            seen.add(id(current))
+            chain.append(self._safe_url_shape(current.url))
+            current = getattr(current, "redirected_from", None)
+        chain.reverse()
+        if chain:
+            chain.append(self._safe_url_shape(request.url))
+        return {"redirect_hop_count": len(chain) - 1 if chain else 0, "redirect_path_shapes": chain}
+
     def _on_request(self, request: Any) -> None:
         redirected = getattr(request, "redirected_from", None)
         try:
@@ -307,7 +320,7 @@ class BorrowedBrowserObserver:
             content_type = getattr(request, "headers", {}).get("content-type", "")
             safe_body = self._trace.redactor.redact_body(post_data, content_type) if self._trace is not None and post_data is not None else None
             safe_headers = self._trace.redactor.redact_headers(getattr(request, "headers", {})) if self._trace is not None else {}
-            self._record({"kind": "request", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, "redirected_from": self._safe_url_shape(redirected.url) if redirected else None, "request_body": safe_body, "headers": safe_headers, "loader_identity": self._loader_identity(request), **self._request_context(request)})
+            self._record({"kind": "request", "method": request.method, "url_shape": self._safe_url_shape(request.url), "resource_type": request.resource_type, "redirected_from": self._safe_url_shape(redirected.url) if redirected else None, **self._redirect_context(request), "request_body": safe_body, "headers": safe_headers, "loader_identity": self._loader_identity(request), **self._request_context(request)})
         except (RuntimeError, TypeError, ValueError) as error:
             self._redaction_failed(error)
 

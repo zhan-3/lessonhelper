@@ -3,7 +3,7 @@ from course_selection.request_contracts import generate_contract_candidates
 
 def test_candidates_rank_redirected_fetch_and_aggregate_repetition():
     events = [
-        {"kind": "request", "method": "GET", "url_shape": "https://<host:a>/<path:1>", "target_identity": "target", "resource_type": "fetch", "redirected_from": "https://<host:a>/<path:1>", "headers": {"X-Trace": "safe"}},
+        {"kind": "request", "method": "GET", "url_shape": "https://<host:a>/<path:1>", "target_identity": "target", "resource_type": "fetch", "redirected_from": "https://<host:a>/<path:1>", "redirect_hop_count": 2, "redirect_path_shapes": ["https://<host:a>/<path:1>", "https://<host:b>/<path:1>", "https://<host:a>/<path:1>"], "headers": {"X-Trace": "safe"}},
         {"kind": "request", "method": "GET", "url_shape": "https://<host:a>/<path:1>", "target_identity": "target", "resource_type": "fetch", "request_body": {"page": {"redacted": True}}},
         {"kind": "response", "method": "GET", "url_shape": "https://<host:a>/<path:1>", "target_identity": "target", "resource_type": "fetch", "status": 200},
     ]
@@ -13,6 +13,8 @@ def test_candidates_rank_redirected_fetch_and_aggregate_repetition():
     assert candidate["count"] == 2
     assert candidate["repetition"] == "repeated"
     assert candidate["score"] >= 10
+    assert candidate["redirect_hop_count"] == 2
+    assert len(candidate["redirect_path_shapes"]) == 3
     assert "diagnostic candidate only" in candidate["warnings"][0]
 
 
@@ -37,6 +39,7 @@ def test_causally_linked_request_outranks_similar_polling_decoy():
     assert candidates[0]["pagination_indicators"] == ["page"]
     assert candidates[0]["evidence_identity"]
     assert candidates[0]["identity_indicators"]["loaders"] == ["loader-nav"]
+    assert candidates[0]["provenance_category"] == "target_frame_correlated"
 
 
 def test_post_reads_remain_diagnostic_and_unknown_response_is_partial():

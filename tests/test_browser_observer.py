@@ -98,6 +98,8 @@ def test_borrowed_observer_inspects_and_detaches_without_closing_browser():
         redirected = [event for event in requests if event["redirected_from"]]
         assert len(redirected) >= 2
         assert len({event["loader_identity"] for event in redirected}) == 1
+        assert max(event["redirect_hop_count"] for event in redirected) >= 2
+        assert all(len(event["redirect_path_shapes"]) == event["redirect_hop_count"] + 1 for event in redirected)
         assert all(event["target_identity"] and event["frame_identity"] for event in requests)
         assert all("elapsed_ms" in event for event in requests)
         assert observer.stop_observation().status == "stopped"

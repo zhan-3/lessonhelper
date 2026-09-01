@@ -44,12 +44,15 @@ def generate_contract_candidates(delta: dict[str, Any], *, limit: int = 20) -> l
         frame_ids = sorted({str(item.get("frame_identity", "unknown")) for item in requests})
         loader_ids = sorted({str(item.get("loader_identity", "unknown")) for item in requests})
         elapsed = [float(item.get("elapsed_ms", 0)) for item in requests]
+        redirect_event = max(requests, key=lambda item: int(item.get("redirect_hop_count", 0)))
+        redirect_hop_count = int(redirect_event.get("redirect_hop_count", 0))
+        redirect_path_shapes = list(redirect_event.get("redirect_path_shapes", []))[:11]
         score = 0
         reasons = []
         if elapsed:
             score += 1
             reasons.append("request occurred inside the bounded observation window")
-        if any(item.get("redirected_from") for item in requests):
+        if redirect_hop_count or any(item.get("redirected_from") for item in requests):
             score += 5
             reasons.append("redirect chain links this request to the observed navigation")
         if any(item.get("request_body") is not None for item in requests):
@@ -74,6 +77,7 @@ def generate_contract_candidates(delta: dict[str, Any], *, limit: int = 20) -> l
         response_header_names = sorted({name for item in matching_responses for name in (item.get("headers") or {})})
         schema_material = [sorted(statuses), response_header_names, sorted(resources)]
         evidence_identity = hashlib.sha256(str([delta.get("trace_id", "trace"), key]).encode()).hexdigest()[:16]
+        provenance_category = "target_frame_correlated" if target != "unknown" and frame_ids != ["unknown"] else "uncorrelated"
         candidates.append({
             "method": method, "path_shape": path_shape, "target_identity": target,
             "count": len(requests), "repetition": "repeated" if len(requests) > 1 else "single",
@@ -84,6 +88,9 @@ def generate_contract_candidates(delta: dict[str, Any], *, limit: int = 20) -> l
             "response_schema_fingerprint": hashlib.sha256(str(schema_material).encode()).hexdigest()[:16] if matching_responses else "",
             "identity_indicators": {"target": target, "frames": frame_ids, "loaders": loader_ids, "initiators": dict(initiators)},
             "pagination_indicators": pagination,
+            "provenance_category": provenance_category,
+            "redirect_hop_count": redirect_hop_count,
+            "redirect_path_shapes": redirect_path_shapes,
             "provenance": {"first_elapsed_ms": min(elapsed) if elapsed else None, "last_elapsed_ms": max(elapsed) if elapsed else None},
             "score": score, "reasons": reasons,
             "completeness": "complete" if matching_responses else "partial",
