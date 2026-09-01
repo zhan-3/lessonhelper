@@ -166,6 +166,82 @@ export default function academicBrowserObserver(pi: ExtensionAPI) {
     }
   }
 
+  async function begin(endpoint: string, signal?: AbortSignal) {
+    try {
+      const connected = await call("/api/browser-observer/connect", "POST", { endpoint }, signal);
+      if (!new Set(["connected", "already_connected"]).has(connected.status)) return result(connected);
+      const inventory = await call("/api/browser-observer/targets", "GET", undefined, signal);
+      if (inventory.status !== "connected") {
+        await call("/api/browser-observer/disconnect", "POST");
+        return result({ ...inventory, status: "failed", next_actions: ["verify the explicit endpoint and retry academic_browser_begin"] });
+      }
+      const started = await call("/api/browser-observer/start", "POST", undefined, signal);
+      if (!new Set(["observing", "already_observing"]).has(started.status)) {
+        await call("/api/browser-observer/disconnect", "POST");
+        return result(started);
+      }
+      const trace = started.data?.trace_id;
+      if (typeof trace === "string") activeTrace = trace;
+      return result({
+        status: started.status,
+        summary: "borrowed browser connected, inventoried, and observation started",
+        warnings: [...(connected.warnings ?? []), ...(inventory.warnings ?? []), ...(started.warnings ?? [])],
+        next_actions: ["let the authorized external actor perform exactly one bounded read-only operation", "then call academic_browser_finish"],
+        data: { ...started.data, connection: "borrowed", detach_only: true, target_count: inventory.data?.target_count, targets: inventory.data?.targets },
+      });
+    } catch (error) {
+      if (signal?.aborted) {
+        try { await call("/api/browser-observer/cancel", "POST"); } catch { /* best effort */ }
+        try { await call("/api/browser-observer/disconnect", "POST"); } catch { /* best effort */ }
+        activeTrace = "";
+        return result({ status: "cancelled", summary: "combined observation start cancelled and detached" });
+      }
+      return result({ status: "failed", summary: error instanceof Error ? error.message : "combined observation start failed", next_actions: ["verify the loopback workbench and explicit CDP endpoint"] });
+    }
+  }
+
+  async function finish(signal?: AbortSignal) {
+    let stopped: Envelope;
+    try {
+      stopped = await call("/api/browser-observer/stop", "POST", undefined, signal);
+    } catch (error) {
+      stopped = { status: signal?.aborted ? "partial" : "failed", summary: error instanceof Error ? error.message : "observation stop failed", warnings: ["stop could not be confirmed before detach"] };
+    }
+    let detached: Envelope;
+    try {
+      detached = await call("/api/browser-observer/disconnect", "POST");
+    } catch (error) {
+      detached = { status: "failed", summary: error instanceof Error ? error.message : "detach failed" };
+    }
+    activeTrace = "";
+    const envelope: Envelope = {
+      ...stopped,
+      status: detached.status === "disconnected" ? stopped.status : "partial",
+      summary: `${stopped.summary ?? "observation stopped"}; detach=${detached.status}`,
+      warnings: [...(stopped.warnings ?? []), ...(detached.warnings ?? []), ...(detached.status === "disconnected" ? [] : ["borrowed detach could not be confirmed"])],
+      next_actions: detached.status === "disconnected" ? stopped.next_actions : ["confirm the borrowed browser is still alive and retry disconnect"],
+      data: { ...(stopped.data ?? {}), connection: detached.status },
+    };
+    const safe = compact(envelope);
+    pi.appendEntry("academic-browser-observer", { trace_id: safe.data?.trace_id, status: safe.status, event_count: safe.data?.event_count, dropped_events: safe.data?.dropped_events, warnings: safe.warnings, timestamp: new Date().toISOString() });
+    return result(envelope);
+  }
+
+  pi.registerTool({
+    name: "academic_browser_begin", label: "Begin Borrowed Observation",
+    description: "In one bounded call, connect to one explicit loopback CDP endpoint, inspect sanitized targets, and start read-only observation. Never scans, launches, navigates, or closes a browser.",
+    executionMode: "sequential",
+    parameters: Type.Object({ endpoint: Type.String() }),
+    execute: (_id, params, signal) => begin(params.endpoint, signal),
+  });
+  pi.registerTool({
+    name: "academic_browser_finish", label: "Finish Borrowed Observation",
+    description: "Stop observation, return compact sanitized candidates, and detach without closing the borrowed browser.",
+    executionMode: "sequential",
+    parameters: Type.Object({}),
+    execute: (_id, _params, signal) => finish(signal),
+  });
+
   pi.registerTool({
     name: "academic_browser_connect", label: "Connect Borrowed Browser",
     description: "Connect to one explicitly supplied loopback CDP endpoint without scanning, launching, or closing a browser.",

@@ -27,15 +27,14 @@ Observer：
 1. 用户自行启动一个可见、启用 CDP 的浏览器，并确认它属于当前用户和 profile。
 2. 启动本地工作台，例如 `start-workbench.cmd`。
 3. 在 Pi 中确认项目级 Extension `.pi/extensions/academic-browser-observer.ts` 已加载。
-4. 按顺序调用：
-   - `academic_browser_connect`，传入明确 endpoint，例如 `http://127.0.0.1:9222/json/version`；
-   - `academic_browser_inspect`；
-   - `academic_browser_start`；
+4. 推荐使用两步组合接口，减少模型工具调用和 Token：
+   - `academic_browser_begin`，传入明确 endpoint，例如 `http://127.0.0.1:9222/json/version`；
    - 用户或另一浏览器工具执行一次只读操作；
-   - `academic_browser_checkpoint` 或 `academic_browser_stop`；
-   - `academic_browser_disconnect`。
+   - `academic_browser_finish`。
 
-`checkpoint` 和 `stop` 返回紧凑的诊断候选，但候选不是已验证的生产读取契约，不能直接发布教务快照或启用写操作。
+需要中途检查时，也可使用完整生命周期：`connect` → `inspect` → `start` → `checkpoint`/`stop` → `disconnect`。组合接口只合并这些安全步骤，不增加 click、navigate、JavaScript 或浏览器关闭能力。
+
+`checkpoint`、`stop` 和 `finish` 返回紧凑的诊断候选，但候选不是已验证的生产读取契约，不能直接发布教务快照或启用写操作。
 
 ## 本地 eval
 
