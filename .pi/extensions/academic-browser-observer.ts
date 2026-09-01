@@ -171,7 +171,7 @@ export default function academicBrowserObserver(pi: ExtensionAPI) {
       const connected = await call("/api/browser-observer/connect", "POST", { endpoint }, signal);
       if (!new Set(["connected", "already_connected"]).has(connected.status)) return result(connected);
       const inventory = await call("/api/browser-observer/targets", "GET", undefined, signal);
-      if (inventory.status !== "connected") {
+      if (!new Set(["complete", "partial"]).has(inventory.status)) {
         await call("/api/browser-observer/disconnect", "POST");
         return result({ ...inventory, status: "failed", next_actions: ["verify the explicit endpoint and retry academic_browser_begin"] });
       }
