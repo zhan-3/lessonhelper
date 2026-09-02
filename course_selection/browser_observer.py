@@ -450,6 +450,7 @@ class BorrowedBrowserObserver:
                 "target_identity": context_identity, "parent_identity": None,
                 "relationship": "browser_context", "navigation_state": "active",
                 "capabilities": ["pages", "service_workers", "network"],
+                "semantic_signature": {"kind": "context", "relationship": "browser_context", "depth": 0, "origin_class": "browser_internal"},
             }):
                 break
             for page in context.pages:
@@ -514,6 +515,24 @@ class BorrowedBrowserObserver:
         return {"connection": "borrowed", "detach_only": True}
 
     @staticmethod
+    def _origin_class(url: str, parent_url: str | None = None) -> str:
+        parsed = urlsplit(str(url or ""))
+        if str(url or "") in {"", "about:blank"}:
+            return "unresolved"
+        if parsed.scheme in {"data", "blob", "about"} or not parsed.hostname:
+            return "opaque_origin"
+        host = parsed.hostname.lower()
+        if host == "localhost" or host == "::1" or host.startswith("127."):
+            return "loopback"
+        if parent_url:
+            parent = urlsplit(str(parent_url))
+            if parent.hostname:
+                current_origin = (parsed.scheme.lower(), host, parsed.port)
+                parent_origin = (parent.scheme.lower(), parent.hostname.lower(), parent.port)
+                return "same_origin" if current_origin == parent_origin else "cross_origin"
+        return "web"
+
+    @staticmethod
     def _safe_url_shape(url: str) -> str:
         parsed = urlsplit(str(url or ""))
         if not parsed.scheme or not parsed.hostname:
@@ -549,14 +568,16 @@ class BorrowedBrowserObserver:
         else:
             parent_identity = None
         navigation_state = "unresolved_blank" if str(page.url) in {"", "about:blank"} else "committed"
+        relationship = "popup" if opener_page is not None else "top_level"
         return {
             "kind": "page", "url_shape": url_shape,
             "target_identity": self._target_identity_for(page, "page"),
             "parent_identity": parent_identity,
-            "relationship": "popup" if opener_page is not None else "top_level",
+            "relationship": relationship,
             "navigation_state": navigation_state,
             "capabilities": ["document", "frames", "network"],
             "frame_count": max(0, len(page.frames) - 1),
+            "semantic_signature": {"kind": "page", "relationship": relationship, "depth": 0, "origin_class": self._origin_class(page.url)},
         }
 
     def _frame_target(self, frame: Any) -> dict[str, Any]:
@@ -574,13 +595,16 @@ class BorrowedBrowserObserver:
             parent_identity = self._target_identity_for(page, "page") if page is not None else self._target_identity_for(parent_frame, "frame")
         else:
             parent_identity = self._target_identity_for(parent_frame, "frame")
+        relationship = "child_frame" if parent_identity else "main_frame"
+        parent_url = str(getattr(parent_frame, "url", "")) if parent_frame is not None else None
         return {
             "kind": "frame", "url_shape": url_shape, "frame_depth": depth,
             "target_identity": self._target_identity_for(frame, "frame"),
             "parent_identity": parent_identity,
-            "relationship": "child_frame" if parent_identity else "main_frame",
+            "relationship": relationship,
             "navigation_state": "unresolved_blank" if str(frame.url) in {"", "about:blank"} else "committed",
             "capabilities": ["document", "network"],
+            "semantic_signature": {"kind": "frame", "relationship": relationship, "depth": depth, "origin_class": self._origin_class(frame.url, parent_url)},
         }
 
     def _worker_target(self, worker: Any, kind: str, parent_identity: str | None = None) -> dict[str, Any]:
@@ -590,4 +614,5 @@ class BorrowedBrowserObserver:
             "target_identity": self._target_identity_for(worker, kind),
             "parent_identity": parent_identity, "relationship": "execution_context",
             "navigation_state": "committed", "capabilities": ["network", "runtime"],
+            "semantic_signature": {"kind": kind, "relationship": "execution_context", "depth": 1 if parent_identity else 0, "origin_class": self._origin_class(worker.url)},
         }

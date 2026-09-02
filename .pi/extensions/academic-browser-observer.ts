@@ -34,6 +34,7 @@ function compact(value: Envelope): Envelope {
       provenance_category: item.provenance_category,
       redirect_hop_count: item.redirect_hop_count,
       redirect_path_shapes: Array.isArray(item.redirect_path_shapes) ? item.redirect_path_shapes.slice(0, 11) : [],
+      semantic_signature: item.semantic_signature,
       reasons: Array.isArray(item.reasons) ? item.reasons.slice(0, 3) : [],
     };
   }) : undefined;

@@ -78,6 +78,14 @@ def generate_contract_candidates(delta: dict[str, Any], *, limit: int = 20) -> l
         schema_material = [sorted(statuses), response_header_names, sorted(resources)]
         evidence_identity = hashlib.sha256(str([delta.get("trace_id", "trace"), key]).encode()).hexdigest()[:16]
         provenance_category = "target_frame_correlated" if target != "unknown" and frame_ids != ["unknown"] else "uncorrelated"
+        target_frame_relation = "correlated" if provenance_category == "target_frame_correlated" else "uncorrelated"
+        primary_resource_type = min(resources, key=lambda name: (-resources[name], name)) if resources else "unknown"
+        completeness = "complete" if matching_responses else "partial"
+        semantic_signature = {
+            "rank_inputs": {"completeness": completeness, "provenance_category": provenance_category},
+            "request": {"method": method, "path_shape": path_shape, "resource_type": primary_resource_type, "target_frame_relation": target_frame_relation},
+            "redirect": {"hop_count": redirect_hop_count, "method": method, "path_shape_sequence": redirect_path_shapes},
+        }
         candidates.append({
             "method": method, "path_shape": path_shape, "target_identity": target,
             "count": len(requests), "repetition": "repeated" if len(requests) > 1 else "single",
@@ -89,11 +97,14 @@ def generate_contract_candidates(delta: dict[str, Any], *, limit: int = 20) -> l
             "identity_indicators": {"target": target, "frames": frame_ids, "loaders": loader_ids, "initiators": dict(initiators)},
             "pagination_indicators": pagination,
             "provenance_category": provenance_category,
+            "primary_resource_type": primary_resource_type,
+            "target_frame_relation": target_frame_relation,
+            "semantic_signature": semantic_signature,
             "redirect_hop_count": redirect_hop_count,
             "redirect_path_shapes": redirect_path_shapes,
             "provenance": {"first_elapsed_ms": min(elapsed) if elapsed else None, "last_elapsed_ms": max(elapsed) if elapsed else None},
             "score": score, "reasons": reasons,
-            "completeness": "complete" if matching_responses else "partial",
+            "completeness": completeness,
             "warnings": ["diagnostic candidate only; not a verified academic read contract"],
         })
     return sorted(candidates, key=lambda item: (-item["score"], item["path_shape"], item["method"]))[: max(1, min(limit, 20))]

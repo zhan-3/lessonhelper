@@ -86,14 +86,19 @@ def test_inventory_preserves_frame_and_popup_relationships_without_order_depende
     context_target = next(item for item in first if item["kind"] == "context")
     top_level = next(item for item in first if item["kind"] == "page" and item["relationship"] == "top_level")
     assert top_level["parent_identity"] == context_target["target_identity"]
+    assert context_target["semantic_signature"] == {"kind": "context", "relationship": "browser_context", "depth": 0, "origin_class": "browser_internal"}
+    assert top_level["semantic_signature"] == {"kind": "page", "relationship": "top_level", "depth": 0, "origin_class": "web"}
     popup_target = next(item for item in first if item["kind"] == "page" and item["relationship"] == "popup")
     assert popup_target["navigation_state"] == "unresolved_blank"
+    assert popup_target["semantic_signature"]["origin_class"] == "unresolved"
     assert popup_target["parent_identity"]
     frame_targets = [item for item in first if item["kind"] == "frame"]
     assert len(frame_targets) == 3
     assert len({item["target_identity"] for item in frame_targets}) == 3
     assert all(item["parent_identity"] for item in frame_targets)
     assert all(item["capabilities"] == ["document", "network"] for item in frame_targets)
+    assert {item["semantic_signature"]["depth"] for item in frame_targets} == {1, 2}
+    assert all(item["semantic_signature"]["origin_class"] == "cross_origin" for item in frame_targets)
     worker_targets = [item for item in first if item["kind"] in {"worker", "service_worker"}]
     assert len(worker_targets) == 2
     assert all(item["parent_identity"] for item in worker_targets)

@@ -40,6 +40,11 @@ def test_causally_linked_request_outranks_similar_polling_decoy():
     assert candidates[0]["evidence_identity"]
     assert candidates[0]["identity_indicators"]["loaders"] == ["loader-nav"]
     assert candidates[0]["provenance_category"] == "target_frame_correlated"
+    assert candidates[0]["semantic_signature"] == {
+        "rank_inputs": {"completeness": "complete", "provenance_category": "target_frame_correlated"},
+        "request": {"method": "POST", "path_shape": "https://<host:a>/<path:2>", "resource_type": "xhr", "target_frame_relation": "correlated"},
+        "redirect": {"hop_count": 0, "method": "POST", "path_shape_sequence": []},
+    }
 
 
 def test_post_reads_remain_diagnostic_and_unknown_response_is_partial():
