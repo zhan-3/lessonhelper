@@ -6,7 +6,7 @@ Academic Browser Observer 是项目内孵化的只读诊断能力。它连接用
 
 - 核心连接、跨导航增量、脱敏、候选排序、复杂拓扑和 borrowed detach：**automated-test verified**。
 - Pi Extension 加载：**automated-test verified**。
-- Agent A/B 的 50% Token/人工干预价值门槛：**尚无有效结论**。一次本地 hidden eval 已因 fixture fidelity 仅为 3/14（21.43%）而作废；必须先达到 100% fixture fidelity 才能重跑并评价价值。
+- Agent A/B：最终 hidden fixtures 已独立验证 14/14；Observer 的安全、50.58% Token 降低、73.47% 时间降低和人工干预降低均得到支持，但 target recall 与 candidate accuracy 均为 0%，因此整体仍为 **`not_demonstrated`**。
 - 当前大学教务系统兼容性：**尚未 real-environment verified**。
 
 测试结果不能证明真实 CAS、WebVPN 或教务页面当前兼容。

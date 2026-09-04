@@ -4,22 +4,26 @@
 
 **Blocked by:** 04/Generate Request Contract Candidates from an Observation Delta; 05/Preserve observation across complex browser topology; 06/Bound the Pi observation lifecycle across reload and cancellation
 
-**Status:** blocked on hidden fixture fidelity (audit: 3/14 faithful, 21.43%); prior Agent A/B result invalidated
+**Status:** fidelity-valid hidden Agent A/B completed; safety and efficiency passed, semantic value not demonstrated
 
 - [x] Public scenarios cover wrong page, missing or nested frame, top-level-versus-frame confusion, blank popup, late capture, authentication redirect, false empty/complete result, duplicate ownership, and destructive detach.
-- [ ] Hidden variants alter frame depth, origin, names, timing, target order, request method, and field names without changing the failure class. (Manifests are independently curated, but only 3/14 executable fixtures currently match their declared semantics.)
+- [x] Hidden variants alter frame depth, origin, names, timing, target order, request method, and field names without changing the failure class. (An independent black-box audit verified 14/14 executable fixtures with two fresh runs per task.)
 - [x] Expected semantic outcomes were declared independently of plugin output; later scorer calibration normalized safe representation differences without changing the failure classes or required semantics.
 - [x] A repeatable Agent A/B harness measures model Token use, elapsed time, tool calls, developer interventions, target/request/redirect recall, candidate accuracy, completeness errors, sensitive leakage, and browser disruption.
-- [ ] Sensitive诱饵 leakage, borrowed-browser closure, and false-complete outcomes are zero across a fidelity-valid hidden suite. (The invalidated run observed zero safety events, but cannot satisfy the suite gate.)
+- [x] Sensitive诱饵 leakage, borrowed-browser closure, and scorer-classified false-complete outcomes are zero across the fidelity-valid hidden suite.
 - [ ] Expected target, request, and redirect recall is complete for accepted observations. (The hidden run found treatment recall of 0% targets, 57.14% requests, and 85.71% redirects despite all treatment rows reporting accepted.)
-- [ ] Median manual interventions and model Token use improve by at least 50 percent relative to the baseline before demonstrated value is claimed. (Token use improved 39.61%; interventions remained 0 versus 0.)
+- [x] Median manual interventions and model Token use improve by at least 50 percent relative to the baseline. (Tokens fell from 11,157 to 5,513.5, a 50.58% reduction; interventions fell from 1 to 0.)
 - [x] Results remain local and contain no real browser history, raw Session chat, university response, credential, or personal data.
 - [x] A failing value gate recommends using existing Chrome DevTools or Playwright tooling instead of presenting the observer as a distinct product.
 
-## Invalidated A/B attempt
+## Fidelity-valid hidden A/B result
 
-The local v7 run completed 14 baseline/treatment pairs, but an independent black-box fidelity audit subsequently found that only 3 of 14 executable hidden fixtures matched their predeclared semantics. Missing or contradictory behavior included requests, workers, redirects, popup behavior, pagination, timing, candidate signatures, and target depth.
+After invalidating the earlier calibration run, the synthetic fixture runner was corrected and independently audited through its public start/trigger/status/stop interface. The final audit passed 14/14 tasks with two fresh runs per task, actual second-trigger idempotency checks, browser/tab survival, and cleanup verification. The final v9 A/B then ran all 14 baseline/treatment pairs from scratch.
 
-Therefore the v7/v8 recall, candidate-accuracy, and efficiency numbers are calibration artifacts, not product evidence. The local reports remain Git-ignored under `.private/observer-eval-results/`, and the bounded audit is stored at `.private/observer-hidden-evals/fidelity-audit.json`.
+- Safety: 14/14 treatment rows passed with zero leakage, browser disruption, and scorer-classified false-complete outcomes.
+- Efficiency: median Tokens fell from 11,157 to 5,513.5 (50.58%); elapsed time fell from 92.877 to 24.6335 seconds (73.47%); median interventions fell from 1 to 0; tool calls rose from 1 to 2.
+- Treatment completion: 14/14 Agent rows reported accepted, versus 1/14 baseline.
+- Treatment semantics: target recall 0%, request recall 92.86%, redirect recall 100%, and candidate accuracy 0%.
+- Decision: `not_demonstrated`. Safety and efficiency are now supported, but target semantics and candidate ranking fail the required correctness gate. Continue using existing Chrome DevTools or Playwright until those two defects are corrected and the hidden suite is rerun.
 
-The next gate is 100% fixture fidelity before another Agent A/B run. Until then, value remains unproven and existing Chrome DevTools or Playwright remains the recommended workflow.
+All reports remain local and Git-ignored under `.private/observer-eval-results/`; the independent fixture audit is `.private/observer-hidden-evals/fidelity-review-v4.json`.
