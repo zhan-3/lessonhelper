@@ -23,11 +23,23 @@ class WorkbenchServiceTests(unittest.TestCase):
                 }],
             }, ensure_ascii=False), encoding="utf-8")
             service = WorkbenchService(database, progress_report_path=report_path)
+            service.select_requirement_baseline("guide-2026", "guide-2026")
             progress = service.state(session_state="disconnected")["graduation_progress"]
             self.assertEqual("ready", progress["status"])
             self.assertEqual(5, progress["report"]["progress"][0]["completed_credits"])
             report_path.unlink()
             self.assertEqual("missing", service.graduation_progress()["status"])
+            database.close()
+
+    def test_requirement_baseline_confirmation_is_enforced_by_the_application_service(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = WorkspaceDatabase.open(Path(directory))
+            service = WorkbenchService(database)
+            with self.assertRaisesRegex(ValueError, "明确确认"):
+                service.select_requirement_baseline(
+                    "basic-graduation-reference-v1", ""
+                )
+            self.assertIsNone(database.requirement_baseline_selection())
             database.close()
 
     def test_progress_snapshot_must_match_current_profile_and_baseline(self):

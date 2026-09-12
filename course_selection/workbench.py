@@ -121,6 +121,24 @@ def create_workbench_app(
         }
         return jsonify(payload)
 
+    @app.post("/api/requirement-baseline-selection")
+    def select_requirement_baseline():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        version = str(body.get("version", ""))
+        if not version or body.get("confirmation") != version:
+            return jsonify({"error": "必须明确确认要求基线版本"}), 409
+        try:
+            selected = service.run_when_idle(
+                lambda: core.select_requirement_baseline(
+                    version, str(body.get("confirmation", ""))
+                )
+            )
+        except (RuntimeError, ValueError) as error:
+            return jsonify({"error": str(error)}), 409
+        return jsonify({"selected_requirement_baseline": selected})
+
     @app.post("/api/login-configuration")
     def configure_login():
         body = request.get_json(silent=True)

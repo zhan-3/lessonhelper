@@ -39,6 +39,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/requirement-baseline-selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RequirementBaselineSelectionRequest"];
+                };
+            };
+            responses: {
+                /** @description Requirement baseline selected locally */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Explicit confirmation or version validation failed */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/login-configuration": {
         parameters: {
             query?: never;
@@ -627,6 +671,38 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        RequirementBaselineSelectionRequest: {
+            version: string;
+            /** @description Must exactly equal version */
+            confirmation: string;
+        };
+        RequirementBaselineRequirement: {
+            key: string;
+            label: string;
+            minimum: number;
+            /** @enum {string} */
+            unit: "credits" | "courses";
+            source?: string;
+            parent?: string;
+            constraint?: string;
+            contribution_keys?: string[];
+        };
+        RequirementBaseline: {
+            version: string;
+            title: string;
+            authority: string;
+            requires_explicit_selection: boolean;
+            source_summary: string;
+            applicability: string;
+            coverage: string;
+            disclaimer: string;
+            selected_at?: string;
+            manual_supplements?: string[];
+            requirements: components["schemas"]["RequirementBaselineRequirement"][];
+            category_mapping: {
+                [key: string]: string;
+            };
+        };
         LoginConfigurationRequest: {
             username: string;
             /** Format: password */
@@ -712,12 +788,16 @@ export interface components {
         };
         GraduationProgress: {
             /** @enum {string} */
-            status: "ready" | "incomplete" | "missing" | "invalid" | "not_applicable";
+            status: "ready" | "incomplete" | "missing" | "invalid" | "not_applicable" | "historical";
             report: components["schemas"]["GraduationProgressReport"];
+            historical_report?: components["schemas"]["GraduationProgressReport"];
+            reason?: string;
             snapshot?: components["schemas"]["Snapshot"];
         };
         WorkbenchState: {
             login_configuration: components["schemas"]["LoginConfiguration"];
+            requirement_baselines: components["schemas"]["RequirementBaseline"][];
+            selected_requirement_baseline: components["schemas"]["RequirementBaseline"] | null;
             profile: {
                 [key: string]: unknown;
             } | null;

@@ -291,6 +291,29 @@ body.drawer-open { overflow: hidden; }
 .drawer-history-item span { color: #9ba8a9; font-size: 11px; line-height: 1.5; }
 .drawer-history-item button { justify-self: start; min-height: 32px; margin: 4px 0 0; padding: 5px 11px; font-size: 12px; }
 .drawer-history > button { min-height: 36px; margin: 4px 0 0; padding: 7px 12px; font-size: 12px; }
+.drawer-baselines { margin-top: 24px; border-top: 1px solid #354044; padding-top: 16px; display: grid; gap: 10px; }
+.drawer-section-heading { display: grid; gap: 4px; }
+.drawer-section-heading small { color: #8f9b9d; font-size: 11px; }
+.drawer-section-heading strong { color: #e6ecea; font-size: 15px; }
+.drawer-section-heading span { color: #9ba8a9; font-size: 12px; line-height: 1.5; }
+.baseline-option { padding: 12px; border: 1px solid #303a3d; background: #101416; }
+.baseline-option.selected { border-color: #3f8568; background: #111b17; }
+.baseline-option > header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.baseline-option > header div { display: grid; gap: 3px; }
+.baseline-option > header strong { color: #dfe7e4; font-size: 13px; }
+.baseline-option > header small, .baseline-option > p, .baseline-option details { color: #98a5a6; font-size: 11px; line-height: 1.55; }
+.baseline-option > header button { min-height: 32px; margin: 0; padding: 5px 10px; font-size: 11px; white-space: nowrap; }
+.baseline-option > p { margin: 8px 0; }
+.baseline-option .baseline-applicability { color: #c0cac7; }
+.baseline-option .baseline-disclaimer { display: block; color: #e3bb72; line-height: 1.5; }
+.baseline-option summary { cursor: pointer; color: #b8c4c1; }
+.baseline-option ul { margin: 8px 0; padding-left: 18px; }
+.baseline-option details > p { margin: 8px 0; }
+.baseline-warning, .baseline-history { color: #e3bb72; }
+.baseline-history { margin: 0; padding: 9px 10px; border-left: 2px solid #b88943; background: #1c1811; font-size: 12px; line-height: 1.5; }
+.baseline-history p { margin: 0; }
+.baseline-history details { margin-top: 8px; color: #c8d0ce; }
+.baseline-history ul { margin: 6px 0 0; padding-left: 18px; }
 
 @media (prefers-reduced-motion: reduce) {
   .data-drawer, .data-drawer-trigger { animation: none; transition: none; }

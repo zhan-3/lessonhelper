@@ -7,15 +7,19 @@
     "generate:api": "openapi-typescript ../course_selection/openapi.yaml -o src/api.generated.ts"
   },
   "dependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
+    "openapi-typescript": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "openapi-typescript": "latest",
-    "vitest": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest"
+    "typescript": "latest",
+    "vite": "latest",
+    "vitest": "latest"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "jsdom": "^29.1.1"
+  }
 }

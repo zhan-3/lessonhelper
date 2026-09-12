@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { CandidateNotice, Task, WorkbenchState } from "./api";
+import type { CandidateNotice, RequirementBaseline, Task, WorkbenchState } from "./api";
 import { ScheduleBoard } from "./ScheduleBoard";
 import { candidateExecutionStatus, expandScheduleItems, selectionCategoryLabel, selectionWindowDisplay, selectionWindowsForGrade, type SelectionWindow } from "./schedule";
 import "./style.css";
@@ -86,7 +86,7 @@ function ConfirmDialog({ pending, onConfirm, onCancel }: { pending: PendingConfi
   </div>;
 }
 
-function App() {
+export function App() {
   const [state, setState] = useState<WorkbenchState | null>(null);
   const [candidates, setCandidates] = useState<CandidateNotice[]>([]);
   const [task, setTask] = useState<Task | null>(null);
@@ -178,9 +178,38 @@ function App() {
     }
   };
 
+  const chooseRequirementBaseline = (baseline: RequirementBaseline) => {
+    if (!state || baseline.version === state.selected_requirement_baseline?.version) return;
+    const requirements = baseline.requirements
+      .map(item => `${item.label} ≥ ${item.minimum}${item.unit === "courses" ? " 门" : " 学分"}`)
+      .join("\n");
+    askConfirm(
+      `选择“${baseline.title}”？`,
+      `${baseline.coverage}\n\n适用性：${baseline.applicability}\n\n${requirements}\n\n${baseline.manual_supplements?.join("\n") ?? ""}\n\n${baseline.disclaimer}\n\n选择只保存在本机，不会访问学校。旧进度将保留为历史，需要重新同步。`,
+      "确认选择",
+      () => void chooseRequirementBaselineConfirmed(baseline.version),
+    );
+  };
+
+  const chooseRequirementBaselineConfirmed = async (version: string) => {
+    if (!state) return;
+    const response = await fetch("/api/requirement-baseline-selection", {
+      method: "POST",
+      headers: jsonHeaders(state.csrf_token),
+      body: JSON.stringify({ version, confirmation: version }),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      setMessage(result.error ?? "无法选择要求基线");
+      return;
+    }
+    setMessage("基础毕业要求基线已选择；请显式同步毕业进度以按新版本计算。");
+    await load();
+  };
+
   const clearLogin = () => {
     if (!state) return;
-    askConfirm("清除自动登录？", "清除自动登录并重置当前学生的画像、课程快照和规划；官方通知会保留。", undefined, () => void clearLoginConfirmed());
+    askConfirm("清除自动登录？", "清除自动登录并重置当前学生的画像、课程快照、要求基线和规划；官方通知会保留。", undefined, () => void clearLoginConfirmed());
   };
 
   const clearLoginConfirmed = async () => {
@@ -638,6 +667,20 @@ function App() {
       <button className="data-drawer-backdrop" onClick={() => setDataDrawerOpen(false)} aria-label="关闭数据操作面板" />
       <aside className="data-drawer" role="dialog" aria-modal="true" aria-labelledby="data-drawer-title">
         <header className="data-drawer-heading"><div><small>教务数据中心</small><h2 id="data-drawer-title">刷新与连接</h2><p>远程读取会保留最近一次完整快照，不会因失败清空现有数据。</p></div><button ref={drawerCloseRef} className="drawer-close" onClick={() => setDataDrawerOpen(false)} aria-label="关闭数据操作面板">关闭</button></header>
+        <section className="drawer-baselines" aria-labelledby="baseline-title">
+          <div className="drawer-section-heading"><small>毕业进度口径</small><strong id="baseline-title">要求基线</strong><span>{state.selected_requirement_baseline?.title ?? "尚未选择；现有报告仅作为历史记录"}</span></div>
+          {state.requirement_baselines.map(baseline => {
+            const selected = baseline.version === state.selected_requirement_baseline?.version;
+            return <article className={`baseline-option ${selected ? "selected" : ""}`} key={baseline.version}>
+              <header><div><strong>{baseline.title}</strong><small>{baseline.authority === "reference" ? "用户选择的参考基线" : "项目提纯指南"}</small></div><button className={selected ? "secondary" : ""} disabled={selected || remoteBusy} onClick={() => chooseRequirementBaseline(baseline)}>{selected ? "当前基线" : "选择"}</button></header>
+              <p>{baseline.coverage}</p>
+              <p className="baseline-applicability">{baseline.applicability}</p>
+              <small className="baseline-disclaimer">{baseline.disclaimer}</small>
+              <details><summary>查看规则与来源</summary><ul>{baseline.requirements.map(item => <li key={item.key}>{item.label}：至少 {item.minimum}{item.unit === "courses" ? " 门" : " 学分"}</li>)}</ul><p>{baseline.source_summary}</p>{baseline.manual_supplements?.map(note => <p className="baseline-warning" key={note}>{note}</p>)}</details>
+            </article>;
+          })}
+          {state.graduation_progress.status === "historical" && <div className="baseline-history"><p>{state.graduation_progress.reason ?? "当前进度属于其他基线，请重新同步。"}</p>{state.graduation_progress.historical_report && <details><summary>查看旧基线进度</summary><small>版本：{state.graduation_progress.historical_report.baseline_version ?? "旧版"}</small><ul>{state.graduation_progress.historical_report.progress.map(item => <li key={item.key}>{item.label ?? item.key}：已确认 {item.completed_credits} / {item.required_credits} 学分</li>)}</ul></details>}</div>}
+        </section>
         <section className="drawer-actions" aria-label="数据操作">
           <button onClick={() => run("connect")} disabled={remoteBusy}><span>连接教务</span><small>验证当前教务会话</small></button>
           <button onClick={() => run("refresh-timetable")} disabled={remoteBusy}><span>刷新课表</span><small>含本学期已选 · {statusLabel("timetable")}</small></button>
@@ -691,4 +734,5 @@ function App() {
   </main>;
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+const root = document.getElementById("root");
+if (root) createRoot(root).render(<App />);

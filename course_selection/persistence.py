@@ -191,6 +191,36 @@ class WorkspaceDatabase:
         row = self.connection.execute("select id,payload,created_at from profiles order by created_at desc limit 1").fetchone()
         return ({**json.loads(row["payload"]), "version_id": row["id"]} if row else None)
 
+    def requirement_baseline_selection(self) -> dict[str, str] | None:
+        row = self.connection.execute(
+            "select value from app_metadata where key='requirement_baseline_selection'"
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            value = json.loads(row["value"])
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(value, dict) or not isinstance(value.get("version"), str):
+            return None
+        return {
+            "version": value["version"],
+            "selected_at": str(value.get("selected_at", "")),
+        }
+
+    def select_requirement_baseline(self, version: str) -> dict[str, str]:
+        current = self.requirement_baseline_selection()
+        if current and current["version"] == version:
+            return current
+        selection = {"version": version, "selected_at": utc_now()}
+        with self.connection:
+            self.connection.execute(
+                "insert into app_metadata(key,value) values('requirement_baseline_selection',?) "
+                "on conflict(key) do update set value=excluded.value",
+                (json.dumps(selection, ensure_ascii=False),),
+            )
+        return selection
+
     def confirmed_notice(self) -> dict[str, Any] | None:
         row = self.connection.execute("select id,payload from notice_versions where status='confirmed' order by created_at desc limit 1").fetchone()
         return ({**json.loads(row["payload"]), "version_id": row["id"]} if row else None)
@@ -349,6 +379,9 @@ class WorkspaceDatabase:
             self.connection.execute("delete from execution_history")
             self.connection.execute("delete from snapshots")
             self.connection.execute("delete from profiles")
+            self.connection.execute(
+                "delete from app_metadata where key='requirement_baseline_selection'"
+            )
 
     def close(self) -> None:
         self.connection.close()

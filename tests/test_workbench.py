@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import threading
 import time
@@ -634,6 +635,12 @@ class WorkbenchApiTests(unittest.TestCase):
                 headers=headers,
             )
             self.assertEqual(409, blocked.status_code)
+            baseline = client.post(
+                "/api/requirement-baseline-selection",
+                json={"version": "guide-2026", "confirmation": "guide-2026"},
+                headers=headers,
+            )
+            self.assertEqual(200, baseline.status_code)
             response = client.post(
                 "/api/login-configuration",
                 json={"username": "2025000000", "password": "local-secret"},
@@ -667,6 +674,7 @@ class WorkbenchApiTests(unittest.TestCase):
             self.assertEqual(204, client.delete("/api/login-configuration", headers=headers).status_code)
             cleared = client.get("/api/state").get_json()
             self.assertFalse(cleared["login_configuration"]["configured"])
+            self.assertIsNone(cleared["selected_requirement_baseline"])
             self.assertIsNone(cleared["profile"])
             self.assertIsNone(cleared["snapshots"]["timetable"])
             self.assertFalse(report.exists())
@@ -808,6 +816,206 @@ class WorkbenchApiTests(unittest.TestCase):
             self.assertEqual("disconnected", response.get_json()["academic_session"]["state"])
             app.extensions["observation_service"].close()
             app.extensions["workspace_database"].close()
+
+    def test_requirement_baseline_selection_is_explicit_local_and_persistent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = FakeGateway()
+            app = create_workbench_app(root, gateway_factory=lambda: gateway)
+            database = app.extensions["workspace_database"]
+            original = database.publish_snapshot(
+                "progress",
+                "2026-1",
+                {"report": {
+                    "baseline_version": "guide-2026",
+                    "data_complete": True,
+                    "progress": [],
+                }},
+                source="test",
+            )
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            versions = {item["version"]: item for item in state["requirement_baselines"]}
+            self.assertIsNone(state["selected_requirement_baseline"])
+            self.assertEqual(
+                {"guide-2026", "basic-graduation-reference-v1"}, set(versions)
+            )
+            reference = versions["basic-graduation-reference-v1"]
+            self.assertEqual("reference", reference["authority"])
+            self.assertTrue(reference["requires_explicit_selection"])
+            self.assertIn("非学校正式毕业审核", reference["disclaimer"])
+            self.assertEqual(
+                {
+                    "major_elective", "innovation", "social_practice",
+                    "innovation_and_practice", "cultural_quality",
+                    "cultural_quality_d", "four_histories",
+                    "outside_major_elective",
+                },
+                {item["key"] for item in reference["requirements"]},
+            )
+            self.assertEqual("innovation", reference["category_mapping"]["创新研修课"])
+            self.assertIn("其他年级须核对", reference["applicability"])
+            self.assertEqual("historical", state["graduation_progress"]["status"])
+            self.assertEqual("historical", state["snapshot_status"]["progress"]["status"])
+            self.assertTrue(state["stale"]["progress"])
+            self.assertIsNone(state["graduation_progress"]["report"])
+            self.assertEqual(
+                "guide-2026",
+                state["graduation_progress"]["historical_report"]["baseline_version"],
+            )
+
+            headers = {
+                "Origin": "http://localhost",
+                "Host": "localhost",
+                "X-CSRF-Token": state["csrf_token"],
+            }
+            unconfirmed = client.post(
+                "/api/requirement-baseline-selection",
+                json={"version": "basic-graduation-reference-v1"},
+                headers=headers,
+            )
+            self.assertEqual(409, unconfirmed.status_code)
+            selected = client.post(
+                "/api/requirement-baseline-selection",
+                json={
+                    "version": "basic-graduation-reference-v1",
+                    "confirmation": "basic-graduation-reference-v1",
+                },
+                headers=headers,
+            )
+            self.assertEqual(200, selected.status_code)
+            selected_payload = selected.get_json()["selected_requirement_baseline"]
+            self.assertEqual("basic-graduation-reference-v1", selected_payload["version"])
+            repeated = client.post(
+                "/api/requirement-baseline-selection",
+                json={
+                    "version": "basic-graduation-reference-v1",
+                    "confirmation": "basic-graduation-reference-v1",
+                },
+                headers=headers,
+            )
+            self.assertEqual(selected_payload["selected_at"], repeated.get_json()["selected_requirement_baseline"]["selected_at"])
+            unknown = client.post(
+                "/api/requirement-baseline-selection",
+                json={"version": "unknown-v1", "confirmation": "unknown-v1"},
+                headers=headers,
+            )
+            self.assertEqual(409, unknown.status_code)
+            self.assertEqual(0, gateway.connect_count)
+            self.assertIsNone(app.extensions["observation_service"].active_task())
+            after = client.get("/api/state").get_json()
+            self.assertEqual(original["id"], after["snapshots"]["progress"]["id"])
+            self.assertEqual("historical", after["graduation_progress"]["status"])
+            self.assertEqual("historical", after["snapshot_status"]["progress"]["status"])
+            self.assertIn("要求基线已变化", after["snapshot_status"]["progress"]["reason"])
+            self.assertIn("重新同步", after["graduation_progress"]["reason"])
+            app.extensions["observation_service"].close()
+            database.close()
+
+            reopened = create_workbench_app(root, gateway_factory=FakeGateway)
+            reopened_state = reopened.test_client().get("/api/state").get_json()
+            self.assertEqual(
+                "basic-graduation-reference-v1",
+                reopened_state["selected_requirement_baseline"]["version"],
+            )
+            self.assertEqual(original["id"], reopened_state["snapshots"]["progress"]["id"])
+            reopened.extensions["observation_service"].close()
+            reopened.extensions["workspace_database"].close()
+
+    def test_selecting_requirement_baseline_preserves_an_existing_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            existing = WorkspaceDatabase.open(root)
+            with existing.connection:
+                profile_id = existing._insert_profile({"grade": "2025"})
+            notice = existing.save_notice(
+                {"term": "2026-1", "query_eligible": True, "windows": []},
+                confirmed=True,
+            )
+            timetable = existing.publish_snapshot(
+                "timetable", "2026-1", {"entries": []}, source="test",
+                profile_id=profile_id,
+            )
+            selection = existing.publish_snapshot(
+                "selection", "2026-1", {"sections": []}, source="test",
+                profile_id=profile_id, notice_id=notice["version_id"],
+            )
+            progress = existing.publish_snapshot(
+                "progress", "2026-1", {"report": {
+                    "baseline_version": "guide-2026", "data_complete": True,
+                    "progress": [],
+                }}, source="test", profile_id=profile_id,
+            )
+            plan = existing.save_plan({
+                "term": "2026-1", "profile_id": profile_id, "notice_id": notice["version_id"],
+                "timetable_snapshot_id": timetable["id"], "selection_snapshot_id": selection["id"],
+                "status": "blocked", "goals": [],
+            })
+            history = existing.record_execution(
+                {
+                    "section_id": "section-1", "course_name": "合成课程",
+                    "category": "ty", "snapshot_id": selection["id"],
+                    "notice_id": notice["version_id"],
+                },
+                {"status": "rejected", "message": "合成结果"},
+            )
+            now = "2026-01-01T00:00:00+00:00"
+            with existing.connection:
+                existing.connection.execute(
+                    "insert into observation_tasks values(?,?,?,?,?,?,?,?,?)",
+                    ("observation-1", "connect", "connect", "succeeded", now, now, "{}", "{}", ""),
+                )
+                existing.connection.execute(
+                    "insert into execution_tasks values(?,?,?,?,?,?,?,?)",
+                    ("execution-1", "execute-selection", "failed", now, now, "{}", "{}", "synthetic failure"),
+                )
+            login_root = root / "course-progress"
+            login_root.mkdir()
+            (login_root / "webvpn-login.dpapi").write_bytes(b"synthetic-encrypted")
+            existing.close()
+
+            gateway = FakeGateway()
+            app = create_workbench_app(root, gateway_factory=lambda: gateway)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {
+                "Origin": "http://localhost", "Host": "localhost",
+                "X-CSRF-Token": state["csrf_token"],
+            }
+            response = client.post(
+                "/api/requirement-baseline-selection",
+                json={"version": "basic-graduation-reference-v1", "confirmation": "basic-graduation-reference-v1"},
+                headers=headers,
+            )
+            self.assertEqual(200, response.status_code)
+            after = client.get("/api/state").get_json()
+            self.assertEqual(profile_id, after["profile"]["version_id"])
+            self.assertEqual(notice["version_id"], after["confirmed_notice"]["version_id"])
+            self.assertEqual(timetable["id"], after["snapshots"]["timetable"]["id"])
+            self.assertEqual(selection["id"], after["snapshots"]["selection"]["id"])
+            self.assertEqual(progress["id"], after["snapshots"]["progress"]["id"])
+            self.assertEqual(plan["id"], after["latest_plan"]["id"])
+            self.assertEqual(history["id"], after["execution_history"][0]["id"])
+            self.assertTrue(after["login_configuration"]["configured"])
+            database = app.extensions["workspace_database"]
+            self.assertEqual(1, database.connection.execute("select count(*) from observation_tasks").fetchone()[0])
+            self.assertEqual(1, database.connection.execute("select count(*) from execution_tasks").fetchone()[0])
+            with database.connection:
+                database.connection.execute(
+                    "create trigger reject_baseline_update before update on app_metadata "
+                    "when old.key='requirement_baseline_selection' begin select raise(abort, 'synthetic failure'); end"
+                )
+            with self.assertRaises(sqlite3.IntegrityError):
+                database.select_requirement_baseline("guide-2026")
+            self.assertEqual(
+                "basic-graduation-reference-v1",
+                database.requirement_baseline_selection()["version"],
+            )
+            with database.connection:
+                database.connection.execute("drop trigger reject_baseline_update")
+            self.assertEqual(0, gateway.connect_count)
+            app.extensions["observation_service"].close()
+            database.close()
 
     def test_state_changes_require_same_origin_and_csrf(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -7,6 +7,10 @@ paths:
         '200':
           description: Local persisted workbench state
           content: {application/json: {schema: {$ref: '#/components/schemas/WorkbenchState'}}}
+  /api/requirement-baseline-selection:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RequirementBaselineSelectionRequest'}}}}
+      responses: {'200': {description: Requirement baseline selected locally}, '409': {description: Explicit confirmation or version validation failed}}
   /api/login-configuration:
     post:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LoginConfigurationRequest'}}}}
@@ -65,6 +69,40 @@ paths:
       responses: {'201': {description: Timetable snapshot imported}}
 components:
   schemas:
+    RequirementBaselineSelectionRequest:
+      type: object
+      required: [version, confirmation]
+      properties:
+        version: {type: string}
+        confirmation: {type: string, description: Must exactly equal version}
+    RequirementBaselineRequirement:
+      type: object
+      required: [key, label, minimum, unit]
+      properties:
+        key: {type: string}
+        label: {type: string}
+        minimum: {type: number}
+        unit: {type: string, enum: [credits, courses]}
+        source: {type: string}
+        parent: {type: string}
+        constraint: {type: string}
+        contribution_keys: {type: array, items: {type: string}}
+    RequirementBaseline:
+      type: object
+      required: [version, title, authority, requires_explicit_selection, source_summary, applicability, coverage, disclaimer, requirements, category_mapping]
+      properties:
+        version: {type: string}
+        title: {type: string}
+        authority: {type: string}
+        requires_explicit_selection: {type: boolean}
+        source_summary: {type: string}
+        applicability: {type: string}
+        coverage: {type: string}
+        disclaimer: {type: string}
+        selected_at: {type: string}
+        manual_supplements: {type: array, items: {type: string}}
+        requirements: {type: array, items: {$ref: '#/components/schemas/RequirementBaselineRequirement'}}
+        category_mapping: {type: object, additionalProperties: {type: string}}
     LoginConfigurationRequest:
       type: object
       required: [username, password]
@@ -160,14 +198,21 @@ components:
       type: object
       required: [status, report]
       properties:
-        status: {type: string, enum: [ready, incomplete, missing, invalid, not_applicable]}
+        status: {type: string, enum: [ready, incomplete, missing, invalid, not_applicable, historical]}
         report: {$ref: '#/components/schemas/GraduationProgressReport', nullable: true}
+        historical_report: {$ref: '#/components/schemas/GraduationProgressReport', nullable: true}
+        reason: {type: string}
         snapshot: {$ref: '#/components/schemas/Snapshot', nullable: true}
     WorkbenchState:
       type: object
-      required: [login_configuration, profile, confirmed_notice, snapshots, snapshot_changes, latest_plan, graduation_progress, stale, snapshot_status, academic_session, active_task, execution_history, csrf_token]
+      required: [login_configuration, requirement_baselines, selected_requirement_baseline, profile, confirmed_notice, snapshots, snapshot_changes, latest_plan, graduation_progress, stale, snapshot_status, academic_session, active_task, execution_history, csrf_token]
       properties:
         login_configuration: {$ref: '#/components/schemas/LoginConfiguration'}
+        requirement_baselines: {type: array, items: {$ref: '#/components/schemas/RequirementBaseline'}}
+        selected_requirement_baseline:
+          nullable: true
+          allOf:
+            - {$ref: '#/components/schemas/RequirementBaseline'}
         profile: {type: object, nullable: true, additionalProperties: true}
         confirmed_notice: {type: object, nullable: true, additionalProperties: true}
         snapshots:
