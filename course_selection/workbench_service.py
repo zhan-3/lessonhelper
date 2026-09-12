@@ -178,13 +178,16 @@ class WorkbenchService:
         return self._classified_progress(report)
 
     def progress_context(self) -> dict[str, Any]:
+        selected = self.selected_requirement_baseline()
+        if selected is None:
+            raise ValueError("请先选择要求基线")
         profile = self.database.current_profile() or {}
         notice = self.database.confirmed_notice() or {}
         timetable = self.database.latest_snapshot("timetable") or {}
         return {
             "term": str(notice.get("term") or timetable.get("term") or ""),
             "profile_id": profile.get("version_id"),
-            "baseline_version": "guide-2026",
+            "baseline_version": selected["version"],
             "page_size": 20,
         }
 

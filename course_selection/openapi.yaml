@@ -77,7 +77,7 @@ components:
         confirmation: {type: string, description: Must exactly equal version}
     RequirementBaselineRequirement:
       type: object
-      required: [key, label, minimum, unit]
+      required: [key, label, minimum, unit, evidence]
       properties:
         key: {type: string}
         label: {type: string}
@@ -85,8 +85,10 @@ components:
         unit: {type: string, enum: [credits, courses]}
         source: {type: string}
         parent: {type: string}
-        constraint: {type: string}
+        constraint: {type: string, enum: ["", single_track]}
+        evidence: {type: string, enum: [grade_records, grade_and_recognition, classification]}
         contribution_keys: {type: array, items: {type: string}}
+        required_conditions: {type: array, items: {type: string}}
     RequirementBaseline:
       type: object
       required: [version, title, authority, requires_explicit_selection, source_summary, applicability, coverage, disclaimer, requirements, category_mapping]
@@ -102,7 +104,12 @@ components:
         selected_at: {type: string}
         manual_supplements: {type: array, items: {type: string}}
         requirements: {type: array, items: {$ref: '#/components/schemas/RequirementBaselineRequirement'}}
-        category_mapping: {type: object, additionalProperties: {type: string}}
+        category_mapping:
+          type: object
+          additionalProperties:
+            oneOf:
+              - {type: string}
+              - {type: array, items: {type: string}}
     LoginConfigurationRequest:
       type: object
       required: [username, password]
@@ -178,10 +185,24 @@ components:
         credits: {type: number}
     RequirementProgress:
       type: object
-      required: [key, label, required_credits, completed_credits, remaining_credits, courses]
+      required: [key, label, unit, source, parent, constraint, rule_detail, minimum, confirmed_amount, confirmed_gap, condition_status, condition_detail, reason, reason_detail, required_credits, completed_credits, remaining_credits, courses]
       properties:
         key: {type: string}
         label: {type: string}
+        unit: {type: string, enum: [credits, courses]}
+        source: {type: string}
+        parent: {type: string}
+        constraint: {type: string, enum: ["", single_track]}
+        rule_detail: {type: string}
+        minimum: {type: number}
+        confirmed_amount: {type: number}
+        confirmed_gap: {type: number}
+        condition_status: {type: string, enum: [satisfied, not_satisfied, unknown]}
+        condition_detail: {type: string}
+        reason:
+          type: string
+          enum: [confirmed_minimum_met, confirmed_below_minimum, grade_data_incomplete, recognized_credit_coverage_missing, classification_evidence_missing, outside_major_track_unconfirmed, required_subconstraint_unknown, required_subconstraint_not_satisfied]
+        reason_detail: {type: string}
         required_credits: {type: number}
         completed_credits: {type: number}
         remaining_credits: {type: number}
@@ -193,6 +214,7 @@ components:
         generated_at: {type: string}
         baseline_version: {type: string}
         data_complete: {type: boolean}
+        coverage: {type: object, additionalProperties: {type: string}}
         progress: {type: array, items: {$ref: '#/components/schemas/RequirementProgress'}}
     GraduationProgress:
       type: object

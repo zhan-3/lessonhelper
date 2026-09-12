@@ -32,7 +32,7 @@ const reference: RequirementBaseline = {
   manual_supplements: ["创新创业单项至少 4 学分尚未证实为所有年级统一规定。"],
   category_mapping: { 创新研修课: "innovation" },
   requirements: [
-    { key: "innovation", label: "创新创业", minimum: 4, unit: "credits" },
+    { key: "innovation", label: "创新创业", minimum: 4, unit: "credits", evidence: "grade_and_recognition" },
   ],
 };
 
@@ -72,12 +72,64 @@ const state = (selected: boolean) => ({
   csrf_token: "csrf-test",
 } as unknown as WorkbenchState);
 
+const readyState = () => ({
+  ...state(true),
+  graduation_progress: {
+    status: "ready",
+    report: {
+      baseline_version: "basic-graduation-reference-v1",
+      data_complete: true,
+      coverage: {
+        grade_records: "complete", recognized_credits: "missing",
+        course_classification: "missing", outside_major_track: "missing",
+      },
+      progress: [
+        ["major_elective", "本专业选修", 3, "not_satisfied"],
+        ["innovation", "创新创业", 4, "unknown"],
+        ["social_practice", "社会实践", 1, "unknown"],
+        ["innovation_and_practice", "创新创业 + 社会实践", 6, "unknown"],
+        ["cultural_quality", "文化素质课程", 8, "unknown"],
+        ["cultural_quality_d", "文化素质 D 类", 2, "unknown"],
+        ["four_histories", "四史课程", 1, "unknown", "courses"],
+        ["outside_major_elective", "外专业课程", 10, "unknown"],
+      ].map(([key, label, minimum, condition_status, unit = "credits"]) => ({
+        key, label, unit, source: key === "innovation" ? "manual-supplement" : "extracted-guide",
+        parent: "", constraint: key === "outside_major_elective" ? "single_track" : "",
+        rule_detail: key === "innovation" ? "人工补充参考规则" : "",
+        minimum, confirmed_amount: 0, confirmed_gap: minimum, condition_status,
+        condition_detail: condition_status === "not_satisfied" ? "未满足" : "未知",
+        reason: condition_status === "not_satisfied" ? "confirmed_below_minimum" : "classification_evidence_missing",
+        reason_detail: condition_status === "not_satisfied" ? "已确认贡献低于最低值" : "缺少明确分类依据",
+        required_credits: minimum, completed_credits: 0, remaining_credits: minimum, courses: [],
+      })),
+    },
+  },
+} as unknown as WorkbenchState);
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
 describe("requirement baseline selection", () => {
+  it("renders every baseline requirement even when selection queries cover none", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/state") return new Response(JSON.stringify(readyState()));
+      if (url === "/api/notices/candidates") return new Response(JSON.stringify({ notices: [] }));
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    Element.prototype.scrollIntoView = vi.fn();
+
+    render(<App />);
+    await screen.findByText("毕业进度规划参考");
+    for (const label of [
+      "本专业选修", "创新创业", "社会实践", "创新创业 + 社会实践",
+      "文化素质课程", "文化素质 D 类", "四史课程", "跨专业发展课程",
+    ]) expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/条件状态：/)).toHaveLength(8);
+  });
+
   it("shows applicability and historical progress before explicitly confirmed local selection", async () => {
     let selected = false;
     const requests: Array<{ url: string; init?: RequestInit }> = [];

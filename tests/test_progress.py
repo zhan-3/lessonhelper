@@ -1,12 +1,16 @@
 import unittest
 from pathlib import Path
 
+from course_progress.baselines import requirement_baseline
 from course_progress.progress import (
     AcademicRecord,
     CompletedCourse,
     Requirement,
     RequirementBaseline,
+    assess_progress,
+    baseline_from_definition,
     calculate_progress,
+    confirmed_progress_items,
     evaluate_progress,
     parse_grade_html,
     parse_requirements,
@@ -111,6 +115,91 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(progress["innovation_and_practice"].remaining_credits, 1.0)
         self.assertEqual(progress["innovation"].remaining_credits, 0.0)
         self.assertEqual(progress["social_practice"].remaining_credits, 0.0)
+
+    def test_basic_reference_baseline_assesses_confirmed_minimums_and_combination(self):
+        baseline = baseline_from_definition(
+            requirement_baseline("basic-graduation-reference-v1")
+        )
+        records = (
+            AcademicRecord("2025秋季", "M01", "专业选修", "任选", "本专业选修", 2.0, True),
+            AcademicRecord("2025秋季", "I01", "创新课程", "任选", "创新研修课", 4.0, True),
+            AcademicRecord("2025秋季", "S01", "社会实践", "任选", "社会实践", 1.0, True),
+        )
+
+        report = evaluate_progress(records, baseline)
+        assessed = {item.progress.requirement.key: item for item in assess_progress(report, data_complete=True)}
+
+        self.assertEqual("not_satisfied", assessed["major_elective"].state)
+        self.assertEqual(2.0, assessed["major_elective"].confirmed_amount)
+        self.assertEqual(1.0, assessed["major_elective"].confirmed_gap)
+        self.assertEqual("satisfied", assessed["innovation"].state)
+        self.assertEqual("satisfied", assessed["social_practice"].state)
+        self.assertEqual(5.0, assessed["innovation_and_practice"].confirmed_amount)
+        self.assertEqual("unknown", assessed["innovation_and_practice"].state)
+        self.assertEqual("recognized_credit_coverage_missing", assessed["innovation_and_practice"].reason)
+        payload = confirmed_progress_items(report, data_complete=True)
+        self.assertEqual(8, len(payload))
+        innovation = next(item for item in payload if item["key"] == "innovation")
+        self.assertEqual(4.0, innovation["minimum"])
+        self.assertEqual("manual-supplement", innovation["source"])
+        self.assertEqual("satisfied", innovation["condition_status"])
+        self.assertTrue(innovation["courses"])
+
+    def test_basic_reference_baseline_keeps_unproven_subconstraints_unknown(self):
+        baseline = baseline_from_definition(
+            requirement_baseline("basic-graduation-reference-v1")
+        )
+        records = (
+            AcademicRecord(
+                "2025秋季", "C01", "四史专题", "任选",
+                "文理通识-文化素质教育课", 8.0, True,
+            ),
+            AcademicRecord(
+                "2025秋季", "O01", "跨专业课程", "任选",
+                "跨专业发展课程", 10.0, True,
+            ),
+        )
+
+        report = evaluate_progress(records, baseline)
+        assessed = {item.progress.requirement.key: item for item in assess_progress(report, data_complete=True)}
+
+        self.assertEqual(8.0, assessed["cultural_quality"].confirmed_amount)
+        self.assertEqual("unknown", assessed["cultural_quality"].state)
+        self.assertEqual("required_subconstraint_unknown", assessed["cultural_quality"].reason)
+        self.assertEqual(0.0, assessed["cultural_quality_d"].confirmed_amount)
+        self.assertEqual("unknown", assessed["cultural_quality_d"].state)
+        self.assertEqual(0.0, assessed["four_histories"].confirmed_amount)
+        self.assertEqual("unknown", assessed["four_histories"].state)
+        self.assertEqual("unknown", assessed["outside_major_elective"].state)
+        self.assertEqual("outside_major_track_unconfirmed", assessed["outside_major_elective"].reason)
+
+    def test_cultural_subconstraint_courses_contribute_once_to_the_parent_total(self):
+        definition = requirement_baseline("basic-graduation-reference-v1")
+        definition["category_mapping"].update({
+            "明确D类四史": ["cultural_quality_d", "four_histories"],
+        })
+        baseline = baseline_from_definition(definition)
+        records = (
+            AcademicRecord("2025秋季", "DH01", "党史专题", "任选", "明确D类四史", 2.0, True),
+        )
+
+        report = evaluate_progress(records, baseline)
+        progress = {item.requirement.key: item for item in report.progress}
+
+        self.assertEqual(2.0, progress["cultural_quality"].completed_amount)
+        self.assertEqual(2.0, progress["cultural_quality_d"].completed_amount)
+        self.assertEqual(1.0, progress["four_histories"].completed_amount)
+        self.assertEqual(1, len(progress["cultural_quality"].courses))
+
+    def test_incomplete_grade_data_cannot_prove_a_deficit(self):
+        baseline = baseline_from_definition(
+            requirement_baseline("basic-graduation-reference-v1")
+        )
+        report = evaluate_progress((), baseline)
+        assessed = {item.progress.requirement.key: item for item in assess_progress(report, data_complete=False)}
+
+        self.assertEqual("unknown", assessed["major_elective"].state)
+        self.assertEqual("grade_data_incomplete", assessed["major_elective"].reason)
 
     def test_parses_requirements_from_extracted_guide(self):
         requirements = parse_requirements(

@@ -236,13 +236,13 @@ def create_workbench_app(
         if not isinstance(raw_context, dict):
             return jsonify({"error": "context must be an object"}), 400
         context = dict(raw_context)
-        if operation in {"connect", "refresh-selection", "refresh-timetable"}:
-            context = core.refresh_context()
-        elif operation == "refresh-progress":
-            context = core.progress_context()
         try:
+            if operation in {"connect", "refresh-selection", "refresh-timetable"}:
+                context = core.refresh_context()
+            elif operation == "refresh-progress":
+                context = core.progress_context()
             task = service.submit(operation, context)
-        except RuntimeError as error:
+        except (RuntimeError, ValueError) as error:
             return jsonify({"error": str(error), "active_task": service.active_task()}), 409
         return jsonify({"id": task.id, "operation": operation, "state": task.state}), 202
 

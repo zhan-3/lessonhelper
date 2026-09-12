@@ -684,8 +684,12 @@ export interface components {
             unit: "credits" | "courses";
             source?: string;
             parent?: string;
-            constraint?: string;
+            /** @enum {string} */
+            constraint?: "" | "single_track";
+            /** @enum {string} */
+            evidence: "grade_records" | "grade_and_recognition" | "classification";
             contribution_keys?: string[];
+            required_conditions?: string[];
         };
         RequirementBaseline: {
             version: string;
@@ -700,7 +704,7 @@ export interface components {
             manual_supplements?: string[];
             requirements: components["schemas"]["RequirementBaselineRequirement"][];
             category_mapping: {
-                [key: string]: string;
+                [key: string]: string | string[];
             };
         };
         LoginConfigurationRequest: {
@@ -775,6 +779,22 @@ export interface components {
         RequirementProgress: {
             key: string;
             label: string;
+            /** @enum {string} */
+            unit: "credits" | "courses";
+            source: string;
+            parent: string;
+            /** @enum {string} */
+            constraint: "" | "single_track";
+            rule_detail: string;
+            minimum: number;
+            confirmed_amount: number;
+            confirmed_gap: number;
+            /** @enum {string} */
+            condition_status: "satisfied" | "not_satisfied" | "unknown";
+            condition_detail: string;
+            /** @enum {string} */
+            reason: "confirmed_minimum_met" | "confirmed_below_minimum" | "grade_data_incomplete" | "recognized_credit_coverage_missing" | "classification_evidence_missing" | "outside_major_track_unconfirmed" | "required_subconstraint_unknown" | "required_subconstraint_not_satisfied";
+            reason_detail: string;
             required_credits: number;
             completed_credits: number;
             remaining_credits: number;
@@ -784,6 +804,9 @@ export interface components {
             generated_at?: string;
             baseline_version?: string;
             data_complete: boolean;
+            coverage?: {
+                [key: string]: string;
+            };
             progress: components["schemas"]["RequirementProgress"][];
         };
         GraduationProgress: {

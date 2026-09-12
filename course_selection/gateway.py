@@ -8,7 +8,6 @@ import time
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlsplit
 
@@ -349,11 +348,12 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
             AcademicContractError,
             AuthenticatedAcademicClient,
         )
+        from course_progress.baselines import requirement_baseline
         from course_progress.collector import FixedGradeReader
         from course_progress.progress import (
-            RequirementBaseline,
+            baseline_from_definition,
+            confirmed_progress_items,
             evaluate_progress,
-            parse_requirements,
         )
 
         page = getattr(self, "_academic_page", None)
@@ -363,25 +363,14 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
         if page is None or self._page_is_closed(page):
             return {"status": "entry_unreachable", "report": None}
 
-        requirements_path = Path(__file__).resolve().parents[1] / "docs" / "校园培养方案解读（2026年版）.md"
-        baseline_version = str(context.get("baseline_version", "guide-2026"))
-        if not requirements_path.is_file() or baseline_version != "guide-2026":
-            return {"status": "interface_unconfirmed", "report": None, "_trace_requests": trace_requests}
-        baseline = RequirementBaseline(
-            version=baseline_version,
-            requirements=parse_requirements(requirements_path),
-            category_mapping={
-                "本专业选修": "major_elective",
-                "外专业选修": "outside_major_elective",
-                "跨专业发展课程": "outside_major_elective",
-                "文理通识-文化素质教育课": "cultural_quality",
-                "创新研修课": "innovation",
-                "创新实验课": "innovation",
-                "创新创业课程": "innovation",
-                "创业课程": "innovation",
-                "社会实践": "social_practice",
-            },
-        )
+        baseline_version = str(context.get("baseline_version", ""))
+        definition = requirement_baseline(baseline_version)
+        if definition is None:
+            return {
+                "status": "interface_unconfirmed", "report": None,
+                "reason": "要求基线不存在或尚未选择", "_trace_requests": trace_requests,
+            }
+        baseline = baseline_from_definition(definition)
         timeout = min(
             int(context.get("login_timeout_seconds", 600)),
             int(context.get("operation_timeout_seconds", 600)),
@@ -439,17 +428,15 @@ class PlaywrightAcademicGateway(UnconfirmedAcademicGateway):
                 "data_complete": collection.complete,
                 "semesters": [asdict(item) for item in collection.semesters],
                 "collection_failures": [asdict(item) for item in collection.failures],
-                "progress": [
-                    {
-                        "key": item.requirement.key,
-                        "label": item.requirement.label,
-                        "required_credits": item.requirement.minimum_credits,
-                        "completed_credits": item.completed_credits,
-                        "remaining_credits": item.remaining_credits,
-                        "courses": [asdict(course) for course in item.courses],
-                    }
-                    for item in report.progress
-                ],
+                "coverage": {
+                    "grade_records": "complete" if collection.complete else "incomplete",
+                    "recognized_credits": "missing",
+                    "course_classification": "missing",
+                    "outside_major_track": "missing",
+                },
+                "progress": confirmed_progress_items(
+                    report, data_complete=collection.complete
+                ),
                 "conflicts": [asdict(item) for item in report.conflicts],
                 "unclassified_courses": [asdict(course) for course in report.unclassified_courses],
             },

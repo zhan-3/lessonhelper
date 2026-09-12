@@ -5,9 +5,40 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import Literal, cast
+
+from .baselines import (
+    CONSTRAINT_KINDS,
+    EVIDENCE_KINDS,
+    ConstraintKind,
+    EvidenceKind,
+)
+
+ConditionState = Literal["satisfied", "not_satisfied", "unknown"]
+AssessmentReason = Literal[
+    "confirmed_minimum_met",
+    "confirmed_below_minimum",
+    "grade_data_incomplete",
+    "recognized_credit_coverage_missing",
+    "classification_evidence_missing",
+    "outside_major_track_unconfirmed",
+    "required_subconstraint_unknown",
+    "required_subconstraint_not_satisfied",
+]
+
+_REASON_DETAILS: dict[AssessmentReason, str] = {
+    "confirmed_minimum_met": "学校成绩记录已确认达到最低值",
+    "confirmed_below_minimum": "完整成绩记录中的已确认贡献低于最低值",
+    "grade_data_incomplete": "成绩读取不完整，不能判断缺口",
+    "recognized_credit_coverage_missing": "活动或认定学分尚未纳入数据覆盖",
+    "classification_evidence_missing": "缺少明确的课程分类依据",
+    "outside_major_track_unconfirmed": "尚未确认外专业课程所属的单一体系",
+    "required_subconstraint_unknown": "必要子约束仍有未知项",
+    "required_subconstraint_not_satisfied": "至少一项必要子约束未满足",
+}
 
 
 @dataclass(frozen=True)
@@ -36,13 +67,19 @@ class Requirement:
     label: str
     minimum_credits: float
     contribution_keys: tuple[str, ...] = ()
+    unit: Literal["credits", "courses"] = "credits"
+    source: str = ""
+    parent: str = ""
+    constraint: ConstraintKind = ""
+    evidence: EvidenceKind = "grade_records"
+    required_conditions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class RequirementBaseline:
     version: str
     requirements: tuple[Requirement, ...]
-    category_mapping: Mapping[str, str]
+    category_mapping: Mapping[str, str | tuple[str, ...]]
 
 
 @dataclass(frozen=True)
@@ -52,8 +89,29 @@ class Progress:
     courses: tuple[CompletedCourse, ...]
 
     @property
+    def completed_amount(self) -> float:
+        if self.requirement.unit == "courses":
+            return float(len(self.courses))
+        return self.completed_credits
+
+    @property
     def remaining_credits(self) -> float:
-        return max(0.0, self.requirement.minimum_credits - self.completed_credits)
+        return max(0.0, self.requirement.minimum_credits - self.completed_amount)
+
+
+@dataclass(frozen=True)
+class RequirementAssessment:
+    progress: Progress
+    state: ConditionState
+    reason: AssessmentReason
+
+    @property
+    def confirmed_amount(self) -> float:
+        return self.progress.completed_amount
+
+    @property
+    def confirmed_gap(self) -> float:
+        return self.progress.remaining_credits
 
 
 @dataclass(frozen=True)
@@ -148,6 +206,54 @@ def parse_grade_html(html: str) -> tuple[AcademicRecord, ...]:
     return tuple(records)
 
 
+def baseline_from_definition(definition: Mapping[str, object] | None) -> RequirementBaseline:
+    """Create the calculator baseline from one immutable serialized definition."""
+    if not isinstance(definition, Mapping):
+        raise TypeError("requirement baseline definition is missing")
+    raw_requirements = definition.get("requirements")
+    raw_mapping = definition.get("category_mapping")
+    if not isinstance(raw_requirements, (list, tuple)) or not isinstance(raw_mapping, Mapping):
+        raise TypeError("requirement baseline definition is incomplete")
+    requirements = []
+    for item in raw_requirements:
+        if not isinstance(item, Mapping):
+            raise TypeError("requirement definition must be an object")
+        unit = str(item.get("unit", "credits"))
+        constraint = str(item.get("constraint", ""))
+        evidence = str(item.get("evidence", "grade_records"))
+        if unit not in {"credits", "courses"}:
+            raise ValueError(f"unknown requirement unit: {unit}")
+        if constraint not in CONSTRAINT_KINDS:
+            raise ValueError(f"unknown requirement constraint: {constraint}")
+        if evidence not in EVIDENCE_KINDS:
+            raise ValueError(f"unknown requirement evidence: {evidence}")
+        requirements.append(Requirement(
+            key=str(item.get("key", "")),
+            label=str(item.get("label", "")),
+            minimum_credits=float(item.get("minimum", 0)),
+            contribution_keys=tuple(str(value) for value in item.get("contribution_keys", ())),
+            unit=cast(Literal["credits", "courses"], unit),
+            source=str(item.get("source", "")),
+            parent=str(item.get("parent", "")),
+            constraint=cast(ConstraintKind, constraint),
+            evidence=cast(EvidenceKind, evidence),
+            required_conditions=tuple(str(value) for value in item.get("required_conditions", ())),
+        ))
+    category_mapping: dict[str, str | tuple[str, ...]] = {}
+    for key, value in raw_mapping.items():
+        if isinstance(value, str):
+            category_mapping[str(key)] = value
+        elif isinstance(value, (list, tuple)) and value:
+            category_mapping[str(key)] = tuple(str(target) for target in value)
+        else:
+            raise TypeError("category mapping target must be a string or non-empty list")
+    return RequirementBaseline(
+        version=str(definition.get("version", "")),
+        requirements=tuple(requirements),
+        category_mapping=category_mapping,
+    )
+
+
 def evaluate_progress(
     records: Iterable[AcademicRecord], baseline: RequirementBaseline
 ) -> ProgressReport:
@@ -188,20 +294,27 @@ def evaluate_progress(
             record.category,
             record.credits,
         )
-        requirement_key = baseline.category_mapping.get(record.category.strip())
-        if requirement_key is None:
+        mapping_value = baseline.category_mapping.get(record.category.strip())
+        if mapping_value is None:
             unclassified.append(course)
             continue
-        grouped[requirement_key].append(course)
+        targets = (mapping_value,) if isinstance(mapping_value, str) else mapping_value
+        for requirement_key in dict.fromkeys(targets):
+            grouped[requirement_key].append(course)
 
     progress_items: list[Progress] = []
     for requirement in baseline.requirements:
-        contribution_keys = requirement.contribution_keys or (requirement.key,)
-        matched = tuple(
-            course
+        contribution_keys = (
+            requirement.key,
+            *requirement.contribution_keys,
+            *(item.key for item in baseline.requirements if item.parent == requirement.key),
+        )
+        matched_by_identity = {
+            course.code.strip() or " ".join(course.name.lower().split()): course
             for key in dict.fromkeys(contribution_keys)
             for course in grouped.get(key, ())
-        )
+        }
+        matched = tuple(matched_by_identity.values())
         progress_items.append(
             Progress(
                 requirement,
@@ -213,6 +326,86 @@ def evaluate_progress(
     return ProgressReport(
         baseline.version, progress, tuple(conflicts), tuple(unclassified)
     )
+
+
+def assess_progress(
+    report: ProgressReport, *, data_complete: bool
+) -> tuple[RequirementAssessment, ...]:
+    """Classify confirmed minimums without treating uncovered facts as zero."""
+    raw: dict[str, RequirementAssessment] = {}
+    for progress in report.progress:
+        requirement = progress.requirement
+        amount = progress.completed_amount
+        if amount >= requirement.minimum_credits:
+            if requirement.constraint == "single_track":
+                state, reason = "unknown", "outside_major_track_unconfirmed"
+            else:
+                state, reason = "satisfied", "confirmed_minimum_met"
+        elif not data_complete:
+            state, reason = "unknown", "grade_data_incomplete"
+        elif requirement.evidence == "grade_and_recognition":
+            state, reason = "unknown", "recognized_credit_coverage_missing"
+        elif requirement.evidence == "classification":
+            state, reason = "unknown", "classification_evidence_missing"
+        else:
+            state, reason = "not_satisfied", "confirmed_below_minimum"
+        raw[requirement.key] = RequirementAssessment(progress, state, reason)
+
+    assessed = dict(raw)
+    for key, item in raw.items():
+        conditions = item.progress.requirement.required_conditions
+        children = [raw[condition] for condition in conditions if condition in raw]
+        if any(child.state == "not_satisfied" for child in children):
+            assessed[key] = RequirementAssessment(
+                item.progress, "not_satisfied", "required_subconstraint_not_satisfied"
+            )
+        elif item.state == "satisfied" and any(child.state == "unknown" for child in children):
+            assessed[key] = RequirementAssessment(
+                item.progress, "unknown", "required_subconstraint_unknown"
+            )
+    return tuple(assessed[item.requirement.key] for item in report.progress)
+
+
+def confirmed_progress_items(
+    report: ProgressReport, *, data_complete: bool
+) -> list[dict[str, object]]:
+    """Serialize every baseline requirement using the confirmed-evidence vocabulary."""
+    def rule_detail(requirement: Requirement) -> str:
+        if requirement.source == "manual-supplement":
+            return "人工补充参考规则：不代表所有年级的统一正式要求，请核对个人培养方案。"
+        if requirement.constraint == "single_track":
+            return "总额之外还须确认课程来自同一个已选体系。"
+        if requirement.parent:
+            return "这是总额内的必要子约束，不额外重复计入总量。"
+        return ""
+
+    return [
+        {
+            "key": item.progress.requirement.key,
+            "label": item.progress.requirement.label,
+            "unit": item.progress.requirement.unit,
+            "source": item.progress.requirement.source,
+            "parent": item.progress.requirement.parent,
+            "constraint": item.progress.requirement.constraint,
+            "rule_detail": rule_detail(item.progress.requirement),
+            "minimum": item.progress.requirement.minimum_credits,
+            "confirmed_amount": item.confirmed_amount,
+            "confirmed_gap": item.confirmed_gap,
+            "condition_status": item.state,
+            "condition_detail": {
+                "satisfied": "已满足", "not_satisfied": "未满足", "unknown": "未知",
+            }[item.state],
+            "reason": item.reason,
+            "reason_detail": _REASON_DETAILS[item.reason],
+            # Retain the established fields while clients migrate to the
+            # evidence-aware vocabulary above.
+            "required_credits": item.progress.requirement.minimum_credits,
+            "completed_credits": item.progress.completed_credits,
+            "remaining_credits": item.confirmed_gap,
+            "courses": [asdict(course) for course in item.progress.courses],
+        }
+        for item in assess_progress(report, data_complete=data_complete)
+    ]
 
 
 _TABLE_REQUIREMENTS = {

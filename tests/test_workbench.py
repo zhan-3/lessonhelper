@@ -4,12 +4,20 @@ import tempfile
 import threading
 import time
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from playwright.sync_api import Error
 
+from course_progress.baselines import requirement_baseline
+from course_progress.progress import (
+    AcademicRecord,
+    baseline_from_definition,
+    confirmed_progress_items,
+    evaluate_progress,
+)
 from course_selection.deep_observation import (
     AcademicRequestTrace,
     ManualObservationResult,
@@ -77,7 +85,12 @@ class FakeGateway:
 
 
 class ProgressGateway(FakeGateway):
+    def __init__(self):
+        super().__init__()
+        self.progress_contexts = []
+
     def refresh_progress(self, context, progress, cancelled):
+        self.progress_contexts.append(dict(context))
         progress("reading", {"target": "progress", "semester": "2026春", "page": 1, "page_count": 1})
         return {
             "status": "complete",
@@ -85,7 +98,7 @@ class ProgressGateway(FakeGateway):
             "term": "2026年春季学期",
             "report": {
                 "data_complete": True,
-                "baseline_version": "guide-2026",
+                "baseline_version": context.get("baseline_version", "guide-2026"),
                 "progress": [{
                     "key": "major_elective",
                     "label": "本专业选修",
@@ -96,6 +109,48 @@ class ProgressGateway(FakeGateway):
                 }],
             },
         }
+
+
+class ReferenceProgressGateway(FakeGateway):
+    def __init__(self):
+        super().__init__()
+        self.progress_contexts = []
+
+    def refresh_progress(self, context, progress, cancelled):
+        self.progress_contexts.append(dict(context))
+        definition = requirement_baseline(context["baseline_version"])
+        baseline = baseline_from_definition(definition)
+        records = (
+            AcademicRecord("2025秋季", "M01", "专业选修", "任选", "本专业选修", 3.0, True),
+            AcademicRecord("2025秋季", "M01", "专业选修", "任选", "本专业选修", 3.0, True),
+            AcademicRecord("2025秋季", "I01", "创新课程", "任选", "创新研修课", 4.0, True),
+            AcademicRecord("2025秋季", "S01", "社会实践", "任选", "社会实践", 1.0, True),
+            AcademicRecord("2025秋季", "C01", "四史专题", "任选", "文理通识-文化素质教育课", 8.0, True),
+            AcademicRecord("2025秋季", "O01", "跨专业课程", "任选", "跨专业发展课程", 10.0, True),
+            AcademicRecord("2025秋季", "X01", "冲突课程", "任选", "本专业选修", 1.0, True),
+            AcademicRecord("2025秋季", "X01", "冲突课程", "任选", "本专业选修", 2.0, True),
+            AcademicRecord("2025秋季", "U01", "待归类课程", "任选", "未知类别", 2.0, True),
+        )
+        report = evaluate_progress(records, baseline)
+        return {
+            "status": "complete", "source_kind": "academic", "term": "2026-1",
+            "report": {
+                "baseline_version": report.baseline_version,
+                "data_complete": True,
+                "coverage": {
+                    "grade_records": "complete", "recognized_credits": "missing",
+                    "course_classification": "missing", "outside_major_track": "missing",
+                },
+                "progress": confirmed_progress_items(report, data_complete=True),
+                "conflicts": [asdict(item) for item in report.conflicts],
+                "unclassified_courses": [asdict(item) for item in report.unclassified_courses],
+            },
+        }
+
+
+class IncompleteProgressGateway(FakeGateway):
+    def observe_progress(self, request, progress, cancelled):
+        return ProgressObservationResult.incomplete("page 2 failed")
 
 
 class ResetFailureGateway(FakeGateway):
@@ -921,6 +976,125 @@ class WorkbenchApiTests(unittest.TestCase):
             self.assertEqual(original["id"], reopened_state["snapshots"]["progress"]["id"])
             reopened.extensions["observation_service"].close()
             reopened.extensions["workspace_database"].close()
+
+    def test_progress_sync_requires_and_uses_the_explicitly_selected_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = ReferenceProgressGateway()
+            app = create_workbench_app(Path(directory), gateway_factory=lambda: gateway)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {
+                "Origin": "http://localhost", "Host": "localhost",
+                "X-CSRF-Token": state["csrf_token"],
+            }
+
+            blocked = client.post(
+                "/api/tasks", json={"operation": "refresh-progress"}, headers=headers,
+            )
+            self.assertEqual(409, blocked.status_code)
+            self.assertIn("选择要求基线", blocked.get_json()["error"])
+            self.assertIsNone(app.extensions["observation_service"].active_task())
+
+            client.post(
+                "/api/requirement-baseline-selection",
+                json={
+                    "version": "basic-graduation-reference-v1",
+                    "confirmation": "basic-graduation-reference-v1",
+                },
+                headers=headers,
+            )
+            submitted = client.post(
+                "/api/tasks", json={"operation": "refresh-progress"}, headers=headers,
+            )
+            self.assertEqual(202, submitted.status_code)
+            task_id = submitted.get_json()["id"]
+            service = app.extensions["observation_service"]
+            self.assertTrue(service.wait(task_id, 2))
+            self.assertEqual(TaskState.SUCCEEDED.value, service.inspect(task_id)["state"])
+            self.assertEqual(
+                "basic-graduation-reference-v1",
+                gateway.progress_contexts[0]["baseline_version"],
+            )
+            snapshot = app.extensions["workspace_database"].latest_snapshot("progress")
+            report = snapshot["payload"]["report"]
+            self.assertEqual("basic-graduation-reference-v1", report["baseline_version"])
+            items = {item["key"]: item for item in report["progress"]}
+            self.assertEqual(8, len(items))
+            self.assertEqual(
+                {
+                    "major_elective": (3, "credits"),
+                    "innovation": (4, "credits"),
+                    "social_practice": (1, "credits"),
+                    "innovation_and_practice": (6, "credits"),
+                    "cultural_quality": (8, "credits"),
+                    "cultural_quality_d": (2, "credits"),
+                    "four_histories": (1, "courses"),
+                    "outside_major_elective": (10, "credits"),
+                },
+                {key: (item["minimum"], item["unit"]) for key, item in items.items()},
+            )
+            self.assertEqual("satisfied", items["major_elective"]["condition_status"])
+            self.assertEqual(3, items["major_elective"]["confirmed_amount"])
+            self.assertEqual(4, items["innovation"]["confirmed_amount"])
+            self.assertEqual(1, items["social_practice"]["confirmed_amount"])
+            self.assertEqual(5, items["innovation_and_practice"]["confirmed_amount"])
+            self.assertEqual("unknown", items["innovation_and_practice"]["condition_status"])
+            self.assertEqual(
+                "recognized_credit_coverage_missing",
+                items["innovation_and_practice"]["reason"],
+            )
+            self.assertEqual(8, items["cultural_quality"]["confirmed_amount"])
+            self.assertEqual("unknown", items["cultural_quality"]["condition_status"])
+            self.assertEqual("required_subconstraint_unknown", items["cultural_quality"]["reason"])
+            self.assertEqual(0, items["four_histories"]["confirmed_amount"])
+            self.assertEqual("classification_evidence_missing", items["four_histories"]["reason"])
+            self.assertEqual("unknown", items["outside_major_elective"]["condition_status"])
+            self.assertEqual(
+                "outside_major_track_unconfirmed",
+                items["outside_major_elective"]["reason"],
+            )
+            self.assertIn("人工补充参考规则", items["innovation"]["rule_detail"])
+            self.assertEqual("missing", report["coverage"]["recognized_credits"])
+            self.assertEqual("X01", report["conflicts"][0]["identity"])
+            self.assertEqual("待归类课程", report["unclassified_courses"][0]["name"])
+            service.close()
+            app.extensions["workspace_database"].close()
+
+    def test_incomplete_progress_sync_keeps_previous_complete_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = WorkspaceDatabase.open(root)
+            database.select_requirement_baseline("basic-graduation-reference-v1")
+            previous = database.publish_snapshot(
+                "progress", "2026-1", {"report": {
+                    "baseline_version": "basic-graduation-reference-v1",
+                    "data_complete": True, "progress": [],
+                }}, source="test",
+            )
+            database.close()
+            app = create_workbench_app(root, gateway_factory=IncompleteProgressGateway)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {
+                "Origin": "http://localhost", "Host": "localhost",
+                "X-CSRF-Token": state["csrf_token"],
+            }
+
+            submitted = client.post(
+                "/api/tasks", json={"operation": "refresh-progress"}, headers=headers,
+            )
+            task_id = submitted.get_json()["id"]
+            service = app.extensions["observation_service"]
+            self.assertTrue(service.wait(task_id, 2))
+            inspected = client.get(f"/api/tasks/{task_id}").get_json()
+            self.assertEqual(TaskState.FAILED.value, inspected["state"])
+            self.assertIn("page 2 failed", inspected["error"])
+            self.assertEqual(
+                previous["id"],
+                app.extensions["workspace_database"].latest_snapshot("progress")["id"],
+            )
+            service.close()
+            app.extensions["workspace_database"].close()
 
     def test_selecting_requirement_baseline_preserves_an_existing_workspace(self):
         with tempfile.TemporaryDirectory() as directory:

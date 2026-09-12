@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
+EvidenceKind = Literal["grade_records", "grade_and_recognition", "classification"]
+ConstraintKind = Literal["", "single_track"]
+EVIDENCE_KINDS = frozenset({"grade_records", "grade_and_recognition", "classification"})
+CONSTRAINT_KINDS = frozenset({"", "single_track"})
+
 
 @dataclass(frozen=True)
 class BaselineRequirement:
@@ -14,8 +19,10 @@ class BaselineRequirement:
     unit: Literal["credits", "courses"] = "credits"
     source: str = ""
     parent: str = ""
-    constraint: str = ""
+    constraint: ConstraintKind = ""
+    evidence: EvidenceKind = "grade_records"
     contribution_keys: tuple[str, ...] = ()
+    required_conditions: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -32,7 +39,7 @@ class RequirementBaselineDefinition:
     coverage: str
     disclaimer: str
     requirements: tuple[BaselineRequirement, ...]
-    category_mapping: tuple[tuple[str, str], ...]
+    category_mapping: tuple[tuple[str, str | tuple[str, ...]], ...]
     manual_supplements: tuple[str, ...] = ()
     requires_explicit_selection: bool = True
 
@@ -47,8 +54,23 @@ class RequirementBaselineDefinition:
             raise ValueError(f"non-positive requirement in {self.version}")
         if any(item.parent and item.parent not in keys for item in self.requirements):
             raise ValueError(f"unknown parent requirement in {self.version}")
+        if any(
+            condition not in keys
+            for item in self.requirements
+            for condition in item.required_conditions
+        ):
+            raise ValueError(f"unknown required condition in {self.version}")
+        if any(item.evidence not in EVIDENCE_KINDS for item in self.requirements):
+            raise ValueError(f"unknown evidence kind in {self.version}")
+        if any(item.constraint not in CONSTRAINT_KINDS for item in self.requirements):
+            raise ValueError(f"unknown constraint kind in {self.version}")
         allowed_mapping_targets = keys | contribution_keys
-        if any(target not in allowed_mapping_targets for _, target in self.category_mapping):
+        mapping_targets = (
+            target
+            for _, value in self.category_mapping
+            for target in ((value,) if isinstance(value, str) else value)
+        )
+        if any(target not in allowed_mapping_targets for target in mapping_targets):
             raise ValueError(f"unknown category mapping target in {self.version}")
 
     def to_dict(self) -> dict[str, Any]:
@@ -91,12 +113,20 @@ _BASELINES = (
         requirements=(
             BaselineRequirement("major_elective", "本专业选修", 3.0),
             BaselineRequirement("outside_major_elective", "跨专业发展课程", 10.0),
-            BaselineRequirement("cultural_quality", "文化素质课程", 8.0),
+            BaselineRequirement(
+                "cultural_quality", "文化素质课程", 8.0,
+                evidence="grade_and_recognition",
+            ),
             BaselineRequirement(
                 "innovation_and_practice", "创新创业 + 社会实践", 6.0,
+                evidence="grade_and_recognition",
                 contribution_keys=("innovation", "social_practice"),
+                required_conditions=("social_practice",),
             ),
-            BaselineRequirement("social_practice", "社会实践", 1.0),
+            BaselineRequirement(
+                "social_practice", "社会实践", 1.0,
+                evidence="grade_and_recognition",
+            ),
         ),
         category_mapping=_CATEGORY_MAPPING,
     ),
@@ -116,20 +146,34 @@ _BASELINES = (
         ),
         requirements=(
             BaselineRequirement("major_elective", "本专业选修", 3.0, source="extracted-guide"),
-            BaselineRequirement("innovation", "创新创业", 4.0, source="manual-supplement"),
-            BaselineRequirement("social_practice", "社会实践", 1.0, source="extracted-guide"),
+            BaselineRequirement(
+                "innovation", "创新创业", 4.0,
+                source="manual-supplement", evidence="grade_and_recognition",
+            ),
+            BaselineRequirement(
+                "social_practice", "社会实践", 1.0,
+                source="extracted-guide", evidence="grade_and_recognition",
+            ),
             BaselineRequirement(
                 "innovation_and_practice", "创新创业 + 社会实践", 6.0,
-                source="extracted-guide", contribution_keys=("innovation", "social_practice"),
+                source="extracted-guide", evidence="grade_and_recognition",
+                contribution_keys=("innovation", "social_practice"),
+                required_conditions=("innovation", "social_practice"),
             ),
-            BaselineRequirement("cultural_quality", "文化素质课程", 8.0, source="extracted-guide"),
+            BaselineRequirement(
+                "cultural_quality", "文化素质课程", 8.0,
+                source="extracted-guide", evidence="grade_and_recognition",
+                required_conditions=("cultural_quality_d", "four_histories"),
+            ),
             BaselineRequirement(
                 "cultural_quality_d", "文化素质 D 类", 2.0,
                 source="extracted-guide", parent="cultural_quality",
+                evidence="classification",
             ),
             BaselineRequirement(
                 "four_histories", "四史课程", 1, unit="courses",
                 source="extracted-guide", parent="cultural_quality",
+                evidence="classification",
             ),
             BaselineRequirement(
                 "outside_major_elective", "跨专业发展课程", 10.0,
