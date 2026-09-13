@@ -346,6 +346,22 @@ def create_workbench_app(
         plan = database.latest_plan()
         return (jsonify(plan), 200) if plan else (jsonify({"error": "not found"}), 404)
 
+    @app.post("/api/progress-projection")
+    def progress_projection():
+        if request.content_length and request.content_length > 256 * 1024:
+            return jsonify({"error": "request body too large"}), 413
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or not isinstance(body.get("goals"), list):
+            return jsonify({"error": "goals must be an array"}), 400
+        if len(body["goals"]) > 100 or not all(
+            isinstance(goal, dict)
+            and isinstance(goal.get("preferences", []), list)
+            and len(goal.get("preferences", [])) <= 100
+            for goal in body["goals"]
+        ):
+            return jsonify({"error": "goals or preferences are invalid or too large"}), 400
+        return jsonify(core.progress_projection(body["goals"]))
+
     @app.post("/api/executions/selection")
     def execute_selection():
         body = request.get_json(silent=True)

@@ -194,11 +194,15 @@ describe("requirement baseline selection", () => {
     const overlap = readyState() as WorkbenchState;
     const innovation = overlap.graduation_progress.report!.progress.find(item => item.key === "innovation")!;
     Object.assign(innovation, {
-      declared_amount: 4, estimated_amount: 4, estimated_gap: 0, manual_review_required: true,
+      declared_amount: 0, enrolled_amount: 2, queued_amount: 2,
+      labeled_amount: 0, estimated_amount: 4, estimated_gap: 0,
       declarations: [
-        { identity: "declared-enrolled", note: "关联已选", credits: 2, linked_course_identity: "ENROLLED", contributes: true },
-        { identity: "declared-queued", note: "关联队列", credits: 2, linked_course_identity: "QUEUED", contributes: true },
+        { identity: "declared-enrolled", note: "关联已选", credits: 2, linked_course_identity: "ENROLLED", contributes: false, overlap_status: "linked_enrolled_course" },
+        { identity: "declared-queued", note: "关联队列", credits: 2, linked_course_identity: "QUEUED", contributes: false, overlap_status: "linked_queued_course" },
       ],
+      enrolled_courses: [{ identity: "ENROLLED", name: "本学期创新", credits: 2 }],
+      queued_courses: [{ identity: "QUEUED", name: "队列创新", credits: 2 }],
+      pending_verification: [],
     });
     overlap.recognized_credits = [];
     overlap.snapshots.timetable = {
@@ -210,14 +214,32 @@ describe("requirement baseline selection", () => {
     overlap.snapshots.selection = {
       id: "selection-1", kind: "selection", term: "2026-1", source: "test",
       source_at: "2026-01-01", payload: { sections: [
-        { identity: "section-queued", course_code: "QUEUED", course_name: "队列创新", category: "创新研修课", credits: 2 },
+        { identity: "section-queued", course_code: "QUEUED", course_name: "队列创新", category: "创新研修课", credits: 2, weekday: 1, start_period: 1, end_period: 2 },
       ] },
     };
     overlap.latest_plan = { goals: [{ goal_id: "goal-1", course_identity: "QUEUED", rank: 1, preferences: [{ section_id: "section-queued", rank: 1 }] }] };
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const projectionBodies: Array<{ goals: unknown[] }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/state") return new Response(JSON.stringify(overlap));
       if (url === "/api/notices/candidates") return new Response(JSON.stringify({ notices: [] }));
+      if (url === "/api/progress-projection") {
+        const body = JSON.parse(String(init?.body)) as { goals: unknown[] };
+        projectionBodies.push(body);
+        if (!body.goals.length) {
+          const recalculated = structuredClone(overlap.graduation_progress);
+          const item = recalculated.report!.progress.find(progress => progress.key === "innovation")!;
+          Object.assign(item, {
+            declared_amount: 2, queued_amount: 0, estimated_amount: 4,
+            queued_courses: [], declarations: [
+              innovation.declarations![0],
+              { ...innovation.declarations![1], contributes: true, overlap_status: "linked_identity_not_confirmed" },
+            ],
+          });
+          return new Response(JSON.stringify(recalculated));
+        }
+        return new Response(JSON.stringify(overlap.graduation_progress));
+      }
       throw new Error(`unexpected request: ${url}`);
     }));
     Element.prototype.scrollIntoView = vi.fn();
@@ -230,8 +252,15 @@ describe("requirement baseline selection", () => {
     expect(within(card).getByText(/本学期已选 2/)).toBeTruthy();
     expect(within(card).getByText(/队列预览 2/)).toBeTruthy();
     expect(within(card).getByText(/已确认缺口：4 学分/)).toBeTruthy();
-    expect(within(card).getAllByText(/已关联本学期或队列课程，不重复计入/)).toHaveLength(2);
-    expect(within(card).getByText(/可能重叠，请人工核验/)).toBeTruthy();
+    expect(within(card).getAllByText(/已关联事实，不重复计入/)).toHaveLength(2);
+
+    const user = userEvent.setup();
+    const removePreview = (await screen.findAllByRole("button", { name: "移出队列" }))
+      .find(button => button.textContent === "移出队列")!;
+    await user.click(removePreview);
+    await waitFor(() => expect(within(card).getByText(/队列预览 0/)).toBeTruthy());
+    expect(within(card).getByText(/用户申报 2/)).toBeTruthy();
+    expect(projectionBodies[projectionBodies.length - 1]?.goals).toEqual([]);
   });
 
   it("creates, edits, and deletes a local recognized-credit declaration", async () => {

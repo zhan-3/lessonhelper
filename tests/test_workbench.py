@@ -1305,6 +1305,122 @@ class WorkbenchApiTests(unittest.TestCase):
             reopened.extensions["observation_service"].close()
             reopened.extensions["workspace_database"].close()
 
+    def test_progress_projection_unifies_current_queue_and_declaration_without_remote_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = ReferenceProgressGateway()
+            app = create_workbench_app(Path(directory), gateway_factory=lambda: gateway)
+            database = app.extensions["workspace_database"]
+            with database.connection:
+                profile_id = database._insert_profile({"grade": "2025"})
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {
+                "Origin": "http://localhost", "Host": "localhost",
+                "X-CSRF-Token": state["csrf_token"],
+            }
+            client.post("/api/requirement-baseline-selection", json={
+                "version": "basic-graduation-reference-v1",
+                "confirmation": "basic-graduation-reference-v1",
+            }, headers=headers)
+            task = client.post(
+                "/api/tasks", json={"operation": "refresh-progress"}, headers=headers,
+            ).get_json()
+            service = app.extensions["observation_service"]
+            self.assertTrue(service.wait(task["id"], 2))
+            database.publish_snapshot("timetable", "2026-1", {
+                "enrolled_courses": [
+                    {"code": "E1", "name": "本学期创新", "category": "创新研修课", "credits": 1},
+                ],
+            }, source="test")
+            database.publish_snapshot("selection", "2026-1", {"sections": [
+                {"identity": "section-e1", "course_code": "E1", "course_name": "重复创新", "category": "创新研修课", "credits": 1},
+                {"identity": "section-q1", "course_code": "Q1", "course_name": "队列实践", "category": "社会实践", "credits": 1},
+            ]}, source="test")
+            client.post("/api/recognized-credits", json={
+                "identity": "recognized-q1", "category": "social_practice", "credits": 1,
+                "note": "与队列课程关联", "recognized_on": "2026-01-01",
+                "linked_course_identity": "Q1",
+            }, headers=headers)
+            goals = [
+                {"goal_id": "g1", "course_identity": "E1", "rank": 1,
+                 "preferences": [{"section_id": "section-e1", "rank": 1}]},
+                {"goal_id": "g2", "course_identity": "Q1", "rank": 2,
+                 "preferences": [{"section_id": "section-q1", "rank": 1}]},
+            ]
+
+            unscoped = client.post(
+                "/api/progress-projection", json={"goals": goals}, headers=headers,
+            ).get_json()
+            unscoped_items = {
+                item["key"]: item for item in unscoped["report"]["progress"]
+            }
+            self.assertEqual(0, unscoped_items["innovation"]["enrolled_amount"])
+            self.assertEqual(0, unscoped_items["social_practice"]["queued_amount"])
+
+            database.publish_snapshot("timetable", "2026-1", {
+                "enrolled_courses": [
+                    {"code": "E1", "name": "本学期创新", "category": "创新研修课", "credits": 1},
+                ],
+            }, source="test", profile_id=profile_id)
+            database.publish_snapshot("selection", "2026-1", {"sections": [
+                {"identity": "section-e1", "course_code": "E1", "course_name": "重复创新", "category": "创新研修课", "credits": 1},
+                {"identity": "section-q1", "course_code": "Q1", "course_name": "队列实践", "category": "社会实践", "credits": 1},
+                {"identity": "section-d1", "course_code": "D1", "course_name": "标签文化", "category": "文理通识-文化素质教育课", "credits": 2},
+                {"identity": "section-o2", "course_code": "O2", "course_name": "标签体系", "category": "跨专业发展课程", "credits": 2},
+            ]}, source="test", profile_id=profile_id)
+            goals.extend([
+                {"goal_id": "g3", "course_identity": "D1", "rank": 3,
+                 "preferences": [{"section_id": "section-d1", "rank": 1}]},
+                {"goal_id": "g4", "course_identity": "O2", "rank": 4,
+                 "preferences": [{"section_id": "section-o2", "rank": 1}]},
+            ])
+            self.assertEqual(200, client.put("/api/course-labels/D1", json={
+                "d_category": True, "four_histories": True, "outside_track": "",
+            }, headers=headers).status_code)
+            self.assertEqual(200, client.put("/api/course-labels/O2", json={
+                "d_category": False, "four_histories": False,
+                "outside_track": "track-a",
+            }, headers=headers).status_code)
+            self.assertEqual(200, client.put(
+                "/api/outside-major-track", json={"track": "track-a"}, headers=headers,
+            ).status_code)
+            response = client.post(
+                "/api/progress-projection", json={"goals": goals}, headers=headers,
+            )
+            self.assertEqual(200, response.status_code)
+            items = {
+                item["key"]: item
+                for item in response.get_json()["report"]["progress"]
+            }
+            self.assertEqual(1, items["innovation"]["enrolled_amount"])
+            self.assertEqual(0, items["innovation"]["queued_amount"])
+            self.assertEqual(1, items["social_practice"]["queued_amount"])
+            self.assertEqual(0, items["social_practice"]["declared_amount"])
+            self.assertEqual("linked_queued_course", items["social_practice"]["declarations"][0]["overlap_status"])
+            self.assertEqual(7, items["innovation_and_practice"]["estimated_amount"])
+            self.assertEqual(2, items["cultural_quality_d"]["queued_amount"])
+            self.assertEqual(1, items["four_histories"]["queued_amount"])
+            self.assertEqual(2, items["outside_major_elective"]["queued_amount"])
+            self.assertEqual(1, gateway.connect_count)
+            self.assertEqual(403, client.post(
+                "/api/progress-projection", json={"goals": goals},
+            ).status_code)
+            self.assertEqual(400, client.post(
+                "/api/progress-projection",
+                json={"goals": [{"preferences": "not-an-array"}]}, headers=headers,
+            ).status_code)
+            self.assertEqual(400, client.post(
+                "/api/progress-projection",
+                json={"goals": [{"preferences": []}] * 101}, headers=headers,
+            ).status_code)
+            self.assertEqual(413, client.post(
+                "/api/progress-projection",
+                data='{"goals":[],"padding":"' + "x" * (256 * 1024) + '"}',
+                content_type="application/json", headers=headers,
+            ).status_code)
+            service.close()
+            database.close()
+
     def test_course_label_rejects_free_text_identity_and_mutations_require_csrf(self):
         with tempfile.TemporaryDirectory() as directory:
             app = create_workbench_app(Path(directory), gateway_factory=FakeGateway)

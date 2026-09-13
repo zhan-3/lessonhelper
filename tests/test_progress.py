@@ -8,6 +8,8 @@ from course_progress.progress import (
     Requirement,
     RequirementBaseline,
     apply_course_label_estimates,
+    apply_projected_course_estimates,
+    apply_recognized_credit_estimates,
     assess_progress,
     baseline_from_definition,
     calculate_progress,
@@ -227,6 +229,62 @@ class ProgressTests(unittest.TestCase):
         )
         outside = next(item for item in unknown_track if item["key"] == "outside_major_elective")
         self.assertEqual(["O01"], outside["unknown_track_course_identities"])
+
+    def test_projected_sources_use_confirmed_enrolled_queue_priority_and_combination_dedupe(self):
+        baseline_definition = requirement_baseline("basic-graduation-reference-v1")
+        baseline = baseline_from_definition(baseline_definition)
+        report = evaluate_progress((
+            AcademicRecord("2025春季", "C1", "已修创新", "任选", "创新研修课", 2.0, True),
+        ), baseline)
+        confirmed = confirmed_progress_items(report, data_complete=True)
+        declared = apply_recognized_credit_estimates(confirmed, baseline_definition, ({
+            "identity": "declaration-1", "category": "innovation", "credits": 1,
+            "linked_course_identity": "", "note": "合成申报",
+        },))
+        labeled = apply_course_label_estimates(declared, (), (), "")
+
+        projected = apply_projected_course_estimates(
+            labeled,
+            baseline_definition,
+            enrolled_courses=(
+                {"code": "C1", "name": "已修创新", "category": "创新研修课", "credits": 2},
+                {"code": "E1", "name": "本学期创新", "category": "创新研修课", "credits": 1},
+            ),
+            queued_courses=(
+                {"course_code": "E1", "course_name": "重复队列创新", "category": "创新研修课", "credits": 1},
+                {"course_code": "Q1", "course_name": "队列实践", "category": "社会实践", "credits": 1},
+                {"course_code": "Q2", "course_name": "待核验文化", "category": "文理通识-文化素质教育课", "credits": 2},
+                {"course_code": "Q3", "course_name": "明确体系课程", "category": "跨专业发展课程", "credits": 2},
+                {"course_code": "Q4", "course_name": "待核验文化", "category": "文理通识-文化素质教育课", "credits": 2},
+                {"course_code": "Q5", "course_name": "体系未知课程", "category": "跨专业发展课程", "credits": 2},
+                {"course_code": "BAD", "course_name": "异常学分", "category": "创新研修课", "credits": float("nan")},
+            ),
+            labels=(
+                {"course_identity": "Q2", "d_category": True, "four_histories": True, "outside_track": ""},
+                {"course_identity": "Q3", "d_category": False, "four_histories": False, "outside_track": "track-a"},
+            ), selected_track="track-a",
+        )
+        items = {item["key"]: item for item in projected}
+
+        self.assertEqual(2, items["innovation"]["confirmed_amount"])
+        self.assertEqual(1, items["innovation"]["enrolled_amount"])
+        self.assertEqual(0, items["innovation"]["queued_amount"])
+        self.assertIn("BAD", {
+            pending["identity"] for pending in items["innovation"]["pending_verification"]
+            if pending["kind"] == "invalid_credits"
+        })
+        self.assertEqual(1, items["innovation"]["declared_amount"])
+        self.assertEqual(4, items["innovation"]["estimated_amount"])
+        self.assertEqual(1, items["social_practice"]["queued_amount"])
+        self.assertEqual(5, items["innovation_and_practice"]["estimated_amount"])
+        self.assertEqual("unknown", items["innovation_and_practice"]["estimated_condition_status"])
+        self.assertEqual(4, items["cultural_quality"]["queued_amount"])
+        self.assertEqual(2, items["cultural_quality_d"]["queued_amount"])
+        self.assertEqual(1, items["four_histories"]["queued_amount"])
+        self.assertEqual("Q4", items["cultural_quality_d"]["pending_verification"][0]["identity"])
+        self.assertEqual("Q4", items["four_histories"]["pending_verification"][0]["identity"])
+        self.assertEqual(2, items["outside_major_elective"]["queued_amount"])
+        self.assertIn("Q5", items["outside_major_elective"]["unknown_track_course_identities"])
 
     def test_incomplete_grade_data_cannot_prove_a_deficit(self):
         baseline = baseline_from_definition(

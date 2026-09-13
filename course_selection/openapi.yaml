@@ -56,6 +56,15 @@ paths:
   /api/plans/latest:
     get:
       responses: {'200': {description: Latest persisted read-only plan}, '404': {description: No plan}}
+  /api/progress-projection:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PlanRequest'}}}}
+      responses:
+        '200':
+          description: Unified local projection without academic-system access
+          content: {application/json: {schema: {$ref: '#/components/schemas/GraduationProgress'}}}
+        '400': {description: Invalid goals}
+        '413': {description: Projection request too large}
   /api/executions:
     get:
       responses: {'200': {description: Local redacted execution history}}
@@ -281,9 +290,16 @@ components:
           enum: [confirmed_minimum_met, confirmed_below_minimum, grade_data_incomplete, recognized_credit_coverage_missing, classification_evidence_missing, outside_major_track_unconfirmed, required_subconstraint_unknown, required_subconstraint_not_satisfied]
         reason_detail: {type: string}
         declared_amount: {type: number}
+        labeled_amount: {type: number}
+        enrolled_amount: {type: number}
+        queued_amount: {type: number}
         estimated_amount: {type: number}
         estimated_gap: {type: number}
+        estimated_condition_detail: {type: string}
         declarations: {type: array, items: {type: object, additionalProperties: true}}
+        enrolled_courses: {type: array, items: {type: object, additionalProperties: true}}
+        queued_courses: {type: array, items: {type: object, additionalProperties: true}}
+        pending_verification: {type: array, items: {type: object, additionalProperties: true}}
         manual_review_required: {type: boolean}
         labeled_courses: {type: array, items: {type: object, additionalProperties: true}}
         estimate_replaces_confirmed: {type: boolean}

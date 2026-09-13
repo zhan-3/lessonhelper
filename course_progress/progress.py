@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
@@ -540,6 +541,242 @@ def apply_course_label_estimates(
                 if not labels_by_identity.get(identity, {}).get("outside_track")
             )
         result.append(updated)
+    return result
+
+
+def apply_projected_course_estimates(
+    progress_items: list[dict[str, object]],
+    baseline_definition: Mapping[str, object],
+    *,
+    enrolled_courses: Iterable[Mapping[str, object]],
+    queued_courses: Iterable[Mapping[str, object]],
+    labels: Iterable[Mapping[str, object]],
+    selected_track: str,
+) -> list[dict[str, object]]:
+    """Unify local projected sources with confirmed > enrolled > queue priority."""
+    def course_fact(course: Mapping[str, object]) -> dict[str, object]:
+        code = str(course.get("code") or course.get("course_code") or "").strip()
+        name = str(course.get("name") or course.get("course_name") or "").strip()
+        try:
+            credits = float(course.get("credits") or course.get("credit") or 0)
+        except (TypeError, ValueError):
+            credits = 0.0
+        credits_valid = math.isfinite(credits) and 0 <= credits <= 30
+        if not credits_valid:
+            credits = 0.0
+        return {
+            **dict(course),
+            "identity": code or " ".join(name.lower().split()),
+            "code": code,
+            "name": name,
+            "category": str(course.get("category", "")).strip(),
+            "credits": credits,
+            "credits_valid": credits_valid,
+        }
+
+    confirmed_identities = {
+        str(course.get("code") or " ".join(str(course.get("name", "")).lower().split()))
+        for item in progress_items
+        for course in item.get("courses", ())
+        if isinstance(course, Mapping)
+    }
+    enrolled_by_identity = {
+        fact["identity"]: fact
+        for course in enrolled_courses
+        if (fact := course_fact(course))["identity"] not in confirmed_identities
+    }
+    queued_by_identity = {
+        fact["identity"]: fact
+        for course in queued_courses
+        if (fact := course_fact(course))["identity"] not in confirmed_identities
+        and fact["identity"] not in enrolled_by_identity
+    }
+    labels_by_identity = {
+        str(label.get("course_identity", "")): label for label in labels
+    }
+    raw_mapping = baseline_definition.get("category_mapping", {})
+    category_mapping = raw_mapping if isinstance(raw_mapping, Mapping) else {}
+    raw_requirements = baseline_definition.get("requirements", ())
+    requirements = {
+        str(requirement.get("key", "")): requirement
+        for requirement in raw_requirements
+        if isinstance(requirement, Mapping)
+    }
+
+    def targets(course: Mapping[str, object]) -> set[str]:
+        value = category_mapping.get(str(course.get("category", "")))
+        return {value} if isinstance(value, str) else set(value or ())
+
+    def matching(
+        courses: Mapping[object, dict[str, object]], key: str
+    ) -> list[dict[str, object]]:
+        requirement = requirements.get(key, {})
+        accepted = {
+            key,
+            *(str(value) for value in requirement.get("contribution_keys", ())),
+            *(
+                child_key for child_key, child in requirements.items()
+                if child.get("parent") == key
+            ),
+        }
+        values = [course for course in courses.values() if targets(course) & accepted]
+        if key in {"cultural_quality_d", "four_histories"}:
+            field = "d_category" if key == "cultural_quality_d" else "four_histories"
+            values = [
+                course for course in courses.values()
+                if "cultural_quality" in targets(course)
+                and labels_by_identity.get(str(course["identity"]), {}).get(field) is True
+            ]
+        if key == "outside_major_elective":
+            return [
+                course for course in values
+                if selected_track
+                and labels_by_identity.get(str(course["identity"]), {}).get("outside_track")
+                == selected_track
+            ]
+        return values
+
+    result: list[dict[str, object]] = []
+    projected_identities = set(enrolled_by_identity) | set(queued_by_identity)
+    for item in progress_items:
+        key = str(item.get("key", ""))
+        enrolled = matching(enrolled_by_identity, key)
+        queued = matching(queued_by_identity, key)
+        declarations = []
+        for declaration in item.get("declarations", ()):
+            if not isinstance(declaration, Mapping):
+                continue
+            copy = dict(declaration)
+            linked = str(copy.get("linked_course_identity", ""))
+            if copy.get("contributes") is not False and linked in projected_identities:
+                copy["contributes"] = False
+                copy["overlap_status"] = (
+                    "linked_enrolled_course" if linked in enrolled_by_identity
+                    else "linked_queued_course"
+                )
+            declarations.append(copy)
+        declared_amount = sum(
+            float(item.get("credits", 0))
+            for item in declarations if item.get("contributes") is not False
+        )
+        labeled_courses = [
+            course for course in item.get("labeled_courses", ())
+            if isinstance(course, Mapping)
+        ]
+        labeled_amount = (
+            float(len(labeled_courses)) if item.get("unit") == "courses"
+            else sum(float(course.get("credits", 0)) for course in labeled_courses)
+        )
+        confirmed_amount = float(
+            item.get("confirmed_amount", item.get("completed_credits", 0))
+        )
+        base_amount = (
+            float(item.get("estimated_amount", 0))
+            if item.get("estimate_replaces_confirmed") is True
+            else confirmed_amount + declared_amount + labeled_amount
+        )
+        if item.get("unit") == "courses":
+            enrolled_amount = float(len(enrolled))
+            queued_amount = float(len(queued))
+        else:
+            enrolled_amount = sum(float(course["credits"]) for course in enrolled)
+            queued_amount = sum(float(course["credits"]) for course in queued)
+        estimated_amount = base_amount + enrolled_amount + queued_amount
+        minimum = float(item.get("minimum", item.get("required_credits", 0)))
+        gap = max(0.0, minimum - estimated_amount)
+        estimated_status = (
+            "estimated_satisfied"
+            if gap == 0 and not (key == "outside_major_elective" and not selected_track)
+            else "unknown"
+        )
+        pending = [
+            {"kind": "declaration_overlap", "identity": declaration.get("identity")}
+            for declaration in declarations
+            if declaration.get("overlap_status") in {
+                "unverified_overlap", "linked_identity_not_confirmed",
+            }
+        ]
+        pending.extend(
+            {"kind": "outside_track_unknown", "identity": identity}
+            for identity in item.get("unknown_track_course_identities", ())
+        )
+        projected_courses = [*enrolled_by_identity.values(), *queued_by_identity.values()]
+        pending.extend(
+            {"kind": "invalid_credits", "identity": course["identity"]}
+            for course in projected_courses
+            if item.get("unit") != "courses"
+            and not course["credits_valid"] and targets(course) & {
+                key,
+                *(str(value) for value in requirements.get(key, {}).get("contribution_keys", ())),
+                *(child_key for child_key, child in requirements.items() if child.get("parent") == key),
+            }
+        )
+        cultural_unlabeled = [
+            course for course in projected_courses
+            if "cultural_quality" in targets(course)
+            and not labels_by_identity.get(str(course["identity"]), {}).get(
+                "d_category" if key == "cultural_quality_d" else "four_histories"
+            )
+        ] if key in {"cultural_quality_d", "four_histories"} else []
+        pending.extend(
+            {"kind": "classification_unknown", "identity": course["identity"]}
+            for course in cultural_unlabeled
+        )
+        projected_outside = [
+            course for course in projected_courses
+            if "outside_major_elective" in targets(course)
+        ] if key == "outside_major_elective" else []
+        projected_unknown_tracks = [
+            str(course["identity"]) for course in projected_outside
+            if not labels_by_identity.get(str(course["identity"]), {}).get("outside_track")
+        ]
+        pending.extend(
+            {"kind": "outside_track_unknown", "identity": identity}
+            for identity in projected_unknown_tracks
+        )
+        result.append({
+            **item,
+            "declared_amount": round(declared_amount, 6),
+            "labeled_amount": round(labeled_amount, 6),
+            "enrolled_amount": round(enrolled_amount, 6),
+            "queued_amount": round(queued_amount, 6),
+            "estimated_amount": round(estimated_amount, 6),
+            "estimated_gap": round(gap, 6),
+            "estimated_condition_status": estimated_status,
+            "estimated_condition_detail": (
+                "预计可满足" if estimated_status == "estimated_satisfied" else "仍需核验"
+            ),
+            "declarations": declarations,
+            "enrolled_courses": enrolled,
+            "queued_courses": queued,
+            "pending_verification": pending,
+            **({
+                "unknown_track_course_identities": sorted(set(
+                    item.get("unknown_track_course_identities", ())
+                ) | set(projected_unknown_tracks)),
+                "other_track_course_identities": sorted(set(
+                    item.get("other_track_course_identities", ())
+                ) | {
+                    str(course["identity"]) for course in projected_outside
+                    if labels_by_identity.get(str(course["identity"]), {}).get("outside_track")
+                    and labels_by_identity[str(course["identity"])]["outside_track"] != selected_track
+                }),
+            } if key == "outside_major_elective" else {}),
+        })
+
+    by_key = {str(item.get("key", "")): item for item in result}
+    for key, requirement in requirements.items():
+        conditions = [
+            by_key.get(str(condition))
+            for condition in requirement.get("required_conditions", ())
+        ]
+        if key in by_key and conditions and any(
+            not condition
+            or condition.get("estimated_condition_status") != "estimated_satisfied"
+            for condition in conditions
+        ):
+            by_key[key]["estimated_condition_status"] = "unknown"
+            by_key[key]["estimated_condition_detail"] = "必要子约束仍需核验"
     return result
 
 

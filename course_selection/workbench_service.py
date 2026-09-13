@@ -18,6 +18,7 @@ from course_progress.baselines import requirement_baseline, requirement_baseline
 from course_progress.credentials import credential_store
 from course_progress.progress import (
     apply_course_label_estimates,
+    apply_projected_course_estimates,
     apply_recognized_credit_estimates,
 )
 
@@ -225,10 +226,33 @@ class WorkbenchService:
             course for course in report.get("unclassified_courses", ())
             if isinstance(course, dict)
         )
-        return {
-            str(course.get("code") or " ".join(str(course.get("name", "")).lower().split())): course
-            for course in courses
-        }
+        profile_id = (self.database.current_profile() or {}).get("version_id")
+        timetable = self.database.latest_snapshot("timetable") or {}
+        if profile_id and timetable.get("profile_id") == profile_id:
+            courses.extend(
+                course for course in (timetable.get("payload") or {}).get("enrolled_courses", ())
+                if isinstance(course, dict)
+            )
+        selection = self.database.latest_snapshot("selection") or {}
+        if profile_id and selection.get("profile_id") == profile_id:
+            courses.extend(
+                course for course in (selection.get("payload") or {}).get("sections", ())
+                if isinstance(course, dict)
+            )
+        facts: dict[str, dict[str, Any]] = {}
+        for course in courses:
+            code = str(course.get("code") or course.get("course_code") or "").strip()
+            name = str(course.get("name") or course.get("course_name") or "").strip()
+            identity = code or " ".join(name.lower().split())
+            if identity:
+                facts[identity] = {
+                    **course,
+                    "code": code,
+                    "name": name,
+                    "category": str(course.get("category", "")),
+                    "credits": course.get("credits", course.get("credit", 0)),
+                }
+        return facts
 
     def course_labels(self) -> list[dict[str, Any]]:
         selected = self.selected_requirement_baseline()
@@ -289,7 +313,7 @@ class WorkbenchService:
         self.database.clear_outside_major_track()
 
     def _with_local_estimates(
-        self, classified: dict[str, Any]
+        self, classified: dict[str, Any], *, goals: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
         report = classified.get("report")
         selected = self.selected_requirement_baseline()
@@ -300,12 +324,54 @@ class WorkbenchService:
         progress = apply_recognized_credit_estimates(
             copied_report.get("progress", []), selected, self.recognized_credits()
         )
+        labels = self.course_labels()
         track = self.outside_major_track()
-        copied_report["progress"] = apply_course_label_estimates(
+        selected_track = "" if track is None else track["track"]
+        progress = apply_course_label_estimates(
             progress,
             copied_report.get("unclassified_courses", []),
-            self.course_labels(),
-            "" if track is None else track["track"],
+            labels,
+            selected_track,
+        )
+        timetable = self.database.latest_snapshot("timetable") or {}
+        selection = self.database.latest_snapshot("selection") or {}
+        profile_id = (self.database.current_profile() or {}).get("version_id")
+        timetable_payload = timetable.get("payload") or {}
+        if not profile_id or timetable.get("profile_id") != profile_id:
+            timetable_payload = {}
+        selection_payload = selection.get("payload") or {}
+        if not profile_id or selection.get("profile_id") != profile_id:
+            selection_payload = {}
+        sections = selection_payload.get("sections", [])
+        active_goals = goals
+        if active_goals is None:
+            latest_plan = self.database.latest_plan() or {}
+            plan_snapshot_id = latest_plan.get("selection_snapshot_id")
+            active_goals = (
+                latest_plan.get("goals", [])
+                if not plan_snapshot_id or plan_snapshot_id == selection.get("id")
+                else []
+            )
+        section_by_identity = {
+            str(section.get("identity") or section.get("section_id") or ""): section
+            for section in sections if isinstance(section, dict)
+        }
+        queued_sections = [
+            section_by_identity[section_id]
+            for goal in active_goals if isinstance(goal, dict)
+            for preferences in (goal.get("preferences"),)
+            if isinstance(preferences, list)
+            for preference in preferences[:1]
+            if isinstance(preference, dict)
+            and (section_id := str(preference.get("section_id", ""))) in section_by_identity
+        ]
+        copied_report["progress"] = apply_projected_course_estimates(
+            progress,
+            selected,
+            enrolled_courses=timetable_payload.get("enrolled_courses", ()),
+            queued_courses=queued_sections,
+            labels=labels,
+            selected_track=selected_track,
         )
         return result
 
@@ -331,8 +397,10 @@ class WorkbenchService:
         status = "ready" if report.get("data_complete") is True else "incomplete"
         return {"status": status, "report": report, "snapshot": snapshot}
 
-    def graduation_progress(self) -> dict[str, Any]:
-        """Read progress only under the explicitly selected immutable baseline."""
+    def graduation_progress(
+        self, *, goals: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        """Read progress with unified local projections under the selected baseline."""
         snapshot = self.database.latest_snapshot("progress")
         if snapshot is not None:
             payload = snapshot.get("payload", {})
@@ -344,7 +412,7 @@ class WorkbenchService:
             if profile_id and snapshot.get("profile_id") != profile_id:
                 return {"status": "not_applicable", "report": None, "snapshot": snapshot}
             return self._with_local_estimates(
-                self._classified_progress(report, snapshot=snapshot)
+                self._classified_progress(report, snapshot=snapshot), goals=goals
             )
 
         # Keep reports generated by the existing standalone collector visible
@@ -361,8 +429,12 @@ class WorkbenchService:
         if not report.get("baseline_version"):
             report = {**report, "baseline_version": "guide-2026"}
         return self._with_local_estimates(
-            self._classified_progress(report)
+            self._classified_progress(report), goals=goals
         )
+
+    def progress_projection(self, goals: list[dict[str, Any]]) -> dict[str, Any]:
+        """Recalculate an unsaved local queue without academic-system access."""
+        return self.graduation_progress(goals=goals)
 
     def progress_context(self) -> dict[str, Any]:
         selected = self.selected_requirement_baseline()

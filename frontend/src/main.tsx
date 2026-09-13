@@ -98,6 +98,7 @@ function ConfirmDialog({ pending, onConfirm, onCancel }: { pending: PendingConfi
 
 export function App() {
   const [state, setState] = useState<WorkbenchState | null>(null);
+  const [progressProjection, setProgressProjection] = useState<WorkbenchState["graduation_progress"] | null>(null);
   const [candidates, setCandidates] = useState<CandidateNotice[]>([]);
   const [task, setTask] = useState<Task | null>(null);
   const [goals, setGoals] = useState<PlanGoal[]>([]);
@@ -177,6 +178,26 @@ export function App() {
       setQueueResults([]);
     }
   }, [state?.snapshots.selection?.term]);
+
+  useEffect(() => {
+    if (!state) return;
+    setProgressProjection(null);
+    const controller = new AbortController();
+    fetch("/api/progress-projection", {
+      method: "POST",
+      headers: jsonHeaders(state.csrf_token),
+      body: JSON.stringify({ goals }),
+      signal: controller.signal,
+    }).then(async response => {
+      setProgressProjection(response.ok
+        ? await response.json() as WorkbenchState["graduation_progress"]
+        : state.graduation_progress);
+    }).catch(error => {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setProgressProjection(state.graduation_progress);
+    });
+    return () => controller.abort();
+  }, [goals, state?.csrf_token, state?.selected_requirement_baseline?.version, state?.snapshots.progress?.id, state?.snapshots.selection?.id, state?.snapshots.timetable?.id]);
 
   const configureLogin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -789,7 +810,7 @@ export function App() {
       </aside>
     </header>
     {message && <p className="notice" role="status">{message}</p>}
-    <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={state.graduation_progress} selectionWindows={(state.confirmed_notice?.windows as SelectionWindow[] | undefined) ?? []} studentGrade={grade} previewKeys={goals.flatMap(goal => goal.preferences.slice(0, 1).map(preference => preference.section_id))} onTogglePreview={toggleQueueSection} onExecuteSection={executeSection} executionPending={remoteBusy || queueRunning} />
+    <ScheduleBoard timetable={timetable} selection={selection} graduationProgress={progressProjection ?? state.graduation_progress} selectionWindows={(state.confirmed_notice?.windows as SelectionWindow[] | undefined) ?? []} studentGrade={grade} previewKeys={goals.flatMap(goal => goal.preferences.slice(0, 1).map(preference => preference.section_id))} onTogglePreview={toggleQueueSection} onExecuteSection={executeSection} executionPending={remoteBusy || queueRunning} />
 
     <button ref={drawerTriggerRef} className={`data-drawer-trigger ${remoteBusy ? "is-busy" : ""}`} onClick={() => setDataDrawerOpen(true)} aria-haspopup="dialog" aria-expanded={dataDrawerOpen}>
       <span className="data-trigger-mark" aria-hidden="true" />

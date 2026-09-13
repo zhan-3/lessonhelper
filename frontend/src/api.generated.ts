@@ -522,6 +522,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/progress-projection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PlanRequest"];
+                };
+            };
+            responses: {
+                /** @description Unified local projection without academic-system access */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GraduationProgress"];
+                    };
+                };
+                /** @description Invalid goals */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Projection request too large */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/executions": {
         parameters: {
             query?: never;
@@ -1097,9 +1150,22 @@ export interface components {
             reason: "confirmed_minimum_met" | "confirmed_below_minimum" | "grade_data_incomplete" | "recognized_credit_coverage_missing" | "classification_evidence_missing" | "outside_major_track_unconfirmed" | "required_subconstraint_unknown" | "required_subconstraint_not_satisfied";
             reason_detail: string;
             declared_amount?: number;
+            labeled_amount?: number;
+            enrolled_amount?: number;
+            queued_amount?: number;
             estimated_amount?: number;
             estimated_gap?: number;
+            estimated_condition_detail?: string;
             declarations?: {
+                [key: string]: unknown;
+            }[];
+            enrolled_courses?: {
+                [key: string]: unknown;
+            }[];
+            queued_courses?: {
+                [key: string]: unknown;
+            }[];
+            pending_verification?: {
                 [key: string]: unknown;
             }[];
             manual_review_required?: boolean;
