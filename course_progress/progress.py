@@ -443,6 +443,106 @@ def apply_recognized_credit_estimates(
     return result
 
 
+def apply_course_label_estimates(
+    progress_items: list[dict[str, object]],
+    unclassified_courses: Iterable[Mapping[str, object]],
+    labels: Iterable[Mapping[str, object]],
+    selected_track: str,
+) -> list[dict[str, object]]:
+    """Apply user course labels to estimates without rewriting confirmed facts."""
+    course_by_identity: dict[str, Mapping[str, object]] = {}
+    for item in progress_items:
+        for course in item.get("courses", ()):
+            if isinstance(course, Mapping):
+                identity = str(
+                    course.get("code")
+                    or " ".join(str(course.get("name", "")).lower().split())
+                )
+                course_by_identity[identity] = course
+    for course in unclassified_courses:
+        identity = str(
+            course.get("code")
+            or " ".join(str(course.get("name", "")).lower().split())
+        )
+        course_by_identity[identity] = course
+    labels_by_identity = {
+        str(label.get("course_identity", "")): label
+        for label in labels
+        if str(label.get("course_identity", "")) in course_by_identity
+    }
+    result: list[dict[str, object]] = []
+    for item in progress_items:
+        key = str(item.get("key", ""))
+        estimated_amount = float(item.get("estimated_amount", item.get("confirmed_amount", 0)))
+        labeled: list[dict[str, object]] = []
+        estimate_replaces_confirmed = False
+        if key in {"cultural_quality_d", "four_histories"}:
+            field = "d_category" if key == "cultural_quality_d" else "four_histories"
+            confirmed_ids = {
+                str(course.get("code") or " ".join(str(course.get("name", "")).lower().split()))
+                for course in item.get("courses", ())
+                if isinstance(course, Mapping)
+            }
+            matching = {
+                identity: course_by_identity[identity]
+                for identity, label in labels_by_identity.items()
+                if label.get(field) is True and identity not in confirmed_ids
+            }
+            labeled = [
+                {"course_identity": identity, **dict(course), "source": "user_declared"}
+                for identity, course in matching.items()
+            ]
+            addition = (
+                float(len(matching)) if key == "four_histories"
+                else sum(float(course.get("credits", 0)) for course in matching.values())
+            )
+            estimated_amount += addition
+        elif key == "outside_major_elective":
+            estimate_replaces_confirmed = True
+            matching = {
+                identity: course_by_identity[identity]
+                for identity, label in labels_by_identity.items()
+                if selected_track and label.get("outside_track") == selected_track
+            }
+            labeled = [
+                {"course_identity": identity, **dict(course), "source": "user_declared"}
+                for identity, course in matching.items()
+            ]
+            estimated_amount = sum(
+                float(course.get("credits", 0)) for course in matching.values()
+            )
+        minimum = float(item.get("minimum", 0))
+        estimated_gap = max(0.0, minimum - estimated_amount)
+        updated = {
+            **item,
+            "estimated_amount": round(estimated_amount, 6),
+            "estimated_gap": round(estimated_gap, 6),
+            "labeled_courses": labeled,
+            "estimate_replaces_confirmed": estimate_replaces_confirmed,
+        }
+        if key in {"cultural_quality_d", "four_histories", "outside_major_elective"}:
+            updated["estimated_condition_status"] = (
+                "estimated_satisfied" if estimated_gap == 0 else "unknown"
+            )
+        if key == "outside_major_elective":
+            updated["selected_track"] = selected_track
+            updated["other_track_course_identities"] = [
+                identity for identity, label in labels_by_identity.items()
+                if label.get("outside_track") and label.get("outside_track") != selected_track
+            ]
+            outside_identities = {
+                str(course.get("code") or " ".join(str(course.get("name", "")).lower().split()))
+                for course in item.get("courses", ())
+                if isinstance(course, Mapping)
+            }
+            updated["unknown_track_course_identities"] = sorted(
+                identity for identity in outside_identities
+                if not labels_by_identity.get(identity, {}).get("outside_track")
+            )
+        result.append(updated)
+    return result
+
+
 def confirmed_progress_items(
     report: ProgressReport, *, data_complete: bool
 ) -> list[dict[str, object]]:

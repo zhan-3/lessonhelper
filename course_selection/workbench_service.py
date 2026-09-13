@@ -16,7 +16,10 @@ from typing import Any
 
 from course_progress.baselines import requirement_baseline, requirement_baselines
 from course_progress.credentials import credential_store
-from course_progress.progress import apply_recognized_credit_estimates
+from course_progress.progress import (
+    apply_course_label_estimates,
+    apply_recognized_credit_estimates,
+)
 
 from .notice import fetch_notice_text
 from .notice_discovery import (
@@ -206,7 +209,86 @@ class WorkbenchService:
             raise ValueError("请先选择要求基线")
         return self.database.delete_recognized_credit(identity, selected["version"])
 
-    def _with_recognized_credit_estimates(
+    def _current_course_facts(self) -> dict[str, dict[str, Any]]:
+        snapshot = self.database.latest_snapshot("progress") or {}
+        report = (snapshot.get("payload") or {}).get("report") or {}
+        selected = self.selected_requirement_baseline()
+        if not selected or report.get("baseline_version") != selected["version"]:
+            return {}
+        courses = [
+            course
+            for item in report.get("progress", ())
+            for course in item.get("courses", ())
+            if isinstance(course, dict)
+        ]
+        courses.extend(
+            course for course in report.get("unclassified_courses", ())
+            if isinstance(course, dict)
+        )
+        return {
+            str(course.get("code") or " ".join(str(course.get("name", "")).lower().split())): course
+            for course in courses
+        }
+
+    def course_labels(self) -> list[dict[str, Any]]:
+        selected = self.selected_requirement_baseline()
+        return [] if selected is None else self.database.course_labels(selected["version"])
+
+    def save_course_label(self, course_identity: str, payload: dict[str, Any]) -> dict[str, Any]:
+        selected = self.selected_requirement_baseline()
+        if selected is None:
+            raise ValueError("请先选择要求基线")
+        if course_identity not in self._current_course_facts():
+            raise ValueError("课程身份不在当前完整成绩报告中")
+        d_category = payload.get("d_category", False)
+        four_histories = payload.get("four_histories", False)
+        if not isinstance(d_category, bool) or not isinstance(four_histories, bool):
+            raise TypeError("课程标签必须是布尔值")
+        outside_track = self._validated_track(payload.get("outside_track", ""), allow_empty=True)
+        return self.database.save_course_label({
+            "course_identity": course_identity,
+            "baseline_version": selected["version"],
+            "d_category": d_category,
+            "four_histories": four_histories,
+            "outside_track": outside_track,
+        })
+
+    def delete_course_label(self, course_identity: str) -> bool:
+        selected = self.selected_requirement_baseline()
+        if selected is None:
+            raise ValueError("请先选择要求基线")
+        return self.database.delete_course_label(course_identity, selected["version"])
+
+    @staticmethod
+    def _validated_track(value: Any, *, allow_empty: bool = False) -> str:
+        if not isinstance(value, str):
+            raise TypeError("外专业课程体系名称必须是字符串")
+        track = value.strip()
+        if not track and allow_empty:
+            return ""
+        if not track or len(track) > 80 or any(ord(char) < 32 for char in track):
+            raise ValueError("外专业课程体系名称格式无效")
+        return track
+
+    def outside_major_track(self) -> dict[str, str] | None:
+        selected = self.selected_requirement_baseline()
+        track = self.database.outside_major_track_selection()
+        if not selected or not track or track.get("baseline_version") != selected["version"]:
+            return None
+        return track
+
+    def select_outside_major_track(self, value: Any) -> dict[str, str]:
+        selected = self.selected_requirement_baseline()
+        if selected is None:
+            raise ValueError("请先选择要求基线")
+        return self.database.select_outside_major_track(
+            selected["version"], self._validated_track(value)
+        )
+
+    def clear_outside_major_track(self) -> None:
+        self.database.clear_outside_major_track()
+
+    def _with_local_estimates(
         self, classified: dict[str, Any]
     ) -> dict[str, Any]:
         report = classified.get("report")
@@ -215,8 +297,15 @@ class WorkbenchService:
             return classified
         result = deepcopy(classified)
         copied_report = result["report"]
-        copied_report["progress"] = apply_recognized_credit_estimates(
+        progress = apply_recognized_credit_estimates(
             copied_report.get("progress", []), selected, self.recognized_credits()
+        )
+        track = self.outside_major_track()
+        copied_report["progress"] = apply_course_label_estimates(
+            progress,
+            copied_report.get("unclassified_courses", []),
+            self.course_labels(),
+            "" if track is None else track["track"],
         )
         return result
 
@@ -254,7 +343,7 @@ class WorkbenchService:
             profile_id = (profile or {}).get("version_id")
             if profile_id and snapshot.get("profile_id") != profile_id:
                 return {"status": "not_applicable", "report": None, "snapshot": snapshot}
-            return self._with_recognized_credit_estimates(
+            return self._with_local_estimates(
                 self._classified_progress(report, snapshot=snapshot)
             )
 
@@ -271,7 +360,7 @@ class WorkbenchService:
             return {"status": "invalid", "report": None}
         if not report.get("baseline_version"):
             report = {**report, "baseline_version": "guide-2026"}
-        return self._with_recognized_credit_estimates(
+        return self._with_local_estimates(
             self._classified_progress(report)
         )
 
@@ -324,6 +413,9 @@ class WorkbenchService:
             "requirement_baselines": self.available_requirement_baselines(),
             "selected_requirement_baseline": self.selected_requirement_baseline(),
             "recognized_credits": self.recognized_credits(),
+            "course_labels": self.course_labels(),
+            "labelable_courses": list(self._current_course_facts().values()),
+            "outside_major_track": self.outside_major_track(),
             "profile": self.effective_profile(),
             "confirmed_notice": self.database.confirmed_notice(),
             "snapshots": {"selection": selection, "timetable": timetable, "progress": progress_snapshot},

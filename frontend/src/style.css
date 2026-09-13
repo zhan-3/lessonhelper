@@ -323,6 +323,14 @@ body.drawer-open { overflow: hidden; }
 .recognized-credit-panel li span { display: grid; gap: 3px; }
 .recognized-credit-panel p { margin: 0; color: var(--muted); }
 @media (max-width: 640px) { .recognized-credit-panel form { grid-template-columns: 1fr; } .recognized-credit-panel form > * { grid-column: 1 !important; } }
+.course-label-panel { display: grid; gap: 10px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.course-label-panel form, .course-label-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.course-label-panel form select, .course-label-panel form input[type="text"], .course-label-panel form input:not([type]) { flex: 1 1 180px; }
+.course-label-panel label { display: inline-flex; gap: 5px; align-items: center; }
+.course-label-row { justify-content: space-between; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.course-label-row > span { display: grid; gap: 3px; }
+.course-label-row > div { display: flex; gap: 8px; }
+.course-label-panel p { margin: 0; color: var(--muted); }
 
 @media (prefers-reduced-motion: reduce) {
   .data-drawer, .data-drawer-trigger { animation: none; transition: none; }

@@ -13,6 +13,8 @@ type PlanSection = Record<string, unknown>;
 
 type PlanCourse = { identity: string; name: string; category: string; sections: PlanSection[] };
 type RecognizedCreditDraft = Pick<RecognizedCredit, "category" | "credits" | "note" | "recognized_on" | "linked_course_identity">;
+const localCourseIdentity = (course: { code?: string; name: string }) =>
+  course.code || course.name.trim().toLowerCase().replace(/\s+/g, " ");
 const emptyRecognizedCreditDraft = (): RecognizedCreditDraft => ({
   category: "innovation",
   credits: 1,
@@ -114,6 +116,11 @@ export function App() {
   const [windowsOpen, setWindowsOpen] = useState(false);
   const [recognizedDraft, setRecognizedDraft] = useState<RecognizedCreditDraft>(emptyRecognizedCreditDraft);
   const [editingRecognizedIdentity, setEditingRecognizedIdentity] = useState<string | null>(null);
+  const [courseLabelIdentity, setCourseLabelIdentity] = useState("");
+  const [courseLabelD, setCourseLabelD] = useState(false);
+  const [courseLabelHistory, setCourseLabelHistory] = useState(false);
+  const [courseLabelTrack, setCourseLabelTrack] = useState("");
+  const [outsideTrackDraft, setOutsideTrackDraft] = useState("");
   const drawerTriggerRef = useRef<HTMLButtonElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
   const goalsHydrated = useRef(false);
@@ -130,6 +137,7 @@ export function App() {
       notices.json() as Promise<{ notices?: CandidateNotice[] }>,
     ]);
     setState(next);
+    setOutsideTrackDraft(next.outside_major_track?.track ?? "");
     if (next.active_task) setTask(next.active_task);
     setPlan(next.latest_plan);
     if (next.latest_plan?.goals && !goalsHydrated.current) {
@@ -157,8 +165,14 @@ export function App() {
   }, [dataDrawerOpen]);
 
   useEffect(() => {
-    if (state?.snapshots.selection?.term && state.snapshots.selection.term !== lastSelectionTerm.current) {
-      lastSelectionTerm.current = state.snapshots.selection.term;
+    const term = state?.snapshots.selection?.term;
+    if (!term) return;
+    if (lastSelectionTerm.current === null) {
+      lastSelectionTerm.current = term;
+      return;
+    }
+    if (term !== lastSelectionTerm.current) {
+      lastSelectionTerm.current = term;
       setGoals([]);
       setQueueResults([]);
     }
@@ -264,6 +278,64 @@ export function App() {
       setEditingRecognizedIdentity(null);
       setRecognizedDraft(emptyRecognizedCreditDraft());
     }
+    await load();
+  };
+
+  const saveCourseLabel = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!state || !courseLabelIdentity) return;
+    const response = await fetch(`/api/course-labels/${encodeURIComponent(courseLabelIdentity)}`, {
+      method: "PUT", headers: jsonHeaders(state.csrf_token),
+      body: JSON.stringify({
+        d_category: courseLabelD,
+        four_histories: courseLabelHistory,
+        outside_track: courseLabelTrack,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) { setMessage(result.error ?? "无法保存课程标签"); return; }
+    setMessage("课程标签已保存在本机，仅影响预计条件。");
+    await load();
+  };
+
+  const editCourseLabel = (identity: string) => {
+    const label = state?.course_labels?.find(item => item.course_identity === identity);
+    setCourseLabelIdentity(identity);
+    setCourseLabelD(label?.d_category ?? false);
+    setCourseLabelHistory(label?.four_histories ?? false);
+    setCourseLabelTrack(label?.outside_track ?? "");
+  };
+
+  const deleteCourseLabel = async (identity: string) => {
+    if (!state) return;
+    const response = await fetch(`/api/course-labels/${encodeURIComponent(identity)}`, {
+      method: "DELETE", headers: jsonHeaders(state.csrf_token),
+    });
+    if (!response.ok) { setMessage("无法删除课程标签"); return; }
+    if (courseLabelIdentity === identity) editCourseLabel("");
+    await load();
+  };
+
+  const saveOutsideTrack = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!state) return;
+    const response = await fetch("/api/outside-major-track", {
+      method: "PUT", headers: jsonHeaders(state.csrf_token),
+      body: JSON.stringify({ track: outsideTrackDraft }),
+    });
+    const result = await response.json();
+    if (!response.ok) { setMessage(result.error ?? "无法选择外专业课程体系"); return; }
+    setMessage("外专业课程体系已保存在本机，仅用于预计核验。");
+    await load();
+  };
+
+  const clearOutsideTrack = async () => {
+    if (!state) return;
+    const response = await fetch("/api/outside-major-track", {
+      method: "DELETE", headers: jsonHeaders(state.csrf_token),
+    });
+    if (!response.ok) { setMessage("无法清除外专业课程体系"); return; }
+    setOutsideTrackDraft("");
     await load();
   };
 
@@ -755,6 +827,19 @@ export function App() {
           </form>
           {state.recognized_credits.length > 0 && <ul>{state.recognized_credits.map(item => <li key={item.identity}><span><strong>{item.note}</strong><small>{item.credits} 学分 · {item.recognized_on} · 用户申报</small></span><div><button className="secondary" onClick={() => editRecognizedCredit(item)}>编辑</button><button className="danger" onClick={() => void deleteRecognizedCredit(item.identity)}>删除</button></div></li>)}</ul>}
           {state.recognized_credits.length === 0 && <p>暂无申报。不支持用手填学分证明四史门数。</p>}
+        </section>
+        <section className="course-label-panel" aria-labelledby="course-label-title">
+          <div className="drawer-section-heading"><small>用户申报分类</small><strong id="course-label-title">课程标签与外专业体系</strong><span>只影响预计子约束，不修改课程总学分或教务事实。</span></div>
+          <form onSubmit={saveCourseLabel}>
+            <select aria-label="选择已完成课程" required value={courseLabelIdentity} onChange={event => editCourseLabel(event.target.value)}><option value="">选择课程</option>{(state.labelable_courses ?? []).map(course => { const identity = localCourseIdentity(course); return <option key={identity} value={identity}>{course.name} · {course.code || "无代码"}</option>; })}</select>
+            <label><input type="checkbox" checked={courseLabelD} onChange={event => setCourseLabelD(event.target.checked)} />D 类</label>
+            <label><input type="checkbox" checked={courseLabelHistory} onChange={event => setCourseLabelHistory(event.target.checked)} />四史</label>
+            <input aria-label="课程所属外专业体系" maxLength={80} placeholder="外专业体系（可选）" value={courseLabelTrack} onChange={event => setCourseLabelTrack(event.target.value)} />
+            <button type="submit">保存课程标签</button>
+          </form>
+          {(state.course_labels ?? []).map(label => <div className="course-label-row" key={label.course_identity}><span><strong>{label.course_identity}</strong><small>{[label.d_category && "D 类", label.four_histories && "四史", label.outside_track && `体系：${label.outside_track}`].filter(Boolean).join(" · ") || "无标签"} · 用户申报</small></span><div><button className="secondary" onClick={() => editCourseLabel(label.course_identity)}>编辑</button><button className="danger" onClick={() => void deleteCourseLabel(label.course_identity)}>删除</button></div></div>)}
+          <form onSubmit={saveOutsideTrack}><input aria-label="当前外专业课程体系" required maxLength={80} placeholder="选择唯一外专业体系" value={outsideTrackDraft} onChange={event => setOutsideTrackDraft(event.target.value)} /><button type="submit">保存体系</button>{state.outside_major_track && <button type="button" className="secondary" onClick={() => void clearOutsideTrack()}>清除体系</button>}</form>
+          {!state.outside_major_track && <p>尚未选择体系，外专业条件保持未知。</p>}
         </section>
         <section className="drawer-actions" aria-label="数据操作">
           <button onClick={() => run("connect")} disabled={remoteBusy}><span>连接教务</span><small>验证当前教务会话</small></button>

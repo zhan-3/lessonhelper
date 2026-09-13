@@ -169,6 +169,41 @@ def create_workbench_app(
             return jsonify({"error": str(error)}), 400
         return ("", 204) if deleted else (jsonify({"error": "not found"}), 404)
 
+    @app.put("/api/course-labels/<identity>")
+    def save_course_label(identity: str):
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        try:
+            label = core.save_course_label(identity, body)
+        except (TypeError, ValueError) as error:
+            return jsonify({"error": str(error)}), 400
+        return jsonify(label)
+
+    @app.delete("/api/course-labels/<identity>")
+    def delete_course_label(identity: str):
+        try:
+            deleted = core.delete_course_label(identity)
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+        return ("", 204) if deleted else (jsonify({"error": "not found"}), 404)
+
+    @app.put("/api/outside-major-track")
+    def select_outside_major_track():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        try:
+            selected = core.select_outside_major_track(body.get("track"))
+        except (TypeError, ValueError) as error:
+            return jsonify({"error": str(error)}), 400
+        return jsonify(selected)
+
+    @app.delete("/api/outside-major-track")
+    def clear_outside_major_track():
+        core.clear_outside_major_track()
+        return "", 204
+
     @app.post("/api/login-configuration")
     def configure_login():
         body = request.get_json(silent=True)

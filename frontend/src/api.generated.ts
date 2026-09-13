@@ -208,6 +208,145 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/course-labels/{identity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    identity: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CourseLabelRequest"];
+                };
+            };
+            responses: {
+                /** @description Local course label saved */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CourseLabel"];
+                    };
+                };
+                /** @description Invalid or unknown course identity */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    identity: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Local course label deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Label not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/outside-major-track": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["OutsideMajorTrackRequest"];
+                };
+            };
+            responses: {
+                /** @description Local outside-major track selected */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OutsideMajorTrack"];
+                    };
+                };
+                /** @description Invalid track */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Local outside-major track cleared */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/login-configuration": {
         parameters: {
             query?: never;
@@ -801,6 +940,25 @@ export interface components {
             /** @description Must exactly equal version */
             confirmation: string;
         };
+        CourseLabelRequest: {
+            d_category: boolean;
+            four_histories: boolean;
+            outside_track: string;
+        };
+        CourseLabel: components["schemas"]["CourseLabelRequest"] & {
+            course_identity: string;
+            baseline_version: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        OutsideMajorTrackRequest: {
+            track: string;
+        };
+        OutsideMajorTrack: components["schemas"]["OutsideMajorTrackRequest"] & {
+            baseline_version: string;
+            /** Format: date-time */
+            selected_at: string;
+        };
         RecognizedCreditRequest: {
             identity: string;
             /** @enum {string} */
@@ -945,6 +1103,15 @@ export interface components {
                 [key: string]: unknown;
             }[];
             manual_review_required?: boolean;
+            labeled_courses?: {
+                [key: string]: unknown;
+            }[];
+            estimate_replaces_confirmed?: boolean;
+            /** @enum {string} */
+            estimated_condition_status?: "estimated_satisfied" | "unknown";
+            selected_track?: string;
+            other_track_course_identities?: string[];
+            unknown_track_course_identities?: string[];
             required_credits: number;
             completed_credits: number;
             remaining_credits: number;
@@ -972,6 +1139,9 @@ export interface components {
             requirement_baselines: components["schemas"]["RequirementBaseline"][];
             selected_requirement_baseline: components["schemas"]["RequirementBaseline"] | null;
             recognized_credits: components["schemas"]["RecognizedCredit"][];
+            course_labels: components["schemas"]["CourseLabel"][];
+            labelable_courses: components["schemas"]["CompletedCourseFact"][];
+            outside_major_track: components["schemas"]["OutsideMajorTrack"] | null;
             profile: {
                 [key: string]: unknown;
             } | null;

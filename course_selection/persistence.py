@@ -62,6 +62,8 @@ create table if not exists execution_history(id text primary key, created_at tex
 create index if not exists execution_history_created on execution_history(created_at desc);
 create table if not exists recognized_credits(identity text primary key, baseline_version text not null, category text not null, credits real not null check(credits>0 and credits<=100), note text not null, recognized_on text not null, linked_course_identity text not null default '', created_at text not null, updated_at text not null);
 create index if not exists recognized_credits_baseline on recognized_credits(baseline_version, created_at);
+create table if not exists course_labels(course_identity text not null, baseline_version text not null, d_category integer not null check(d_category in (0,1)), four_histories integer not null check(four_histories in (0,1)), outside_track text not null default '', updated_at text not null, primary key(course_identity,baseline_version));
+create index if not exists course_labels_baseline on course_labels(baseline_version, course_identity);
 """
 
 
@@ -280,6 +282,79 @@ class WorkspaceDatabase:
             )
         return cursor.rowcount == 1
 
+    def course_labels(self, baseline_version: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "select * from course_labels where baseline_version=? order by course_identity",
+            (baseline_version,),
+        ).fetchall()
+        return [
+            {
+                **dict(row),
+                "d_category": bool(row["d_category"]),
+                "four_histories": bool(row["four_histories"]),
+            }
+            for row in rows
+        ]
+
+    def save_course_label(self, label: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        with self.connection:
+            self.connection.execute(
+                "insert into course_labels values(?,?,?,?,?,?) "
+                "on conflict(course_identity,baseline_version) do update set "
+                "d_category=excluded.d_category,four_histories=excluded.four_histories,"
+                "outside_track=excluded.outside_track,updated_at=excluded.updated_at",
+                (
+                    label["course_identity"], label["baseline_version"],
+                    int(label["d_category"]), int(label["four_histories"]),
+                    label["outside_track"], now,
+                ),
+            )
+        row = self.connection.execute(
+            "select * from course_labels where course_identity=? and baseline_version=?",
+            (label["course_identity"], label["baseline_version"]),
+        ).fetchone()
+        return {
+            **dict(row),
+            "d_category": bool(row["d_category"]),
+            "four_histories": bool(row["four_histories"]),
+        }
+
+    def delete_course_label(self, course_identity: str, baseline_version: str) -> bool:
+        with self.connection:
+            cursor = self.connection.execute(
+                "delete from course_labels where course_identity=? and baseline_version=?",
+                (course_identity, baseline_version),
+            )
+        return cursor.rowcount == 1
+
+    def outside_major_track_selection(self) -> dict[str, str] | None:
+        row = self.connection.execute(
+            "select value from app_metadata where key='outside_major_track_selection'"
+        ).fetchone()
+        if not row:
+            return None
+        value = json.loads(row["value"])
+        return value if isinstance(value, dict) else None
+
+    def select_outside_major_track(self, baseline_version: str, track: str) -> dict[str, str]:
+        selection = {
+            "baseline_version": baseline_version, "track": track, "selected_at": utc_now(),
+        }
+        with self.connection:
+            self.connection.execute(
+                "insert into app_metadata(key,value) values('outside_major_track_selection',?) "
+                "on conflict(key) do update set value=excluded.value",
+                (json.dumps(selection, ensure_ascii=False),),
+            )
+        return selection
+
+    def clear_outside_major_track(self) -> None:
+        with self.connection:
+            self.connection.execute(
+                "delete from app_metadata where key='outside_major_track_selection'"
+            )
+
     def confirmed_notice(self) -> dict[str, Any] | None:
         row = self.connection.execute("select id,payload from notice_versions where status='confirmed' order by created_at desc limit 1").fetchone()
         return ({**json.loads(row["payload"]), "version_id": row["id"]} if row else None)
@@ -437,10 +512,12 @@ class WorkspaceDatabase:
             self.connection.execute("delete from execution_tasks")
             self.connection.execute("delete from execution_history")
             self.connection.execute("delete from recognized_credits")
+            self.connection.execute("delete from course_labels")
             self.connection.execute("delete from snapshots")
             self.connection.execute("delete from profiles")
             self.connection.execute(
-                "delete from app_metadata where key='requirement_baseline_selection'"
+                "delete from app_metadata where key in "
+                "('requirement_baseline_selection','outside_major_track_selection')"
             )
 
     def close(self) -> None:

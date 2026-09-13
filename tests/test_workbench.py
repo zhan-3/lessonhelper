@@ -1225,6 +1225,120 @@ class WorkbenchApiTests(unittest.TestCase):
             app.extensions["observation_service"].close()
             app.extensions["workspace_database"].close()
 
+    def test_course_labels_and_outside_track_only_change_estimated_subconstraints(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = ReferenceProgressGateway()
+            app = create_workbench_app(root, gateway_factory=lambda: gateway)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {
+                "Origin": "http://localhost", "Host": "localhost",
+                "X-CSRF-Token": state["csrf_token"],
+            }
+            client.post(
+                "/api/requirement-baseline-selection",
+                json={
+                    "version": "basic-graduation-reference-v1",
+                    "confirmation": "basic-graduation-reference-v1",
+                }, headers=headers,
+            )
+            task = client.post(
+                "/api/tasks", json={"operation": "refresh-progress"}, headers=headers,
+            ).get_json()
+            service = app.extensions["observation_service"]
+            self.assertTrue(service.wait(task["id"], 2))
+            database = app.extensions["workspace_database"]
+            snapshot = database.latest_snapshot("progress")
+
+            cultural = client.put("/api/course-labels/C01", json={
+                "d_category": True, "four_histories": True, "outside_track": "",
+            }, headers=headers)
+            self.assertEqual(200, cultural.status_code)
+            outside = client.put("/api/course-labels/O01", json={
+                "d_category": False, "four_histories": False, "outside_track": "track-a",
+            }, headers=headers)
+            self.assertEqual(200, outside.status_code)
+            selected = client.put(
+                "/api/outside-major-track", json={"track": "track-a"}, headers=headers,
+            )
+            self.assertEqual(200, selected.status_code)
+
+            after = client.get("/api/state").get_json()
+            items = {item["key"]: item for item in after["graduation_progress"]["report"]["progress"]}
+            self.assertEqual(8, items["cultural_quality"]["confirmed_amount"])
+            self.assertEqual(8, items["cultural_quality"]["estimated_amount"])
+            self.assertEqual(0, items["cultural_quality_d"]["confirmed_amount"])
+            self.assertEqual(8, items["cultural_quality_d"]["estimated_amount"])
+            self.assertEqual(0, items["four_histories"]["confirmed_amount"])
+            self.assertEqual(1, items["four_histories"]["estimated_amount"])
+            self.assertEqual(10, items["outside_major_elective"]["confirmed_amount"])
+            self.assertEqual(10, items["outside_major_elective"]["estimated_amount"])
+            self.assertEqual("estimated_satisfied", items["outside_major_elective"]["estimated_condition_status"])
+            self.assertEqual(snapshot["payload"], database.latest_snapshot("progress")["payload"])
+
+            switched = client.put(
+                "/api/outside-major-track", json={"track": "track-b"}, headers=headers,
+            )
+            self.assertEqual(200, switched.status_code)
+            switched_item = next(item for item in client.get("/api/state").get_json()["graduation_progress"]["report"]["progress"] if item["key"] == "outside_major_elective")
+            self.assertEqual(0, switched_item["estimated_amount"])
+            self.assertEqual("unknown", switched_item["estimated_condition_status"])
+            self.assertEqual(["O01"], switched_item["other_track_course_identities"])
+
+            deleted = client.delete("/api/course-labels/C01", headers=headers)
+            self.assertEqual(204, deleted.status_code)
+            reset_d = next(item for item in client.get("/api/state").get_json()["graduation_progress"]["report"]["progress"] if item["key"] == "cultural_quality_d")
+            self.assertEqual(0, reset_d["estimated_amount"])
+            self.assertEqual(1, gateway.connect_count)
+            service.close()
+            database.close()
+
+            reopened = create_workbench_app(root, gateway_factory=FakeGateway)
+            reopened_state = reopened.test_client().get("/api/state").get_json()
+            self.assertEqual("track-b", reopened_state["outside_major_track"]["track"])
+            self.assertEqual("O01", reopened_state["course_labels"][0]["course_identity"])
+            reopened.extensions["workspace_database"].reset_personal_workspace()
+            cleared = reopened.test_client().get("/api/state").get_json()
+            self.assertIsNone(cleared["outside_major_track"])
+            self.assertEqual([], cleared["course_labels"])
+            reopened.extensions["observation_service"].close()
+            reopened.extensions["workspace_database"].close()
+
+    def test_course_label_rejects_free_text_identity_and_mutations_require_csrf(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_workbench_app(Path(directory), gateway_factory=FakeGateway)
+            database = app.extensions["workspace_database"]
+            database.select_requirement_baseline("basic-graduation-reference-v1")
+            database.publish_snapshot(
+                "progress", "2026-1", {"report": {
+                    "baseline_version": "basic-graduation-reference-v1", "data_complete": True,
+                    "progress": [], "unclassified_courses": [],
+                }}, source="test",
+            )
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {
+                "Origin": "http://localhost", "Host": "localhost",
+                "X-CSRF-Token": state["csrf_token"],
+            }
+            unknown = client.put("/api/course-labels/FREE-TEXT", json={
+                "d_category": True, "four_histories": True, "outside_track": "track-a",
+            }, headers=headers)
+            self.assertEqual(400, unknown.status_code)
+            for payload in ({}, {"track": None}, {"track": ["track-a"]}):
+                with self.subTest(payload=payload):
+                    self.assertEqual(400, client.put(
+                        "/api/outside-major-track", json=payload, headers=headers,
+                    ).status_code)
+            self.assertEqual(403, client.put(
+                "/api/outside-major-track", json={"track": "track-a"},
+            ).status_code)
+            self.assertEqual(403, client.delete("/api/outside-major-track").status_code)
+            self.assertEqual(403, client.delete("/api/course-labels/FREE-TEXT").status_code)
+            app.extensions["observation_service"].close()
+            database.close()
+
     def test_incomplete_progress_sync_keeps_previous_complete_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -43,6 +43,9 @@ const state = (selected: boolean) => ({
   requirement_baselines: [guide, reference],
   selected_requirement_baseline: selected ? { ...reference, selected_at: "2026-01-01T00:00:00Z" } : noSelectedBaseline,
   recognized_credits: [],
+  course_labels: [],
+  labelable_courses: [],
+  outside_major_track: null,
   profile: { grade: "2025" },
   confirmed_notice: null,
   snapshots: { selection: null, timetable: null, progress: null },
@@ -129,6 +132,62 @@ describe("requirement baseline selection", () => {
       "文化素质课程", "文化素质 D 类", "四史课程", "跨专业发展课程",
     ]) expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/条件状态：/)).toHaveLength(8);
+  });
+
+  it("adds and removes user-declared course labels and an outside-major track", async () => {
+    const local = readyState() as WorkbenchState;
+    const courseIdentity = "合成 文化课程";
+    const courseUrl = `/api/course-labels/${encodeURIComponent(courseIdentity)}`;
+    local.labelable_courses = [
+      { code: "", name: "合成   文化课程", category: "文化素质", credits: 2 },
+      { code: "O01", name: "合成外专业课程", category: "外专业", credits: 10 },
+    ];
+    let labels: WorkbenchState["course_labels"] = [];
+    let selectedTrack: WorkbenchState["outside_major_track"] = null;
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === "/api/state") return new Response(JSON.stringify({ ...local, course_labels: labels, outside_major_track: selectedTrack }));
+      if (url === "/api/notices/candidates") return new Response(JSON.stringify({ notices: [] }));
+      if (url === courseUrl && init?.method === "PUT") {
+        labels = [{ course_identity: courseIdentity, baseline_version: reference.version, updated_at: "2026-01-01T00:00:00Z", ...JSON.parse(String(init.body)) }];
+        return new Response(JSON.stringify(labels[0]));
+      }
+      if (url === courseUrl && init?.method === "DELETE") {
+        labels = []; return new Response(null, { status: 204 });
+      }
+      if (url === "/api/outside-major-track" && init?.method === "PUT") {
+        selectedTrack = { baseline_version: reference.version, selected_at: "2026-01-01T00:00:00Z", ...JSON.parse(String(init.body)) };
+        return new Response(JSON.stringify(selectedTrack));
+      }
+      if (url === "/api/outside-major-track" && init?.method === "DELETE") {
+        selectedTrack = null; return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    Element.prototype.scrollIntoView = vi.fn();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("选课规划工作台");
+    await user.click(screen.getByRole("button", { name: /数据操作/ }));
+
+    await user.selectOptions(screen.getByLabelText("选择已完成课程"), courseIdentity);
+    await user.click(screen.getByLabelText("D 类"));
+    await user.click(screen.getByLabelText("四史"));
+    await user.type(screen.getByLabelText("课程所属外专业体系"), "track-a");
+    await user.click(screen.getByRole("button", { name: "保存课程标签" }));
+    expect(await screen.findByText(/D 类 · 四史 · 体系：track-a/)).toBeTruthy();
+    const labelRequest = requests.find(request => request.url === courseUrl && request.init?.method === "PUT");
+    expect(labelRequest?.init?.headers).toMatchObject({ "X-CSRF-Token": "csrf-test" });
+
+    await user.type(screen.getByLabelText("当前外专业课程体系"), "track-a");
+    await user.click(screen.getByRole("button", { name: "保存体系" }));
+    expect(await screen.findByRole("button", { name: "清除体系" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "清除体系" }));
+    expect(await screen.findByText("尚未选择体系，外专业条件保持未知。")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(labels).toHaveLength(0));
   });
 
   it("does not double-count declarations linked to enrolled or queued courses", async () => {

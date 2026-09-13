@@ -7,6 +7,7 @@ from course_progress.progress import (
     CompletedCourse,
     Requirement,
     RequirementBaseline,
+    apply_course_label_estimates,
     assess_progress,
     baseline_from_definition,
     calculate_progress,
@@ -190,6 +191,42 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(2.0, progress["cultural_quality_d"].completed_amount)
         self.assertEqual(1.0, progress["four_histories"].completed_amount)
         self.assertEqual(1, len(progress["cultural_quality"].courses))
+
+    def test_user_course_labels_change_only_estimated_subconstraints(self):
+        baseline = baseline_from_definition(
+            requirement_baseline("basic-graduation-reference-v1")
+        )
+        records = (
+            AcademicRecord("2024秋季", "C01", "文化课程", "任选", "文理通识-文化素质教育课", 2.0, True),
+            AcademicRecord("2025春季", "C01", "文化课程", "任选", "文理通识-文化素质教育课", 2.0, True),
+            AcademicRecord("2025春季", "O01", "外专业课程", "任选", "跨专业发展课程", 10.0, True),
+        )
+        report = evaluate_progress(records, baseline)
+        confirmed = confirmed_progress_items(report, data_complete=True)
+
+        estimated = apply_course_label_estimates(
+            confirmed, report.unclassified_courses,
+            (
+                {"course_identity": "C01", "d_category": True, "four_histories": True, "outside_track": ""},
+                {"course_identity": "O01", "d_category": False, "four_histories": False, "outside_track": "track-a"},
+            ),
+            "track-a",
+        )
+        items = {item["key"]: item for item in estimated}
+
+        self.assertEqual(2, items["cultural_quality"]["confirmed_amount"])
+        self.assertEqual(2, items["cultural_quality"]["estimated_amount"])
+        self.assertEqual(2, items["cultural_quality_d"]["estimated_amount"])
+        self.assertEqual(1, items["four_histories"]["estimated_amount"])
+        self.assertEqual(10, items["outside_major_elective"]["estimated_amount"])
+
+        unknown_track = apply_course_label_estimates(
+            confirmed, report.unclassified_courses,
+            ({"course_identity": "O01", "d_category": True, "four_histories": False, "outside_track": ""},),
+            "track-a",
+        )
+        outside = next(item for item in unknown_track if item["key"] == "outside_major_elective")
+        self.assertEqual(["O01"], outside["unknown_track_course_identities"])
 
     def test_incomplete_grade_data_cannot_prove_a_deficit(self):
         baseline = baseline_from_definition(

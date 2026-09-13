@@ -22,6 +22,23 @@ paths:
       responses: {'200': {description: Local declaration updated}, '400': {description: Invalid or missing declaration}}
     delete:
       responses: {'204': {description: Local declaration deleted}, '404': {description: Declaration not found}}
+  /api/course-labels/{identity}:
+    parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
+    put:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CourseLabelRequest'}}}}
+      responses:
+        '200': {description: Local course label saved, content: {application/json: {schema: {$ref: '#/components/schemas/CourseLabel'}}}}
+        '400': {description: Invalid or unknown course identity}
+    delete:
+      responses: {'204': {description: Local course label deleted}, '404': {description: Label not found}}
+  /api/outside-major-track:
+    put:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/OutsideMajorTrackRequest'}}}}
+      responses:
+        '200': {description: Local outside-major track selected, content: {application/json: {schema: {$ref: '#/components/schemas/OutsideMajorTrack'}}}}
+        '400': {description: Invalid track}
+    delete:
+      responses: {'204': {description: Local outside-major track cleared}}
   /api/login-configuration:
     post:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LoginConfigurationRequest'}}}}
@@ -86,6 +103,35 @@ components:
       properties:
         version: {type: string}
         confirmation: {type: string, description: Must exactly equal version}
+    CourseLabelRequest:
+      type: object
+      required: [d_category, four_histories, outside_track]
+      properties:
+        d_category: {type: boolean}
+        four_histories: {type: boolean}
+        outside_track: {type: string, maxLength: 80}
+    CourseLabel:
+      allOf:
+        - {$ref: '#/components/schemas/CourseLabelRequest'}
+        - type: object
+          required: [course_identity, baseline_version, updated_at]
+          properties:
+            course_identity: {type: string}
+            baseline_version: {type: string}
+            updated_at: {type: string, format: date-time}
+    OutsideMajorTrackRequest:
+      type: object
+      required: [track]
+      properties:
+        track: {type: string, minLength: 1, maxLength: 80}
+    OutsideMajorTrack:
+      allOf:
+        - {$ref: '#/components/schemas/OutsideMajorTrackRequest'}
+        - type: object
+          required: [baseline_version, selected_at]
+          properties:
+            baseline_version: {type: string}
+            selected_at: {type: string, format: date-time}
     RecognizedCreditRequest:
       type: object
       required: [identity, category, credits, note, recognized_on]
@@ -239,6 +285,12 @@ components:
         estimated_gap: {type: number}
         declarations: {type: array, items: {type: object, additionalProperties: true}}
         manual_review_required: {type: boolean}
+        labeled_courses: {type: array, items: {type: object, additionalProperties: true}}
+        estimate_replaces_confirmed: {type: boolean}
+        estimated_condition_status: {type: string, enum: [estimated_satisfied, unknown]}
+        selected_track: {type: string}
+        other_track_course_identities: {type: array, items: {type: string}}
+        unknown_track_course_identities: {type: array, items: {type: string}}
         required_credits: {type: number}
         completed_credits: {type: number}
         remaining_credits: {type: number}
@@ -263,7 +315,7 @@ components:
         snapshot: {$ref: '#/components/schemas/Snapshot', nullable: true}
     WorkbenchState:
       type: object
-      required: [login_configuration, requirement_baselines, selected_requirement_baseline, recognized_credits, profile, confirmed_notice, snapshots, snapshot_changes, latest_plan, graduation_progress, stale, snapshot_status, academic_session, active_task, execution_history, csrf_token]
+      required: [login_configuration, requirement_baselines, selected_requirement_baseline, recognized_credits, course_labels, labelable_courses, outside_major_track, profile, confirmed_notice, snapshots, snapshot_changes, latest_plan, graduation_progress, stale, snapshot_status, academic_session, active_task, execution_history, csrf_token]
       properties:
         login_configuration: {$ref: '#/components/schemas/LoginConfiguration'}
         requirement_baselines: {type: array, items: {$ref: '#/components/schemas/RequirementBaseline'}}
@@ -272,6 +324,12 @@ components:
           allOf:
             - {$ref: '#/components/schemas/RequirementBaseline'}
         recognized_credits: {type: array, items: {$ref: '#/components/schemas/RecognizedCredit'}}
+        course_labels: {type: array, items: {$ref: '#/components/schemas/CourseLabel'}}
+        labelable_courses: {type: array, items: {$ref: '#/components/schemas/CompletedCourseFact'}}
+        outside_major_track:
+          nullable: true
+          allOf:
+            - {$ref: '#/components/schemas/OutsideMajorTrack'}
         profile: {type: object, nullable: true, additionalProperties: true}
         confirmed_notice: {type: object, nullable: true, additionalProperties: true}
         snapshots:
