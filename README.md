@@ -89,7 +89,9 @@ uv run course-selection cas-book --help
 uv run python -m course_progress --help
 ```
 
-详细说明见 [`docs/course-progress-explorer.md`](docs/course-progress-explorer.md)。
+工作台提供需显式选择的固定参考基线 `basic-graduation-reference-v1`，区分学校快照中的已确认贡献、本学期已选、队列预览、用户申报和手动标签。预计达到最低值不会变成学校确认；“未知”表示分类、认定或单一外专业体系等必要证据仍不足。切换基线后必须显式重新同步，旧报告只作为历史保留。
+
+申报、课程标签、体系选择和队列投影均只保存在本机 SQLite，不会触发学校访问。结果不包含专业必修总量或完整培养方案审核，**不是学校正式毕业结论，必须对照个人培养方案人工核验**。详细说明见 [`docs/course-progress-explorer.md`](docs/course-progress-explorer.md)。
 
 ## 为什么默认显示浏览器
 

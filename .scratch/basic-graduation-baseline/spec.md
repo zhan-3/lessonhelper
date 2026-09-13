@@ -1,6 +1,6 @@
 # 基础毕业要求基线 v1
 
-Status: ready-for-agent
+Status: resolved
 
 ## Problem Statement
 
