@@ -1060,6 +1060,171 @@ class WorkbenchApiTests(unittest.TestCase):
             service.close()
             app.extensions["workspace_database"].close()
 
+    def test_recognized_credit_crud_recalculates_estimates_without_changing_confirmed_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = ReferenceProgressGateway()
+            app = create_workbench_app(root, gateway_factory=lambda: gateway)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {
+                "Origin": "http://localhost", "Host": "localhost",
+                "X-CSRF-Token": state["csrf_token"],
+            }
+            client.post(
+                "/api/requirement-baseline-selection",
+                json={
+                    "version": "basic-graduation-reference-v1",
+                    "confirmation": "basic-graduation-reference-v1",
+                }, headers=headers,
+            )
+            task = client.post(
+                "/api/tasks", json={"operation": "refresh-progress"}, headers=headers,
+            ).get_json()
+            service = app.extensions["observation_service"]
+            self.assertTrue(service.wait(task["id"], 2))
+            database = app.extensions["workspace_database"]
+            snapshot = database.latest_snapshot("progress")
+
+            declaration = {
+                "identity": "recognized-social-1", "category": "social_practice",
+                "credits": 2, "note": "合成社会实践认定", "recognized_on": "2026-01-15",
+            }
+            created = client.post("/api/recognized-credits", json=declaration, headers=headers)
+            self.assertEqual(201, created.status_code)
+            repeated = client.post("/api/recognized-credits", json=declaration, headers=headers)
+            self.assertEqual(200, repeated.status_code)
+            linked = client.post("/api/recognized-credits", json={
+                "identity": "recognized-linked-1", "category": "innovation", "credits": 5,
+                "note": "与已修课程关联", "recognized_on": "2026-01-16",
+                "linked_course_identity": "I01",
+            }, headers=headers)
+            self.assertEqual(201, linked.status_code)
+            for identity in ("recognized-social-link-a", "recognized-social-link-b"):
+                response = client.post("/api/recognized-credits", json={
+                    "identity": identity, "category": "social_practice", "credits": 1,
+                    "note": "同一待确认课程关联", "recognized_on": "2026-01-17",
+                    "linked_course_identity": "PENDING01",
+                }, headers=headers)
+                self.assertEqual(201, response.status_code)
+
+            after = client.get("/api/state").get_json()
+            self.assertEqual(4, len(after["recognized_credits"]))
+            items = {item["key"]: item for item in after["graduation_progress"]["report"]["progress"]}
+            self.assertEqual(1, items["social_practice"]["confirmed_amount"])
+            self.assertEqual(4, items["social_practice"]["estimated_amount"])
+            self.assertEqual(8, items["innovation_and_practice"]["estimated_amount"])
+            self.assertEqual(0, items["innovation_and_practice"]["estimated_gap"])
+            self.assertEqual("unknown", items["innovation_and_practice"]["condition_status"])
+            self.assertTrue(items["social_practice"]["manual_review_required"])
+            self.assertEqual(4, items["innovation"]["estimated_amount"])
+            self.assertEqual("linked_confirmed_course", items["innovation"]["declarations"][0]["overlap_status"])
+            social_links = {
+                declaration["identity"]: declaration
+                for declaration in items["social_practice"]["declarations"]
+                if declaration["linked_course_identity"] == "PENDING01"
+            }
+            self.assertTrue(social_links["recognized-social-link-a"]["contributes"])
+            self.assertFalse(social_links["recognized-social-link-b"]["contributes"])
+            self.assertEqual(
+                "duplicate_declaration_link",
+                social_links["recognized-social-link-b"]["overlap_status"],
+            )
+            self.assertEqual(snapshot["payload"], database.latest_snapshot("progress")["payload"])
+
+            updated = client.put(
+                "/api/recognized-credits/recognized-social-1",
+                json={**declaration, "credits": 1}, headers=headers,
+            )
+            self.assertEqual(200, updated.status_code)
+            after_update = client.get("/api/state").get_json()
+            combined = next(item for item in after_update["graduation_progress"]["report"]["progress"] if item["key"] == "innovation_and_practice")
+            self.assertEqual(7, combined["estimated_amount"])
+            deleted = client.delete(
+                "/api/recognized-credits/recognized-social-1", headers=headers,
+            )
+            self.assertEqual(204, deleted.status_code)
+            self.assertEqual(3, len(client.get("/api/state").get_json()["recognized_credits"]))
+            self.assertEqual(1, gateway.connect_count)
+            service.close()
+            database.close()
+
+            reopened = create_workbench_app(root, gateway_factory=FakeGateway)
+            reopened_state = reopened.test_client().get("/api/state").get_json()
+            self.assertEqual("recognized-linked-1", reopened_state["recognized_credits"][0]["identity"])
+            reopened.extensions["workspace_database"].reset_personal_workspace()
+            self.assertEqual([], reopened.test_client().get("/api/state").get_json()["recognized_credits"])
+            reopened.extensions["observation_service"].close()
+            reopened.extensions["workspace_database"].close()
+
+    def test_recognized_credit_validation_rejects_unsupported_or_unbounded_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = create_workbench_app(Path(directory), gateway_factory=FakeGateway)
+            client = app.test_client()
+            state = client.get("/api/state").get_json()
+            headers = {
+                "Origin": "http://localhost", "Host": "localhost",
+                "X-CSRF-Token": state["csrf_token"],
+            }
+            client.post(
+                "/api/requirement-baseline-selection",
+                json={
+                    "version": "basic-graduation-reference-v1",
+                    "confirmation": "basic-graduation-reference-v1",
+                }, headers=headers,
+            )
+            valid = {
+                "identity": "recognized-1", "category": "innovation", "credits": 1,
+                "note": "合成申报", "recognized_on": "2026-01-15",
+            }
+            invalid_changes = (
+                {"credits": 0}, {"credits": -1}, {"credits": float("inf")},
+                {"credits": 101}, {"category": "four_histories"},
+                {"recognized_on": "not-a-date"}, {"recognized_on": "1999-01-01"},
+                {"identity": "contains spaces"}, {"note": "x" * 301},
+            )
+            for change in invalid_changes:
+                with self.subTest(change=change):
+                    response = client.post(
+                        "/api/recognized-credits", json={**valid, **change}, headers=headers,
+                    )
+                    self.assertEqual(400, response.status_code)
+            created = client.post("/api/recognized-credits", json=valid, headers=headers)
+            self.assertEqual(201, created.status_code)
+            invalid_update = client.put(
+                "/api/recognized-credits/recognized-1",
+                json={**valid, "credits": 0}, headers=headers,
+            )
+            self.assertEqual(400, invalid_update.status_code)
+            self.assertEqual(403, client.post("/api/recognized-credits", json=valid).status_code)
+            self.assertEqual(403, client.put(
+                "/api/recognized-credits/recognized-1", json=valid,
+            ).status_code)
+            self.assertEqual(403, client.delete(
+                "/api/recognized-credits/recognized-1",
+            ).status_code)
+            self.assertEqual(1, len(client.get("/api/state").get_json()["recognized_credits"]))
+            database = app.extensions["workspace_database"]
+            self.assertEqual(0, database.connection.execute(
+                "select count(*) from snapshots"
+            ).fetchone()[0])
+            with database.connection:
+                database.connection.execute(
+                    "create trigger reject_recognized_credit before insert on recognized_credits "
+                    "begin select raise(abort, 'synthetic failure'); end"
+                )
+            with self.assertRaises(sqlite3.IntegrityError):
+                database.create_recognized_credit({
+                    **valid, "identity": "recognized-failure",
+                    "baseline_version": "basic-graduation-reference-v1",
+                    "linked_course_identity": "",
+                })
+            self.assertEqual(1, database.connection.execute(
+                "select count(*) from recognized_credits"
+            ).fetchone()[0])
+            app.extensions["observation_service"].close()
+            app.extensions["workspace_database"].close()
+
     def test_incomplete_progress_sync_keeps_previous_complete_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

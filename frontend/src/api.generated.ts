@@ -83,6 +83,131 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recognized-credits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecognizedCreditRequest"];
+                };
+            };
+            responses: {
+                /** @description Idempotent existing declaration returned */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Local declaration created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Invalid declaration */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recognized-credits/{identity}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                identity: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    identity: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecognizedCreditRequest"];
+                };
+            };
+            responses: {
+                /** @description Local declaration updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Invalid or missing declaration */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    identity: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Local declaration deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Declaration not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/login-configuration": {
         parameters: {
             query?: never;
@@ -676,6 +801,24 @@ export interface components {
             /** @description Must exactly equal version */
             confirmation: string;
         };
+        RecognizedCreditRequest: {
+            identity: string;
+            /** @enum {string} */
+            category: "innovation" | "social_practice" | "cultural_quality";
+            credits: number;
+            note: string;
+            /** Format: date */
+            recognized_on: string;
+            linked_course_identity?: string;
+        };
+        RecognizedCredit: components["schemas"]["RecognizedCreditRequest"] & {
+            baseline_version: string;
+            linked_course_identity: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         RequirementBaselineRequirement: {
             key: string;
             label: string;
@@ -795,6 +938,13 @@ export interface components {
             /** @enum {string} */
             reason: "confirmed_minimum_met" | "confirmed_below_minimum" | "grade_data_incomplete" | "recognized_credit_coverage_missing" | "classification_evidence_missing" | "outside_major_track_unconfirmed" | "required_subconstraint_unknown" | "required_subconstraint_not_satisfied";
             reason_detail: string;
+            declared_amount?: number;
+            estimated_amount?: number;
+            estimated_gap?: number;
+            declarations?: {
+                [key: string]: unknown;
+            }[];
+            manual_review_required?: boolean;
             required_credits: number;
             completed_credits: number;
             remaining_credits: number;
@@ -821,6 +971,7 @@ export interface components {
             login_configuration: components["schemas"]["LoginConfiguration"];
             requirement_baselines: components["schemas"]["RequirementBaseline"][];
             selected_requirement_baseline: components["schemas"]["RequirementBaseline"] | null;
+            recognized_credits: components["schemas"]["RecognizedCredit"][];
             profile: {
                 [key: string]: unknown;
             } | null;

@@ -314,6 +314,15 @@ body.drawer-open { overflow: hidden; }
 .baseline-history p { margin: 0; }
 .baseline-history details { margin-top: 8px; color: #c8d0ce; }
 .baseline-history ul { margin: 6px 0 0; padding-left: 18px; }
+.recognized-credit-panel { display: grid; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.recognized-credit-panel form { display: grid; grid-template-columns: 1fr 100px 145px; gap: 8px; }
+.recognized-credit-panel form input:nth-of-type(3), .recognized-credit-panel form input:nth-of-type(4), .recognized-credit-panel form > div { grid-column: 1 / -1; }
+.recognized-credit-panel form > div, .recognized-credit-panel li > div { display: flex; gap: 8px; }
+.recognized-credit-panel ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.recognized-credit-panel li { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.recognized-credit-panel li span { display: grid; gap: 3px; }
+.recognized-credit-panel p { margin: 0; color: var(--muted); }
+@media (max-width: 640px) { .recognized-credit-panel form { grid-template-columns: 1fr; } .recognized-credit-panel form > * { grid-column: 1 !important; } }
 
 @media (prefers-reduced-motion: reduce) {
   .data-drawer, .data-drawer-trigger { animation: none; transition: none; }

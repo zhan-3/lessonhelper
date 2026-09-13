@@ -11,6 +11,17 @@ paths:
     post:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RequirementBaselineSelectionRequest'}}}}
       responses: {'200': {description: Requirement baseline selected locally}, '409': {description: Explicit confirmation or version validation failed}}
+  /api/recognized-credits:
+    post:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RecognizedCreditRequest'}}}}
+      responses: {'201': {description: Local declaration created}, '200': {description: Idempotent existing declaration returned}, '400': {description: Invalid declaration}}
+  /api/recognized-credits/{identity}:
+    parameters: [{name: identity, in: path, required: true, schema: {type: string}}]
+    put:
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RecognizedCreditRequest'}}}}
+      responses: {'200': {description: Local declaration updated}, '400': {description: Invalid or missing declaration}}
+    delete:
+      responses: {'204': {description: Local declaration deleted}, '404': {description: Declaration not found}}
   /api/login-configuration:
     post:
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/LoginConfigurationRequest'}}}}
@@ -75,6 +86,26 @@ components:
       properties:
         version: {type: string}
         confirmation: {type: string, description: Must exactly equal version}
+    RecognizedCreditRequest:
+      type: object
+      required: [identity, category, credits, note, recognized_on]
+      properties:
+        identity: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$'}
+        category: {type: string, enum: [innovation, social_practice, cultural_quality]}
+        credits: {type: number, exclusiveMinimum: true, minimum: 0, maximum: 100}
+        note: {type: string, minLength: 1, maxLength: 300}
+        recognized_on: {type: string, format: date}
+        linked_course_identity: {type: string, maxLength: 128}
+    RecognizedCredit:
+      allOf:
+        - {$ref: '#/components/schemas/RecognizedCreditRequest'}
+        - type: object
+          required: [baseline_version, linked_course_identity, created_at, updated_at]
+          properties:
+            baseline_version: {type: string}
+            linked_course_identity: {type: string}
+            created_at: {type: string, format: date-time}
+            updated_at: {type: string, format: date-time}
     RequirementBaselineRequirement:
       type: object
       required: [key, label, minimum, unit, evidence]
@@ -203,6 +234,11 @@ components:
           type: string
           enum: [confirmed_minimum_met, confirmed_below_minimum, grade_data_incomplete, recognized_credit_coverage_missing, classification_evidence_missing, outside_major_track_unconfirmed, required_subconstraint_unknown, required_subconstraint_not_satisfied]
         reason_detail: {type: string}
+        declared_amount: {type: number}
+        estimated_amount: {type: number}
+        estimated_gap: {type: number}
+        declarations: {type: array, items: {type: object, additionalProperties: true}}
+        manual_review_required: {type: boolean}
         required_credits: {type: number}
         completed_credits: {type: number}
         remaining_credits: {type: number}
@@ -227,7 +263,7 @@ components:
         snapshot: {$ref: '#/components/schemas/Snapshot', nullable: true}
     WorkbenchState:
       type: object
-      required: [login_configuration, requirement_baselines, selected_requirement_baseline, profile, confirmed_notice, snapshots, snapshot_changes, latest_plan, graduation_progress, stale, snapshot_status, academic_session, active_task, execution_history, csrf_token]
+      required: [login_configuration, requirement_baselines, selected_requirement_baseline, recognized_credits, profile, confirmed_notice, snapshots, snapshot_changes, latest_plan, graduation_progress, stale, snapshot_status, academic_session, active_task, execution_history, csrf_token]
       properties:
         login_configuration: {$ref: '#/components/schemas/LoginConfiguration'}
         requirement_baselines: {type: array, items: {$ref: '#/components/schemas/RequirementBaseline'}}
@@ -235,6 +271,7 @@ components:
           nullable: true
           allOf:
             - {$ref: '#/components/schemas/RequirementBaseline'}
+        recognized_credits: {type: array, items: {$ref: '#/components/schemas/RecognizedCredit'}}
         profile: {type: object, nullable: true, additionalProperties: true}
         confirmed_notice: {type: object, nullable: true, additionalProperties: true}
         snapshots:

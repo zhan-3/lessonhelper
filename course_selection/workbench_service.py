@@ -7,12 +7,16 @@ routes should only translate HTTP input/output and delegate here.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import math
+import re
+from copy import deepcopy
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from course_progress.baselines import requirement_baseline, requirement_baselines
 from course_progress.credentials import credential_store
+from course_progress.progress import apply_recognized_credit_estimates
 
 from .notice import fetch_notice_text
 from .notice_discovery import (
@@ -23,6 +27,11 @@ from .notice_discovery import (
 )
 from .persistence import WorkspaceDatabase
 from .planning import ReadOnlyPlan, build_read_only_plan
+
+_RECOGNIZED_CREDIT_CATEGORIES = frozenset({
+    "innovation", "social_practice", "cultural_quality",
+})
+_LOCAL_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
 
 class NoticeReadError(ValueError):
@@ -126,6 +135,91 @@ class WorkbenchService:
         selection = self.database.select_requirement_baseline(version)
         return {**baseline, **selection}
 
+    def recognized_credits(self) -> list[dict[str, Any]]:
+        selected = self.selected_requirement_baseline()
+        if selected is None:
+            return []
+        return self.database.recognized_credit_declarations(selected["version"])
+
+    def _validated_recognized_credit(
+        self, payload: dict[str, Any], *, identity: str | None = None
+    ) -> dict[str, Any]:
+        selected = self.selected_requirement_baseline()
+        if selected is None:
+            raise ValueError("请先选择要求基线")
+        declaration_identity = identity or str(payload.get("identity", ""))
+        if not _LOCAL_IDENTITY.fullmatch(declaration_identity):
+            raise ValueError("申报身份格式无效")
+        category = str(payload.get("category", ""))
+        if category not in _RECOGNIZED_CREDIT_CATEGORIES:
+            raise ValueError("不支持的认定学分类别")
+        credits = payload.get("credits")
+        if isinstance(credits, bool) or not isinstance(credits, (int, float)):
+            raise TypeError("学分必须是数字")
+        credits = float(credits)
+        if not math.isfinite(credits) or not 0 < credits <= 100:
+            raise ValueError("学分必须是大于 0 且不超过 100 的有限数")
+        note = str(payload.get("note", "")).strip()
+        if not note or len(note) > 300:
+            raise ValueError("说明不能为空且不能超过 300 字符")
+        recognized_on = str(payload.get("recognized_on", ""))
+        try:
+            recognized_date = date.fromisoformat(recognized_on)
+        except ValueError as error:
+            raise ValueError("认定日期格式无效") from error
+        if recognized_date < date(2000, 1, 1) or recognized_date > datetime.now(timezone.utc).date():
+            raise ValueError("认定日期超出合理范围")
+        linked_identity = str(payload.get("linked_course_identity", "")).strip()
+        if linked_identity and (len(linked_identity) > 128 or any(ord(char) < 32 for char in linked_identity)):
+            raise ValueError("关联课程身份格式无效")
+        return {
+            "identity": declaration_identity,
+            "baseline_version": selected["version"],
+            "category": category,
+            "credits": credits,
+            "note": note,
+            "recognized_on": recognized_on,
+            "linked_course_identity": linked_identity,
+        }
+
+    def create_recognized_credit(
+        self, payload: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        validated = self._validated_recognized_credit(payload)
+        declaration, created = self.database.create_recognized_credit(validated)
+        if declaration["baseline_version"] != validated["baseline_version"]:
+            raise ValueError("申报身份已用于其他要求基线")
+        return declaration, created
+
+    def update_recognized_credit(
+        self, identity: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self.database.update_recognized_credit(
+            identity, self._validated_recognized_credit(payload, identity=identity)
+        )
+
+    def delete_recognized_credit(self, identity: str) -> bool:
+        if not _LOCAL_IDENTITY.fullmatch(identity):
+            raise ValueError("申报身份格式无效")
+        selected = self.selected_requirement_baseline()
+        if selected is None:
+            raise ValueError("请先选择要求基线")
+        return self.database.delete_recognized_credit(identity, selected["version"])
+
+    def _with_recognized_credit_estimates(
+        self, classified: dict[str, Any]
+    ) -> dict[str, Any]:
+        report = classified.get("report")
+        selected = self.selected_requirement_baseline()
+        if not isinstance(report, dict) or selected is None:
+            return classified
+        result = deepcopy(classified)
+        copied_report = result["report"]
+        copied_report["progress"] = apply_recognized_credit_estimates(
+            copied_report.get("progress", []), selected, self.recognized_credits()
+        )
+        return result
+
     def _classified_progress(
         self, report: dict[str, Any], *, snapshot: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -160,7 +254,9 @@ class WorkbenchService:
             profile_id = (profile or {}).get("version_id")
             if profile_id and snapshot.get("profile_id") != profile_id:
                 return {"status": "not_applicable", "report": None, "snapshot": snapshot}
-            return self._classified_progress(report, snapshot=snapshot)
+            return self._with_recognized_credit_estimates(
+                self._classified_progress(report, snapshot=snapshot)
+            )
 
         # Keep reports generated by the existing standalone collector visible
         # as history until a selected baseline is refreshed in the workbench.
@@ -175,7 +271,9 @@ class WorkbenchService:
             return {"status": "invalid", "report": None}
         if not report.get("baseline_version"):
             report = {**report, "baseline_version": "guide-2026"}
-        return self._classified_progress(report)
+        return self._with_recognized_credit_estimates(
+            self._classified_progress(report)
+        )
 
     def progress_context(self) -> dict[str, Any]:
         selected = self.selected_requirement_baseline()
@@ -225,6 +323,7 @@ class WorkbenchService:
             "login_configuration": self.login_configuration(),
             "requirement_baselines": self.available_requirement_baselines(),
             "selected_requirement_baseline": self.selected_requirement_baseline(),
+            "recognized_credits": self.recognized_credits(),
             "profile": self.effective_profile(),
             "confirmed_notice": self.database.confirmed_notice(),
             "snapshots": {"selection": selection, "timetable": timetable, "progress": progress_snapshot},

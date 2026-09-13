@@ -9,6 +9,7 @@ export type GraduationProgressReport = components["schemas"]["GraduationProgress
 export type GraduationProgress = components["schemas"]["GraduationProgress"];
 export type LoginConfiguration = components["schemas"]["LoginConfiguration"];
 export type RequirementBaseline = components["schemas"]["RequirementBaseline"];
+export type RecognizedCredit = components["schemas"]["RecognizedCredit"];
 type GeneratedWorkbenchState = components["schemas"]["WorkbenchState"];
 export type Task = components["schemas"]["Task"] & { created_at?: string; updated_at?: string; timeout_seconds?: number };
 export type SnapshotStatus = { status: "current" | "historical" | "incomplete" | "missing"; reason: string; source_at: string };

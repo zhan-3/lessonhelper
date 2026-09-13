@@ -366,6 +366,83 @@ def assess_progress(
     return tuple(assessed[item.requirement.key] for item in report.progress)
 
 
+def apply_recognized_credit_estimates(
+    progress_items: list[dict[str, object]],
+    baseline_definition: Mapping[str, object],
+    declarations: Iterable[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    """Add local declaration estimates without changing confirmed school facts."""
+    confirmed_identities = {
+        str(course.get("code") or " ".join(str(course.get("name", "")).lower().split()))
+        for item in progress_items
+        for course in item.get("courses", ())
+        if isinstance(course, Mapping)
+    }
+    unique_declarations = {
+        str(item.get("identity", "")): item for item in declarations if item.get("identity")
+    }
+    claimed_links: set[str] = set()
+    declaration_overlap: dict[str, tuple[bool, str]] = {}
+    for identity, declaration in unique_declarations.items():
+        linked_identity = str(declaration.get("linked_course_identity", ""))
+        if linked_identity and linked_identity in confirmed_identities:
+            declaration_overlap[identity] = (False, "linked_confirmed_course")
+        elif linked_identity and linked_identity in claimed_links:
+            declaration_overlap[identity] = (False, "duplicate_declaration_link")
+        else:
+            declaration_overlap[identity] = (
+                True,
+                "linked_identity_not_confirmed" if linked_identity else "unverified_overlap",
+            )
+            if linked_identity:
+                claimed_links.add(linked_identity)
+    requirements = baseline_definition.get("requirements", ())
+    contribution_targets = {
+        str(item.get("key", "")): {
+            str(item.get("key", "")),
+            *(str(key) for key in item.get("contribution_keys", ())),
+        }
+        for item in requirements
+        if isinstance(item, Mapping)
+    }
+    result: list[dict[str, object]] = []
+    for progress in progress_items:
+        key = str(progress.get("key", ""))
+        applied: list[dict[str, object]] = []
+        declared_amount = 0.0
+        for declaration in unique_declarations.values():
+            if str(declaration.get("category", "")) not in contribution_targets.get(key, {key}):
+                continue
+            contributes, overlap_status = declaration_overlap[
+                str(declaration.get("identity", ""))
+            ]
+            credits = float(declaration.get("credits", 0))
+            if contributes:
+                declared_amount += credits
+            applied.append({
+                **dict(declaration),
+                "contributes": contributes,
+                "overlap_status": overlap_status,
+            })
+        confirmed_amount = float(progress.get("confirmed_amount", 0))
+        minimum = float(progress.get("minimum", 0))
+        estimated_amount = confirmed_amount + declared_amount
+        result.append({
+            **progress,
+            "declared_amount": round(declared_amount, 6),
+            "estimated_amount": round(estimated_amount, 6),
+            "estimated_gap": round(max(0.0, minimum - estimated_amount), 6),
+            "declarations": applied,
+            "manual_review_required": any(
+                item["overlap_status"] not in {
+                    "linked_confirmed_course", "duplicate_declaration_link",
+                }
+                for item in applied
+            ),
+        })
+    return result
+
+
 def confirmed_progress_items(
     report: ProgressReport, *, data_complete: bool
 ) -> list[dict[str, object]]:

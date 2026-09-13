@@ -139,6 +139,36 @@ def create_workbench_app(
             return jsonify({"error": str(error)}), 409
         return jsonify({"selected_requirement_baseline": selected})
 
+    @app.post("/api/recognized-credits")
+    def create_recognized_credit():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        try:
+            declaration, created = core.create_recognized_credit(body)
+        except (TypeError, ValueError) as error:
+            return jsonify({"error": str(error)}), 400
+        return jsonify(declaration), 201 if created else 200
+
+    @app.put("/api/recognized-credits/<identity>")
+    def update_recognized_credit(identity: str):
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON object required"}), 400
+        try:
+            declaration = core.update_recognized_credit(identity, body)
+        except (TypeError, ValueError) as error:
+            return jsonify({"error": str(error)}), 400
+        return jsonify(declaration)
+
+    @app.delete("/api/recognized-credits/<identity>")
+    def delete_recognized_credit(identity: str):
+        try:
+            deleted = core.delete_recognized_credit(identity)
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+        return ("", 204) if deleted else (jsonify({"error": "not found"}), 404)
+
     @app.post("/api/login-configuration")
     def configure_login():
         body = request.get_json(silent=True)

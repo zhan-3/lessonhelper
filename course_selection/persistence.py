@@ -60,6 +60,8 @@ create table if not exists observation_tasks(id text primary key, operation text
 create table if not exists execution_tasks(id text primary key, operation text not null, state text not null, created_at text not null, updated_at text not null, progress text not null, context text not null, error text not null default '');
 create table if not exists execution_history(id text primary key, created_at text not null, section_id text not null, course_name text not null, category text not null, result text not null, message text not null, snapshot_id text not null, notice_id text not null, resolved integer not null default 0 check(resolved in (0,1)));
 create index if not exists execution_history_created on execution_history(created_at desc);
+create table if not exists recognized_credits(identity text primary key, baseline_version text not null, category text not null, credits real not null check(credits>0 and credits<=100), note text not null, recognized_on text not null, linked_course_identity text not null default '', created_at text not null, updated_at text not null);
+create index if not exists recognized_credits_baseline on recognized_credits(baseline_version, created_at);
 """
 
 
@@ -221,6 +223,63 @@ class WorkspaceDatabase:
             )
         return selection
 
+    def recognized_credit_declarations(
+        self, baseline_version: str
+    ) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "select * from recognized_credits where baseline_version=? order by created_at,identity",
+            (baseline_version,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_recognized_credit(
+        self, declaration: dict[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        now = utc_now()
+        with self.connection:
+            cursor = self.connection.execute(
+                "insert or ignore into recognized_credits values(?,?,?,?,?,?,?,?,?)",
+                (
+                    declaration["identity"], declaration["baseline_version"],
+                    declaration["category"], declaration["credits"],
+                    sanitize_for_storage(declaration["note"]),
+                    declaration["recognized_on"], declaration["linked_course_identity"], now, now,
+                ),
+            )
+        row = self.connection.execute(
+            "select * from recognized_credits where identity=?", (declaration["identity"],)
+        ).fetchone()
+        return dict(row), cursor.rowcount == 1
+
+    def update_recognized_credit(
+        self, identity: str, declaration: dict[str, Any]
+    ) -> dict[str, Any]:
+        with self.connection:
+            cursor = self.connection.execute(
+                "update recognized_credits set category=?,credits=?,note=?,recognized_on=?,"
+                "linked_course_identity=?,updated_at=? where identity=? and baseline_version=?",
+                (
+                    declaration["category"], declaration["credits"],
+                    sanitize_for_storage(declaration["note"]),
+                    declaration["recognized_on"], declaration["linked_course_identity"],
+                    utc_now(), identity, declaration["baseline_version"],
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise ValueError("recognized credit declaration not found")
+        row = self.connection.execute(
+            "select * from recognized_credits where identity=?", (identity,)
+        ).fetchone()
+        return dict(row)
+
+    def delete_recognized_credit(self, identity: str, baseline_version: str) -> bool:
+        with self.connection:
+            cursor = self.connection.execute(
+                "delete from recognized_credits where identity=? and baseline_version=?",
+                (identity, baseline_version),
+            )
+        return cursor.rowcount == 1
+
     def confirmed_notice(self) -> dict[str, Any] | None:
         row = self.connection.execute("select id,payload from notice_versions where status='confirmed' order by created_at desc limit 1").fetchone()
         return ({**json.loads(row["payload"]), "version_id": row["id"]} if row else None)
@@ -377,6 +436,7 @@ class WorkspaceDatabase:
             self.connection.execute("delete from plans")
             self.connection.execute("delete from execution_tasks")
             self.connection.execute("delete from execution_history")
+            self.connection.execute("delete from recognized_credits")
             self.connection.execute("delete from snapshots")
             self.connection.execute("delete from profiles")
             self.connection.execute(

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { CandidateNotice, RequirementBaseline, Task, WorkbenchState } from "./api";
+import type { CandidateNotice, RecognizedCredit, RequirementBaseline, Task, WorkbenchState } from "./api";
 import { ScheduleBoard } from "./ScheduleBoard";
 import { candidateExecutionStatus, expandScheduleItems, selectionCategoryLabel, selectionWindowDisplay, selectionWindowsForGrade, type SelectionWindow } from "./schedule";
 import "./style.css";
@@ -12,6 +12,14 @@ type PlanGoal = { goal_id: string; course_identity: string; rank: number; prefer
 type PlanSection = Record<string, unknown>;
 
 type PlanCourse = { identity: string; name: string; category: string; sections: PlanSection[] };
+type RecognizedCreditDraft = Pick<RecognizedCredit, "category" | "credits" | "note" | "recognized_on" | "linked_course_identity">;
+const emptyRecognizedCreditDraft = (): RecognizedCreditDraft => ({
+  category: "innovation",
+  credits: 1,
+  note: "",
+  recognized_on: new Date().toISOString().slice(0, 10),
+  linked_course_identity: "",
+});
 
 const planReasonLabels: Record<string, string> = {
   goals_missing: "尚未添加任何课程目标",
@@ -104,6 +112,8 @@ export function App() {
   const [savingLogin, setSavingLogin] = useState(false);
   const [dataDrawerOpen, setDataDrawerOpen] = useState(false);
   const [windowsOpen, setWindowsOpen] = useState(false);
+  const [recognizedDraft, setRecognizedDraft] = useState<RecognizedCreditDraft>(emptyRecognizedCreditDraft);
+  const [editingRecognizedIdentity, setEditingRecognizedIdentity] = useState<string | null>(null);
   const drawerTriggerRef = useRef<HTMLButtonElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
   const goalsHydrated = useRef(false);
@@ -204,6 +214,56 @@ export function App() {
       return;
     }
     setMessage("基础毕业要求基线已选择；请显式同步毕业进度以按新版本计算。");
+    await load();
+  };
+
+  const saveRecognizedCredit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!state) return;
+    const identity = editingRecognizedIdentity ?? `recognized-${Date.now()}`;
+    const response = await fetch(
+      editingRecognizedIdentity ? `/api/recognized-credits/${editingRecognizedIdentity}` : "/api/recognized-credits",
+      {
+        method: editingRecognizedIdentity ? "PUT" : "POST",
+        headers: jsonHeaders(state.csrf_token),
+        body: JSON.stringify({ identity, ...recognizedDraft }),
+      },
+    );
+    const result = await response.json();
+    if (!response.ok) {
+      setMessage(result.error ?? "无法保存认定学分申报");
+      return;
+    }
+    setRecognizedDraft(emptyRecognizedCreditDraft());
+    setEditingRecognizedIdentity(null);
+    setMessage("认定学分申报已保存在本机，仅计入预计进度。");
+    await load();
+  };
+
+  const editRecognizedCredit = (item: RecognizedCredit) => {
+    setEditingRecognizedIdentity(item.identity);
+    setRecognizedDraft({
+      category: item.category,
+      credits: item.credits,
+      note: item.note,
+      recognized_on: item.recognized_on,
+      linked_course_identity: item.linked_course_identity,
+    });
+  };
+
+  const deleteRecognizedCredit = async (identity: string) => {
+    if (!state) return;
+    const response = await fetch(`/api/recognized-credits/${identity}`, {
+      method: "DELETE", headers: jsonHeaders(state.csrf_token),
+    });
+    if (!response.ok) {
+      setMessage("无法删除认定学分申报");
+      return;
+    }
+    if (editingRecognizedIdentity === identity) {
+      setEditingRecognizedIdentity(null);
+      setRecognizedDraft(emptyRecognizedCreditDraft());
+    }
     await load();
   };
 
@@ -680,6 +740,21 @@ export function App() {
             </article>;
           })}
           {state.graduation_progress.status === "historical" && <div className="baseline-history"><p>{state.graduation_progress.reason ?? "当前进度属于其他基线，请重新同步。"}</p>{state.graduation_progress.historical_report && <details><summary>查看旧基线进度</summary><small>版本：{state.graduation_progress.historical_report.baseline_version ?? "旧版"}</small><ul>{state.graduation_progress.historical_report.progress.map(item => <li key={item.key}>{item.label ?? item.key}：已确认 {item.completed_credits} / {item.required_credits} 学分</li>)}</ul></details>}</div>}
+        </section>
+        <section className="recognized-credit-panel" aria-labelledby="recognized-credit-title">
+          <div className="drawer-section-heading"><small>仅保存在本机</small><strong id="recognized-credit-title">认定学分申报</strong><span>只计入预计缺口，不改变学校已确认结果。</span></div>
+          <form onSubmit={saveRecognizedCredit}>
+            <select aria-label="申报类别" value={recognizedDraft.category} onChange={event => setRecognizedDraft(value => ({ ...value, category: event.target.value as RecognizedCreditDraft["category"] }))}>
+              <option value="innovation">创新创业</option><option value="social_practice">社会实践</option><option value="cultural_quality">文化素质</option>
+            </select>
+            <input aria-label="申报学分" type="number" min="0.1" max="100" step="0.1" required value={recognizedDraft.credits} onChange={event => setRecognizedDraft(value => ({ ...value, credits: Number(event.target.value) }))} />
+            <input aria-label="认定日期" type="date" required value={recognizedDraft.recognized_on} onChange={event => setRecognizedDraft(value => ({ ...value, recognized_on: event.target.value }))} />
+            <input aria-label="申报说明" required maxLength={300} placeholder="说明认定事项" value={recognizedDraft.note} onChange={event => setRecognizedDraft(value => ({ ...value, note: event.target.value }))} />
+            <input aria-label="关联课程代码（可选）" maxLength={128} placeholder="关联课程代码（可选，防止重复计算）" value={recognizedDraft.linked_course_identity} onChange={event => setRecognizedDraft(value => ({ ...value, linked_course_identity: event.target.value }))} />
+            <div><button type="submit" disabled={!state.selected_requirement_baseline}>{editingRecognizedIdentity ? "保存修改" : "新增申报"}</button>{editingRecognizedIdentity && <button type="button" className="secondary" onClick={() => { setEditingRecognizedIdentity(null); setRecognizedDraft(emptyRecognizedCreditDraft()); }}>取消编辑</button>}</div>
+          </form>
+          {state.recognized_credits.length > 0 && <ul>{state.recognized_credits.map(item => <li key={item.identity}><span><strong>{item.note}</strong><small>{item.credits} 学分 · {item.recognized_on} · 用户申报</small></span><div><button className="secondary" onClick={() => editRecognizedCredit(item)}>编辑</button><button className="danger" onClick={() => void deleteRecognizedCredit(item.identity)}>删除</button></div></li>)}</ul>}
+          {state.recognized_credits.length === 0 && <p>暂无申报。不支持用手填学分证明四史门数。</p>}
         </section>
         <section className="drawer-actions" aria-label="数据操作">
           <button onClick={() => run("connect")} disabled={remoteBusy}><span>连接教务</span><small>验证当前教务会话</small></button>

@@ -42,6 +42,7 @@ const state = (selected: boolean) => ({
   login_configuration: { state: "configured", configured: true, masked_username: "2025******" },
   requirement_baselines: [guide, reference],
   selected_requirement_baseline: selected ? { ...reference, selected_at: "2026-01-01T00:00:00Z" } : noSelectedBaseline,
+  recognized_credits: [],
   profile: { grade: "2025" },
   confirmed_notice: null,
   snapshots: { selection: null, timetable: null, progress: null },
@@ -128,6 +129,99 @@ describe("requirement baseline selection", () => {
       "文化素质课程", "文化素质 D 类", "四史课程", "跨专业发展课程",
     ]) expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/条件状态：/)).toHaveLength(8);
+  });
+
+  it("does not double-count declarations linked to enrolled or queued courses", async () => {
+    const overlap = readyState() as WorkbenchState;
+    const innovation = overlap.graduation_progress.report!.progress.find(item => item.key === "innovation")!;
+    Object.assign(innovation, {
+      declared_amount: 4, estimated_amount: 4, estimated_gap: 0, manual_review_required: true,
+      declarations: [
+        { identity: "declared-enrolled", note: "关联已选", credits: 2, linked_course_identity: "ENROLLED", contributes: true },
+        { identity: "declared-queued", note: "关联队列", credits: 2, linked_course_identity: "QUEUED", contributes: true },
+      ],
+    });
+    overlap.recognized_credits = [];
+    overlap.snapshots.timetable = {
+      id: "timetable-1", kind: "timetable", term: "2026-1", source: "test",
+      source_at: "2026-01-01", payload: { entries: [], enrolled_courses: [
+        { code: "ENROLLED", name: "本学期创新", category: "创新研修课", nature: "任选", credits: 2 },
+      ] },
+    };
+    overlap.snapshots.selection = {
+      id: "selection-1", kind: "selection", term: "2026-1", source: "test",
+      source_at: "2026-01-01", payload: { sections: [
+        { identity: "section-queued", course_code: "QUEUED", course_name: "队列创新", category: "创新研修课", credits: 2 },
+      ] },
+    };
+    overlap.latest_plan = { goals: [{ goal_id: "goal-1", course_identity: "QUEUED", rank: 1, preferences: [{ section_id: "section-queued", rank: 1 }] }] };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/state") return new Response(JSON.stringify(overlap));
+      if (url === "/api/notices/candidates") return new Response(JSON.stringify({ notices: [] }));
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    Element.prototype.scrollIntoView = vi.fn();
+
+    render(<App />);
+    const meter = await screen.findByRole("progressbar", { name: "创新创业预计学分" });
+    const card = meter.closest("article")!;
+    expect(card.textContent).toContain("4 / 4 学分");
+    expect(within(card).getByText(/用户申报 0/)).toBeTruthy();
+    expect(within(card).getByText(/本学期已选 2/)).toBeTruthy();
+    expect(within(card).getByText(/队列预览 2/)).toBeTruthy();
+    expect(within(card).getByText(/已确认缺口：4 学分/)).toBeTruthy();
+    expect(within(card).getAllByText(/已关联本学期或队列课程，不重复计入/)).toHaveLength(2);
+    expect(within(card).getByText(/可能重叠，请人工核验/)).toBeTruthy();
+  });
+
+  it("creates, edits, and deletes a local recognized-credit declaration", async () => {
+    let declarations: WorkbenchState["recognized_credits"] = [];
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === "/api/state") return new Response(JSON.stringify({ ...state(true), recognized_credits: declarations }));
+      if (url === "/api/notices/candidates") return new Response(JSON.stringify({ notices: [] }));
+      if (url === "/api/recognized-credits" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        declarations = [{ ...body, baseline_version: reference.version, linked_course_identity: "", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }];
+        return new Response(JSON.stringify(declarations[0]), { status: 201 });
+      }
+      if (url.startsWith("/api/recognized-credits/") && init?.method === "PUT") {
+        declarations = [{ ...declarations[0], ...JSON.parse(String(init.body)), updated_at: "2026-01-02T00:00:00Z" }];
+        return new Response(JSON.stringify(declarations[0]));
+      }
+      if (url.startsWith("/api/recognized-credits/") && init?.method === "DELETE") {
+        declarations = [];
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    Element.prototype.scrollIntoView = vi.fn();
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("选课规划工作台");
+    await user.click(screen.getByRole("button", { name: /数据操作/ }));
+
+    await user.selectOptions(screen.getByLabelText("申报类别"), "social_practice");
+    await user.clear(screen.getByLabelText("申报学分"));
+    await user.type(screen.getByLabelText("申报学分"), "2");
+    await user.type(screen.getByLabelText("申报说明"), "合成社会实践认定");
+    await user.click(screen.getByRole("button", { name: "新增申报" }));
+    expect(await screen.findByText("合成社会实践认定")).toBeTruthy();
+    const createRequest = requests.find(request => request.url === "/api/recognized-credits" && request.init?.method === "POST");
+    expect(createRequest?.init?.headers).toMatchObject({ "X-CSRF-Token": "csrf-test" });
+
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    await user.clear(screen.getByLabelText("申报学分"));
+    await user.type(screen.getByLabelText("申报学分"), "1");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(requests.some(request => request.url.startsWith("/api/recognized-credits/") && request.init?.method === "PUT")).toBe(true));
+    expect(await screen.findByText(/1 学分/)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "删除" }));
+    expect(await screen.findByText("暂无申报。不支持用手填学分证明四史门数。")).toBeTruthy();
   });
 
   it("shows applicability and historical progress before explicitly confirmed local selection", async () => {

@@ -199,7 +199,16 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
         ) : [];
         const enrolledCredits = currentEnrolledCourses.reduce((total, course) => total + course.credits, 0);
         const queuedCredits = filter ? projectedCourseCredits(previewOptions, [...completedCourses, ...currentEnrolledCourses], filter) : 0;
-        const estimatedCredits = enrolledCredits + queuedCredits;
+        const estimatedCourseIdentities = new Set([
+          ...currentEnrolledCourses.map(course => course.code || course.name.trim().toLowerCase()),
+          ...previewOptions.map(option => option.courseCode || option.name.trim().toLowerCase()),
+        ]);
+        const declarationCourseOverlap = item.declarations?.reduce((total, declaration) => {
+          const linked = String(declaration.linked_course_identity ?? "");
+          return total + (declaration.contributes !== false && linked && estimatedCourseIdentities.has(linked) ? Number(declaration.credits) : 0);
+        }, 0) ?? 0;
+        const declaredCredits = Math.max(0, (item.declared_amount ?? 0) - declarationCourseOverlap);
+        const estimatedCredits = declaredCredits + enrolledCredits + queuedCredits;
         const expectedCredits = confirmedCredits + estimatedCredits;
         const remainingCredits = Math.max(0, requiredCredits - expectedCredits);
         const width = (credits: number, before = 0) => requiredCredits > 0 ? `${Math.max(0, Math.min(credits, requiredCredits - before)) / requiredCredits * 100}%` : "0%";
@@ -207,11 +216,12 @@ export function ScheduleBoard({ timetable, selection, graduationProgress, select
         return <article className="progress-card" key={item.key}>
           <header><strong>{item.key === "outside_major_elective" ? "跨专业发展课程" : item.label}</strong><span><b>{formatCredits(expectedCredits)}</b> / {formatCredits(requiredCredits)} {unitLabel}</span></header>
           {requiredCredits > 0 && <div className="credit-meter" role="progressbar" aria-label={`${item.label}预计学分`} aria-valuemin={0} aria-valuemax={requiredCredits} aria-valuenow={Math.min(expectedCredits, requiredCredits)}><span className="confirmed" style={{ width: width(confirmedCredits) }} /><span className="estimated" style={{ width: width(estimatedCredits, confirmedCredits) }} /></div>}
-          <div className="credit-breakdown"><span className="credit-confirmed"><i />已确认 {formatCredits(confirmedCredits)}</span><span className="credit-estimated"><i />本学期已选 {formatCredits(enrolledCredits)}</span><span className="credit-estimated preview"><i />队列预览 {formatCredits(queuedCredits)}</span></div>
+          <div className="credit-breakdown"><span className="credit-confirmed"><i />已确认 {formatCredits(confirmedCredits)}</span><span className="credit-estimated declared"><i />用户申报 {formatCredits(declaredCredits)}</span><span className="credit-estimated"><i />本学期已选 {formatCredits(enrolledCredits)}</span><span className="credit-estimated preview"><i />队列预览 {formatCredits(queuedCredits)}</span></div>
           <p className={`condition-state ${item.condition_status ?? "unknown"}`}>条件状态：{item.condition_detail ?? "未知"} · {item.reason_detail ?? "等待证据"}</p>
           <p className="credit-gap">已确认缺口：{formatCredits(item.confirmed_gap ?? item.remaining_credits ?? 0)} {unitLabel}；{remainingCredits > 0 ? `按当前估值还差 ${formatCredits(remainingCredits)} ${unitLabel}` : "按当前估值达到最低值"}</p>
           {rule && <p className="requirement-rule">{rule}</p>}
-          <div className="progress-courses">{item.courses.map(course => <span className="confirmed-course" key={`${course.code}-${course.name}`}><i>已修</i>{course.name} · {formatCredits(course.credits)}</span>)}{currentEnrolledCourses.map(course => <span className="estimated-course" key={`selected-${course.code}-${course.name}`}><i>已选</i>{course.name} · {formatCredits(course.credits)}</span>)}{filter && previewOptions.filter(option => planningFilterFor(option) === filter && !courseAlreadyCompleted(option, [...completedCourses, ...currentEnrolledCourses])).map(option => <span className="estimated-course preview" key={`queued-${option.key}`}><i>预览</i>{option.name} · {formatCredits(option.credits)}</span>)}{!item.courses.length && !currentEnrolledCourses.length && !queuedCredits && <span>暂无已确认或预计课程</span>}</div>
+          {item.manual_review_required && <p className="requirement-rule">未关联学校课程身份的申报可能重叠，请人工核验。</p>}
+          <div className="progress-courses">{item.courses.map(course => <span className="confirmed-course" key={`${course.code}-${course.name}`}><i>已修</i>{course.name} · {formatCredits(course.credits)}</span>)}{item.declarations?.map(declaration => { const linked = String(declaration.linked_course_identity ?? ""); const linkedToEstimate = linked && estimatedCourseIdentities.has(linked); return <span className="estimated-course declared" key={`declared-${String(declaration.identity)}`}><i>申报</i>{String(declaration.note)} · {formatCredits(Number(declaration.credits))}{declaration.contributes === false ? " · 已关联事实，不重复计入" : linkedToEstimate ? " · 已关联本学期或队列课程，不重复计入" : ""}</span>; })}{currentEnrolledCourses.map(course => <span className="estimated-course" key={`selected-${course.code}-${course.name}`}><i>已选</i>{course.name} · {formatCredits(course.credits)}</span>)}{filter && previewOptions.filter(option => planningFilterFor(option) === filter && !courseAlreadyCompleted(option, [...completedCourses, ...currentEnrolledCourses])).map(option => <span className="estimated-course preview" key={`queued-${option.key}`}><i>预览</i>{option.name} · {formatCredits(option.credits)}</span>)}{!item.courses.length && !item.declarations?.length && !currentEnrolledCourses.length && !queuedCredits && <span>暂无已确认或预计课程</span>}</div>
         </article>;
       })}</div> : <div className="progress-band-inner"><article className="progress-card unavailable"><strong>尚未同步已修课程</strong><span>同步后可区分已确认、本学期已选与队列估值。</span></article></div>}
       {graduationProgress?.status === "incomplete" && <small>已修课程数据不完整，当前缺口只能作为下限参考。</small>}
