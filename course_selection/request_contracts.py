@@ -24,9 +24,21 @@ def generate_contract_candidates(delta: dict[str, Any], *, limit: int = 20) -> l
     """Rank sanitized request events without claiming a fixed production contract."""
     if not isinstance(delta, dict) or not isinstance(delta.get("events"), list):
         return []
+    boundary = int(delta.get("operation_boundary_sequence", 0) or 0)
+    inventory_targets = delta.get("inventory_targets", ())
+    origin_by_target = {
+        str(item.get("target_identity")): str(
+            (item.get("semantic_signature") or {}).get("origin_class", "unresolved")
+        )
+        for item in inventory_targets
+        if isinstance(item, dict) and isinstance(item.get("semantic_signature"), dict)
+    } if isinstance(inventory_targets, list) else {}
+    events = delta["events"]
+    if boundary:
+        events = [event for event in events if isinstance(event, dict) and int(event.get("sequence", 0) or 0) >= boundary]
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     responses: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
-    for event in delta["events"]:
+    for event in events:
         if not isinstance(event, dict):
             continue
         key = (str(event.get("method", "GET")).upper(), _shape(event.get("url_shape", "")), str(event.get("target_identity", "unknown")))
@@ -68,7 +80,7 @@ def generate_contract_candidates(delta: dict[str, Any], *, limit: int = 20) -> l
             score += 2
             reasons.append("target and frame provenance are correlated")
         if len(requests) > 2 and all(item in {"xhr", "fetch"} for item in resources):
-            score -= 2
+            score -= 8
             reasons.append("high repetition may indicate background polling")
         if method == "POST":
             reasons.append("POST retained as diagnostic candidate; method alone does not prove a write")
@@ -86,6 +98,15 @@ def generate_contract_candidates(delta: dict[str, Any], *, limit: int = 20) -> l
             "request": {"method": method, "path_shape": path_shape, "resource_type": primary_resource_type, "target_frame_relation": target_frame_relation},
             "redirect": {"hop_count": redirect_hop_count, "method": method, "path_shape_sequence": redirect_path_shapes},
         }
+        local_or_internal = origin_by_target.get(target) in {
+            "loopback", "browser_internal",
+        }
+        eligible = (
+            not local_or_internal
+            and completeness == "complete"
+            and primary_resource_type in {"xhr", "fetch"}
+            and (len(requests) <= 2 or bool(redirect_hop_count or pagination or body_fields))
+        )
         candidates.append({
             "method": method, "path_shape": path_shape, "target_identity": target,
             "count": len(requests), "repetition": "repeated" if len(requests) > 1 else "single",
@@ -100,6 +121,12 @@ def generate_contract_candidates(delta: dict[str, Any], *, limit: int = 20) -> l
             "primary_resource_type": primary_resource_type,
             "target_frame_relation": target_frame_relation,
             "semantic_signature": semantic_signature,
+            "causal_eligibility": (
+                "local_or_internal" if local_or_internal
+                else "eligible" if eligible
+                else "background_or_insufficient"
+            ),
+            "selected": False,
             "redirect_hop_count": redirect_hop_count,
             "redirect_path_shapes": redirect_path_shapes,
             "provenance": {"first_elapsed_ms": min(elapsed) if elapsed else None, "last_elapsed_ms": max(elapsed) if elapsed else None},
@@ -107,4 +134,53 @@ def generate_contract_candidates(delta: dict[str, Any], *, limit: int = 20) -> l
             "completeness": completeness,
             "warnings": ["diagnostic candidate only; not a verified academic read contract"],
         })
-    return sorted(candidates, key=lambda item: (-item["score"], item["path_shape"], item["method"]))[: max(1, min(limit, 20))]
+    ranked = sorted(candidates, key=lambda item: (-item["score"], item["path_shape"], item["method"]))[: max(1, min(limit, 20))]
+    selected = False
+    for rank, candidate in enumerate(ranked, 1):
+        candidate["rank"] = rank
+        if not selected and candidate["causal_eligibility"] == "eligible":
+            candidate["selected"] = True
+            selected = True
+    return ranked
+
+
+def project_operation_targets(delta: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project selected request evidence onto bounded top-level target semantics."""
+    targets = delta.get("inventory_targets") if isinstance(delta, dict) else None
+    if not isinstance(targets, list):
+        return []
+    by_identity = {str(item.get("target_identity")): item for item in targets if isinstance(item, dict) and item.get("target_identity")}
+    projected = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate.get("selected"):
+            continue
+        observed = by_identity.get(str(candidate.get("target_identity")))
+        if observed is None:
+            continue
+        relevant = observed
+        owner = observed
+        visited: set[str] = set()
+        while owner.get("kind") != "page" and owner.get("parent_identity"):
+            identity = str(owner["parent_identity"])
+            if identity in visited or identity not in by_identity:
+                break
+            visited.add(identity)
+            owner = by_identity[identity]
+        owner_identity = str(owner.get("target_identity", ""))
+        if not owner_identity or owner_identity in seen:
+            continue
+        seen.add(owner_identity)
+        relevant_signature = relevant.get("semantic_signature") if isinstance(relevant.get("semantic_signature"), dict) else {}
+        projected.append({
+            "target_identity": owner_identity,
+            "candidate_evidence_identity": candidate.get("evidence_identity"),
+            "navigation_state": owner.get("navigation_state"),
+            "semantic_signature": {
+                "kind": owner.get("kind", "unknown"),
+                "relationship": owner.get("relationship", "unknown"),
+                "depth": int(relevant_signature.get("depth", 0) or 0),
+                "origin_class": relevant_signature.get("origin_class", "unresolved"),
+            },
+        })
+    return projected[:4]

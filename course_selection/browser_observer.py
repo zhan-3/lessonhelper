@@ -61,6 +61,8 @@ class _Trace:
     missing_evidence: set[str] = field(default_factory=set)
     redactor: TraceRedactor = field(default_factory=TraceRedactor, repr=False)
     started_at: float = field(default_factory=time.monotonic)
+    operation_boundary_sequence: int = 0
+    operation_boundary_ms: float = 0.0
 
 
 class BorrowedBrowserObserver:
@@ -183,6 +185,18 @@ class BorrowedBrowserObserver:
             for page in context.pages:
                 self._listen_page(page)
         return ObserverResult("observing", "observation started before external browser activity", {"trace_id": trace.identity, "target_count": len(trace.started_targets)})
+
+    @_synchronized
+    def mark_operation_boundary(self) -> ObserverResult:
+        if self._trace is None:
+            return ObserverResult("failed", "no active observation", next_actions=("start observation first",))
+        self.pump_events()
+        trace = self._trace
+        if trace.operation_boundary_sequence:
+            return ObserverResult("already_marked", "operation boundary is already marked", {"trace_id": trace.identity, "operation_boundary_sequence": trace.operation_boundary_sequence})
+        trace.operation_boundary_sequence = len(trace.events) + 1
+        trace.operation_boundary_ms = round((time.monotonic() - trace.started_at) * 1000, 3)
+        return ObserverResult("marked", "operation boundary marked before external activity", {"trace_id": trace.identity, "operation_boundary_sequence": trace.operation_boundary_sequence, "operation_boundary_ms": trace.operation_boundary_ms})
 
     @_synchronized
     def pump_events(self) -> None:
@@ -406,7 +420,9 @@ class BorrowedBrowserObserver:
         self.pump_events()
         events = [] if trace.redaction_error else trace.events[trace.checkpoint:]
         trace.checkpoint = len(trace.events)
-        current = self._target_keys()
+        inventory = self.inventory()
+        inventory_targets = inventory.data.get("targets", []) if inventory.data else []
+        current = {str(item.get("target_identity")) for item in inventory_targets}
         added = sorted(current - trace.started_targets)
         removed = sorted(trace.started_targets - current)
         status = "complete" if trace.dropped_events == 0 and not trace.redaction_error and not trace.missing_evidence else "partial"
@@ -418,7 +434,7 @@ class BorrowedBrowserObserver:
         if trace.missing_evidence:
             warnings.append("required target evidence is incomplete")
         next_actions = ("repeat one bounded observation for the missing evidence",) if warnings else ()
-        return ObserverResult("stopped" if final and not warnings else status, "observation stopped" if final else "observation checkpoint", {"trace_id": trace.identity, "events": events, "target_changes": {"added": added, "removed": removed}, "event_count": len(events), "dropped_events": trace.dropped_events, "missing_evidence": sorted(trace.missing_evidence)}, tuple(warnings), next_actions)
+        return ObserverResult("stopped" if final and not warnings else status, "observation stopped" if final else "observation checkpoint", {"trace_id": trace.identity, "events": events, "inventory_targets": inventory_targets, "operation_boundary_sequence": trace.operation_boundary_sequence, "operation_boundary_ms": trace.operation_boundary_ms, "target_changes": {"added": added, "removed": removed}, "event_count": len(events), "dropped_events": trace.dropped_events, "missing_evidence": sorted(trace.missing_evidence)}, tuple(warnings), next_actions)
 
     @_synchronized
     def inspect(self) -> ObserverResult:

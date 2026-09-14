@@ -47,6 +47,32 @@ def test_causally_linked_request_outranks_similar_polling_decoy():
     }
 
 
+def test_loopback_candidate_is_never_selected_as_academic_contract():
+    candidates = generate_contract_candidates({
+        "inventory_targets": [
+            {"target_identity": "local", "semantic_signature": {"origin_class": "loopback"}},
+            {"target_identity": "academic", "semantic_signature": {"origin_class": "webvpn_proxy"}},
+        ],
+        "events": [
+            {"kind": "request", "method": "POST", "url_shape": "http://<host:local>/<path:2>",
+             "target_identity": "local", "frame_identity": "local", "resource_type": "fetch",
+             "request_body": {"goals": {"redacted": True}}},
+            {"kind": "response", "method": "POST", "url_shape": "http://<host:local>/<path:2>",
+             "target_identity": "local", "resource_type": "fetch", "status": 200},
+            {"kind": "request", "method": "GET", "url_shape": "https://<host:academic>/<path:3>",
+             "target_identity": "academic", "frame_identity": "academic", "resource_type": "xhr"},
+            {"kind": "response", "method": "GET", "url_shape": "https://<host:academic>/<path:3>",
+             "target_identity": "academic", "resource_type": "xhr", "status": 200},
+        ],
+    })
+
+    local = next(item for item in candidates if item["target_identity"] == "local")
+    academic = next(item for item in candidates if item["target_identity"] == "academic")
+    assert local["causal_eligibility"] == "local_or_internal"
+    assert local["selected"] is False
+    assert academic["selected"] is True
+
+
 def test_post_reads_remain_diagnostic_and_unknown_response_is_partial():
     candidates = generate_contract_candidates({"events": [{
         "kind": "request", "method": "POST", "url_shape": "https://<host:a>/<path:2>",

@@ -73,6 +73,9 @@ class BorrowedBrowserObserverWorker:
     def start_observation(self) -> ObserverResult:
         return self._call("start_observation")
 
+    def mark_operation_boundary(self) -> ObserverResult:
+        return self._call("mark_operation_boundary")
+
     def checkpoint(self) -> ObserverResult:
         return self._call("checkpoint")
 

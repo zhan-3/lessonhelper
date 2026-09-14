@@ -18,26 +18,33 @@ type Envelope = {
   next_actions?: string[];
 };
 
+function compactCandidate(value: unknown) {
+  const item = value as Record<string, unknown>;
+  return {
+    rank: item.rank,
+    selected: item.selected,
+    evidence_identity: item.evidence_identity,
+    method: item.method,
+    path_shape: item.path_shape,
+    count: item.count,
+    score: item.score,
+    completeness: item.completeness,
+    resource_types: item.resource_types,
+    provenance_category: item.provenance_category,
+    causal_eligibility: item.causal_eligibility,
+    redirect_hop_count: item.redirect_hop_count,
+    redirect_path_shapes: Array.isArray(item.redirect_path_shapes) ? item.redirect_path_shapes.slice(0, 11) : [],
+    semantic_signature: item.semantic_signature,
+    reasons: Array.isArray(item.reasons) ? item.reasons.slice(0, 3) : [],
+  };
+}
+
 function compact(value: Envelope): Envelope {
   const data = value.data ?? {};
   const targets = Array.isArray(data.targets) ? data.targets.slice(0, MAX_TARGETS) : undefined;
-  const candidates = Array.isArray(data.candidates) ? data.candidates.slice(0, 10).map((value) => {
-    const item = value as Record<string, unknown>;
-    return {
-      evidence_identity: item.evidence_identity,
-      method: item.method,
-      path_shape: item.path_shape,
-      count: item.count,
-      score: item.score,
-      completeness: item.completeness,
-      resource_types: item.resource_types,
-      provenance_category: item.provenance_category,
-      redirect_hop_count: item.redirect_hop_count,
-      redirect_path_shapes: Array.isArray(item.redirect_path_shapes) ? item.redirect_path_shapes.slice(0, 11) : [],
-      semantic_signature: item.semantic_signature,
-      reasons: Array.isArray(item.reasons) ? item.reasons.slice(0, 3) : [],
-    };
-  }) : undefined;
+  const candidates = Array.isArray(data.candidates) ? data.candidates.slice(0, 10).map(compactCandidate) : undefined;
+  const selectedCandidates = Array.isArray(data.selected_candidates) ? data.selected_candidates.slice(0, 1).map(compactCandidate) : undefined;
+  const operationTargets = Array.isArray(data.operation_targets) ? data.operation_targets.slice(0, 4) : undefined;
   const changes = data.target_changes as { added?: unknown[]; removed?: unknown[] } | undefined;
   return {
     status: value.status,
@@ -51,6 +58,9 @@ function compact(value: Envelope): Envelope {
       target_count: data.target_count,
       targets,
       candidates,
+      selected_candidates: selectedCandidates,
+      operation_targets: operationTargets,
+      operation_boundary_sequence: data.operation_boundary_sequence,
       event_count: data.event_count,
       dropped_events: data.dropped_events,
       missing_evidence: Array.isArray(data.missing_evidence) ? data.missing_evidence.slice(0, 20) : undefined,
@@ -182,12 +192,19 @@ export default function academicBrowserObserver(pi: ExtensionAPI) {
       }
       const trace = started.data?.trace_id;
       if (typeof trace === "string") activeTrace = trace;
+      const marked = await call("/api/browser-observer/mark-operation", "POST", undefined, signal);
+      if (!new Set(["marked", "already_marked"]).has(marked.status)) {
+        await call("/api/browser-observer/stop", "POST");
+        await call("/api/browser-observer/disconnect", "POST");
+        activeTrace = "";
+        return result(marked);
+      }
       return result({
         status: started.status,
         summary: "borrowed browser connected, inventoried, and observation started",
-        warnings: [...(connected.warnings ?? []), ...(inventory.warnings ?? []), ...(started.warnings ?? [])],
+        warnings: [...(connected.warnings ?? []), ...(inventory.warnings ?? []), ...(started.warnings ?? []), ...(marked.warnings ?? [])],
         next_actions: ["let the authorized external actor perform exactly one bounded read-only operation", "then call academic_browser_finish"],
-        data: { ...started.data, connection: "borrowed", detach_only: true, target_count: inventory.data?.target_count, targets: inventory.data?.targets },
+        data: { ...started.data, operation_boundary_sequence: marked.data?.operation_boundary_sequence, connection: "borrowed", detach_only: true, target_count: inventory.data?.target_count, targets: inventory.data?.targets },
       });
     } catch (error) {
       if (signal?.aborted) {

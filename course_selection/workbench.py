@@ -17,7 +17,7 @@ from .browser_observer_worker import BorrowedBrowserObserverWorker
 from .gateway import AcademicGateway, PlaywrightAcademicGateway
 from .notice_discovery import DEFAULT_NOTICE_INDEX_URL
 from .persistence import WorkspaceDatabase
-from .request_contracts import generate_contract_candidates
+from .request_contracts import generate_contract_candidates, project_operation_targets
 from .tasks import ObservationService
 from .timetable import import_timetable, timetable_snapshot_payload
 from .workbench_service import NoticeReadError, WorkbenchService
@@ -257,8 +257,15 @@ def create_workbench_app(
         payload = result.to_dict()
         data = payload.get("data")
         if include_candidates and isinstance(data, dict):
-            data["candidates"] = generate_contract_candidates(data)
+            candidates = generate_contract_candidates(data)
+            data["candidates"] = candidates
+            data["selected_candidates"] = [candidate for candidate in candidates if candidate.get("selected")][:1]
+            data["operation_targets"] = project_operation_targets(data, candidates)
         return payload
+
+    @app.post("/api/browser-observer/mark-operation")
+    def mark_browser_operation():
+        return jsonify(observer.mark_operation_boundary().to_dict())
 
     @app.get("/api/browser-observer/checkpoint")
     def checkpoint_browser_observer():
