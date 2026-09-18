@@ -152,3 +152,20 @@ WebVPN storage state 失效时，旧入口可能显示 EasyConnect `#!/login`。
 - 退出终端中的工作台进程会幂等关闭 Chromium，但不会删除持久化登录状态。
 - 在页面中“重新配置”或清除登录会执行重置：先关闭 Chromium，再删除认证状态；删除失败时会阻止后续教务任务，避免继续使用不确定会话。
 - 普通刷新失败、取消或认证等待超时不会关闭 Chromium，可以在同一窗口中处理认证后重试。
+
+## 实验预约（实验状态）
+
+`lab-booking` 是开放式实验系统（openlab）单中心的预约工具，**尚未通过完整真实环境验收**，请只在小范围、可人工核对的场景使用：
+
+```powershell
+uv run course-selection lab-booking --center dxwl --plan-out .private/lab-plan.json
+uv run course-selection lab-booking --center dxwl --confirm <规划令牌>
+```
+
+流程与约束：
+
+- 只读规划：读取实验项目、可选日期与大节、以及每个时段的空位；占用区间来自本地工作台课表快照（`workspace.sqlite3` 的 timetable 快照）。
+- 规划令牌把一次提交绑定到具体目标；令牌不匹配时拒绝提交。
+- 每门实验最多提交一次，提交前重新读取空位；结果不明（超时/非 JSON）记录为 `possibly_applied` 并立即停止，不自动重试。
+- 同一时刻的多门实验只作为提醒输出，由你人工决定取消哪一个。
+- 令牌只在内存中使用，不写入磁盘；本工具不保存 Cookie 或成绩。

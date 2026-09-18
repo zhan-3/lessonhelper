@@ -81,7 +81,10 @@ uv run course-selection workbench
 
 ```powershell
 uv run course-selection cas-book --help
+uv run course-selection lab-booking --help
 ```
+
+`lab-booking` 按开放式实验系统的当前接口实现“只读规划 + 单次提交”：占用区间来自本地工作台课表快照，规划令牌不匹配时不提交，每门实验最多提交一次，结果不明即停止且不重试。详细说明与边界见 [`docs/academic-selection.md`](docs/academic-selection.md)。
 
 ### 毕业进度
 

@@ -715,5 +715,66 @@ def _lab_book_cas_book(courses: tuple[str, ...], monitor: bool, interval: int, l
     )
 
 
+@main.command("lab-booking")
+@click.option("--center", default="dxwl", help="实验教学中心代码，例如 dwxl/dgdz/jskx")
+@click.option("--cdp", default="http://127.0.0.1:9222", help="已登录标签页的本地调试端口")
+@click.option("--private-root", type=click.Path(path_type=Path), default=config.WORKBENCH_PRIVATE_ROOT)
+@click.option("--probe-cap", type=int, default=8, help="每个实验最多探测的空位数量")
+@click.option("--confirm", default="", help="规划令牌；只有匹配时才提交")
+@click.option("--plan-out", type=click.Path(path_type=Path), default=None, help="把规划写入本地 JSON")
+def lab_booking_cmd(
+    center: str, cdp: str, private_root: Path, probe_cap: int, confirm: str, plan_out: Path | None
+) -> None:
+    """实验预约规划与单次提交（实验状态，未通过真实环境验收）。"""
+    from .lab_booking import (
+        BrowserLabSession,
+        book_slots,
+        busy_intervals,
+        load_workspace_timetable,
+        plan_lab_slots,
+        plan_to_json,
+        plan_token,
+    )
+
+    entries = load_workspace_timetable(private_root) if private_root.is_dir() else ()
+    busy = busy_intervals(entries)
+    click.echo(f"课表区间 {len(busy)} 条（来自本地工作台快照）")
+
+    session = BrowserLabSession.attach(cdp, center)
+    try:
+        result = plan_lab_slots(session, busy, probe_cap=probe_cap)
+        for slot in result.slots:
+            click.echo(
+                f"  {slot.subject_id} {slot.subject_name[:18]:18} {slot.class_date} "
+                f"第{slot.week}周 {slot.timer_name} {slot.start} {slot.lab} 座位{slot.table_no}"
+            )
+        for left, right in result.reminders:
+            click.echo(
+                f"  ⚠ 同一时刻冲突（需人工取消一个）: {left.class_date} {left.timer_name} "
+                f"{left.subject_name} × {right.subject_name}"
+            )
+        for name in result.unresolved:
+            click.echo(f"  ✗ 暂无可约时段: {name}")
+        token = plan_token(result.slots)
+        click.echo(f"可约 {len(result.slots)} 门；规划令牌 {token}")
+        if plan_out is not None:
+            plan_out.write_text(plan_to_json(result), encoding="utf-8")
+            click.echo(f"规划已写入 {plan_out}")
+
+        if not confirm:
+            click.echo("未提供 --confirm，仅做只读规划。")
+            return
+        if confirm != token:
+            raise click.ClickException("确认令牌与当前规划不一致，拒绝提交。")
+        for outcome in book_slots(session, result.slots, confirmation=confirm):
+            click.echo(f"  {outcome['subject_id']} {outcome['class_date']} {outcome['start']} -> "
+                       f"{outcome['outcome']} {outcome.get('detail') or ''}")
+            if outcome["outcome"] != "confirmed_success":
+                click.echo("存在需人工核验的结果，已停止提交。")
+                break
+    finally:
+        session.close()
+
+
 if __name__ == "__main__":
     main()

@@ -1,0 +1,425 @@
+"""Plan and submit openlab lab bookings for one teaching-center app.
+
+The module is split so the decision logic is testable without a browser:
+
+* :func:`busy_intervals` turns a workbench timetable snapshot into occupied
+  weekday/period/week ranges.
+* :func:`plan_lab_slots` picks at most one free seat per experiment, skipping
+  anything that collides with that timetable, and reports same-time collisions
+  between the chosen slots as reminders for the user instead of hiding them.
+* :func:`book_slots` submits each explicit target at most once, re-reads
+  availability immediately before submitting, and stops on the first outcome
+  that needs human verification.
+
+Only the booking submission is a write.  Every other call is a read, and the
+session token is never persisted.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+# Lab "大节" numbers map onto two teaching periods each.
+LAB_PERIODS: Mapping[int, tuple[int, int]] = {
+    1: (1, 2),
+    2: (3, 4),
+    3: (5, 6),
+    4: (7, 8),
+    5: (9, 10),
+    6: (11, 12),
+}
+
+
+@dataclass(frozen=True)
+class BusyInterval:
+    """One occupied span from the personal timetable snapshot."""
+
+    weekday: int
+    start_period: int
+    end_period: int
+    weeks: frozenset[int]
+    label: str = ""
+
+    def overlaps(self, weekday: int, week: int, periods: tuple[int, int]) -> bool:
+        if weekday != self.weekday or week not in self.weeks:
+            return False
+        return self.start_period <= periods[1] and periods[0] <= self.end_period
+
+
+def week_numbers(entry: Mapping[str, Any]) -> frozenset[int]:
+    """Normalize the several week encodings a timetable entry may carry."""
+    explicit = entry.get("week_numbers")
+    if isinstance(explicit, Sequence) and not isinstance(explicit, (str, bytes)):
+        return frozenset(int(value) for value in explicit)
+    start = int(entry.get("week_start") or 1)
+    end = int(entry.get("week_end") or start)
+    parity = str(entry.get("week_parity") or "all")
+    weeks = range(start, end + 1)
+    if parity == "odd":
+        return frozenset(week for week in weeks if week % 2 == 1)
+    if parity == "even":
+        return frozenset(week for week in weeks if week % 2 == 0)
+    return frozenset(weeks)
+
+
+def busy_intervals(entries: Iterable[Mapping[str, Any]]) -> tuple[BusyInterval, ...]:
+    """Build occupied intervals; rows with unknown times stay excluded."""
+    intervals = []
+    for entry in entries:
+        if str(entry.get("conflict_status") or "") == "unknown":
+            continue
+        weekday = int(entry.get("weekday") or 0)
+        start = int(entry.get("start_period") or 0)
+        end = int(entry.get("end_period") or start)
+        if not 1 <= weekday <= 7 or start <= 0:
+            continue
+        intervals.append(
+            BusyInterval(
+                weekday=weekday,
+                start_period=start,
+                end_period=max(start, end),
+                weeks=week_numbers(entry),
+                label=str(entry.get("course_name") or ""),
+            )
+        )
+    return tuple(intervals)
+
+
+@dataclass(frozen=True)
+class LabSlot:
+    """One bookable seat in one experiment session."""
+
+    subject_id: int
+    subject_name: str
+    class_date: str
+    week: int
+    weekday: int
+    timer: int
+    timer_name: str
+    start: str
+    lab: str
+    table_no: str
+    seat_id: str
+
+    @property
+    def key(self) -> str:
+        return f"{self.subject_id}|{self.class_date}|{self.timer}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "subject_id": self.subject_id,
+            "subject_name": self.subject_name,
+            "class_date": self.class_date,
+            "week": self.week,
+            "weekday": self.weekday,
+            "timer": self.timer,
+            "timer_name": self.timer_name,
+            "start": self.start,
+            "lab": self.lab,
+            "table_no": self.table_no,
+            "seat_id": self.seat_id,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> LabSlot:
+        return cls(
+            subject_id=int(payload["subject_id"]),
+            subject_name=str(payload["subject_name"]),
+            class_date=str(payload["class_date"]),
+            week=int(payload["week"]),
+            weekday=int(payload["weekday"]),
+            timer=int(payload["timer"]),
+            timer_name=str(payload["timer_name"]),
+            start=str(payload["start"]),
+            lab=str(payload["lab"]),
+            table_no=str(payload["table_no"]),
+            seat_id=str(payload["seat_id"]),
+        )
+
+
+class LabSession(Protocol):
+    """Read/write surface of one center app; implemented by a browser adapter or a fake."""
+
+    def booked(self) -> list[Mapping[str, Any]]: ...
+
+    def subjects(self) -> list[Mapping[str, Any]]: ...
+
+    def schedule(self, subject_id: int) -> list[Mapping[str, Any]]: ...
+
+    def free_seat(self, subject_id: int, class_date: str, timer: int) -> Mapping[str, Any] | None: ...
+
+    def submit(self, slot: LabSlot) -> Mapping[str, Any]: ...
+
+
+@dataclass
+class PlanResult:
+    slots: list[LabSlot] = field(default_factory=list)
+    reminders: list[tuple[LabSlot, LabSlot]] = field(default_factory=list)
+    unresolved: list[str] = field(default_factory=list)
+
+
+def _collides(interval: BusyInterval, class_date_weekday: int, week: int, timer: int) -> bool:
+    periods = LAB_PERIODS.get(timer)
+    if periods is None:
+        return True
+    return interval.overlaps(class_date_weekday, week, periods)
+
+
+def plan_lab_slots(
+    session: LabSession, busy: Iterable[BusyInterval], *, probe_cap: int = 8
+) -> PlanResult:
+    """Choose the earliest free seat per experiment, avoiding timetable clashes."""
+    intervals = tuple(busy)
+    done = {int(row["subjectId"]) for row in session.booked()}
+    result = PlanResult()
+    for subject in session.subjects():
+        subject_id = int(subject["subjectId"])
+        name = str(subject.get("subjectName") or subject_id)
+        if subject_id in done:
+            continue
+        candidates = [
+            (row, timer)
+            for row in session.schedule(subject_id)
+            for timer in row.get("timerList", [])
+            if not any(
+                _collides(interval, _weekday_of(row), int(row["eduWeek"]), int(timer["timer"]))
+                for interval in intervals
+            )
+        ]
+        chosen = None
+        for row, timer in candidates[:probe_cap]:
+            seat = session.free_seat(subject_id, str(row["classDate"]), int(timer["timer"]))
+            if seat is None:
+                continue
+            chosen = LabSlot(
+                subject_id=subject_id,
+                subject_name=name,
+                class_date=str(row["classDate"]),
+                week=int(row["eduWeek"]),
+                weekday=_weekday_of(row),
+                timer=int(timer["timer"]),
+                timer_name=str(timer["timerName"]),
+                start=str(timer["startTime"])[:5],
+                lab=str(seat.get("lab") or ""),
+                table_no=str(seat.get("tableNo") or ""),
+                seat_id=str(seat.get("seatId") or ""),
+            )
+            break
+        if chosen is None:
+            result.unresolved.append(name)
+        else:
+            result.slots.append(chosen)
+    result.reminders = same_time_pairs(result.slots)
+    return result
+
+
+_WEEKDAYS = {"星期一": 1, "星期二": 2, "星期三": 3, "星期四": 4, "星期五": 5, "星期六": 6, "星期日": 7, "星期天": 7}
+
+
+def _weekday_of(row: Mapping[str, Any]) -> int:
+    value = row.get("dayWeek")
+    if isinstance(value, int):
+        return value
+    return _WEEKDAYS.get(str(value), 0)
+
+
+def same_time_pairs(slots: Iterable[LabSlot]) -> list[tuple[LabSlot, LabSlot]]:
+    """Report chosen slots that share a date and a session, for manual resolution."""
+    ordered = sorted(slots, key=lambda slot: (slot.class_date, slot.timer, slot.subject_id))
+    pairs = []
+    for index, left in enumerate(ordered):
+        for right in ordered[index + 1 :]:
+            if left.class_date == right.class_date and left.timer == right.timer:
+                pairs.append((left, right))
+    return pairs
+
+
+def plan_token(slots: Iterable[LabSlot]) -> str:
+    """Deterministic confirmation token binding a run to its exact targets."""
+    digest = hashlib.sha256()
+    for slot in sorted(slots, key=lambda item: item.key):
+        digest.update(f"{slot.key}|{slot.seat_id}\n".encode())
+    return digest.hexdigest()[:16]
+
+
+def book_slots(
+    session: LabSession, slots: Iterable[LabSlot], *, confirmation: str
+) -> list[dict[str, Any]]:
+    """Submit each target at most once; stop at the first unverifiable outcome."""
+    targets = list(slots)
+    expected = plan_token(targets)
+    if confirmation != expected:
+        raise ValueError(f"confirmation token mismatch: expected {expected}")
+    outcomes: list[dict[str, Any]] = []
+    for slot in targets:
+        seat = session.free_seat(slot.subject_id, slot.class_date, slot.timer)
+        if seat is None:
+            outcomes.append({**slot.to_dict(), "outcome": "skipped_unavailable",
+                             "detail": "no free seat at submit time"})
+            break
+        payload = session.submit(slot)
+        if payload.get("transport") != "ok":
+            outcomes.append({**slot.to_dict(), "outcome": "possibly_applied",
+                             "detail": str(payload.get("detail") or payload.get("transport"))})
+            break
+        code, message = payload.get("code"), str(payload.get("message") or "")
+        if code == 0 and payload.get("result") is True:
+            outcomes.append({**slot.to_dict(), "outcome": "confirmed_success", "detail": message})
+            continue
+        outcomes.append({**slot.to_dict(), "outcome": "confirmed_failure", "detail": f"{code} {message}"})
+        break
+    return outcomes
+
+
+def load_workspace_timetable(private_root: Any) -> tuple[Mapping[str, Any], ...]:
+    """Read the latest timetable snapshot rows from the local workspace database."""
+    from .persistence import WorkspaceDatabase
+
+    database = WorkspaceDatabase.open(private_root)
+    try:
+        snapshot = database.latest_snapshot("timetable") or {}
+        payload = snapshot.get("payload") or {}
+        entries = payload.get("entries") or ()
+        return tuple(entry for entry in entries if isinstance(entry, Mapping))
+    finally:
+        database.close()
+
+
+class BrowserLabSession:
+    """LabSession backed by the app's own fetch inside an authenticated tab."""
+
+    _HOOK = """
+    () => {
+      if (window.__vctchHook) return 'already';
+      window.__vctchHook = true;
+      window.__vctch = '';
+      const grab = (list) => {
+        for (const [name, value] of list) {
+          if (String(name).toLowerCase() === 'vctchauthorization' && value) window.__vctch = value;
+        }
+      };
+      const open = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (...args) { this.__h = []; return open.apply(this, args); };
+      const setHeader = XMLHttpRequest.prototype.setRequestHeader;
+      XMLHttpRequest.prototype.setRequestHeader = function (n, v) {
+        if (this.__h) this.__h.push([n, v]);
+        return setHeader.call(this, n, v);
+      };
+      const send = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function (...args) { grab(this.__h || []); return send.apply(this, args); };
+      const fetchOrig = window.fetch;
+      window.fetch = function (input, init) {
+        const h = init && init.headers;
+        if (h) {
+          if (h instanceof Headers) grab([...h.entries()]);
+          else if (Array.isArray(h)) grab(h);
+          else grab(Object.entries(h));
+        }
+        return fetchOrig.apply(this, arguments);
+      };
+      return 'installed';
+    }
+    """
+
+    def __init__(self, page: Any, center: str, token: str, *, pause: float = 0.2):
+        self.page, self.center, self.token, self.pause = page, center, token, pause
+
+    @classmethod
+    def attach(cls, cdp_url: str, center: str) -> BrowserLabSession:
+        """Borrow the already-authenticated tab and read its app token in memory."""
+        from playwright.sync_api import sync_playwright
+
+        playwright = sync_playwright().start()
+        browser = playwright.chromium.connect_over_cdp(cdp_url)
+        page = next((item for item in browser.contexts[0].pages if f"/{center}/" in item.url), None)
+        if page is None:
+            raise RuntimeError(f"no open tab for center '{center}'; open it from the gateway first")
+        page.evaluate(cls._HOOK)
+        token = page.evaluate("() => window.__vctch || ''")
+        if not token:
+            raise RuntimeError("app token not captured; interact with the app once, then retry")
+        session = cls(page, center, token)
+        session._playwright = playwright
+        return session
+
+    def close(self) -> None:
+        playwright = getattr(self, "_playwright", None)
+        if playwright is not None:
+            playwright.stop()
+
+    def _call(self, path: str, form: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+        payload = self.page.evaluate(
+            """async ([path, form, token]) => {
+              try {
+                const response = await fetch(path, {
+                  method: 'POST', credentials: 'include',
+                  headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                            vctchauthorization: token},
+                  body: new URLSearchParams(form).toString(),
+                });
+                const text = await response.text();
+                try { return {transport: 'ok', ...JSON.parse(text)}; }
+                catch (error) { return {transport: 'non_json', detail: String(response.status)}; }
+              } catch (error) {
+                return {transport: 'error', detail: String(error).slice(0, 120)};
+              }
+            }""",
+            [f"/{self.center}/StuApi/{path}", dict(form or {}), self.token],
+        )
+        time.sleep(self.pause)
+        return payload
+
+    def _result(self, path: str, form: Mapping[str, Any] | None = None) -> Any:
+        payload = self._call(path, form)
+        if payload.get("transport") != "ok" or payload.get("code") != 0:
+            raise RuntimeError(f"{path} failed: {payload.get('code')} {payload.get('message')}")
+        return payload.get("result")
+
+    def booked(self) -> list[Mapping[str, Any]]:
+        return list(self._result("view/lesson/ckkb") or [])
+
+    def subjects(self) -> list[Mapping[str, Any]]:
+        return list(self._result("view/subjects") or [])
+
+    def schedule(self, subject_id: int) -> list[Mapping[str, Any]]:
+        result = self._result("view/booking/yyxh", {"id": subject_id}) or {}
+        return list(result.get("data") or [])
+
+    def free_seat(self, subject_id: int, class_date: str, timer: int) -> Mapping[str, Any] | None:
+        payload = self._call("view/booking/yyxkzw",
+                             {"subjectId": subject_id, "classDate": class_date, "timer": timer})
+        if payload.get("transport") != "ok" or payload.get("code") != 0:
+            return None
+        data = (payload.get("result") or {}).get("data") or {}
+        for seat in data.get("labList") or []:
+            if str(seat.get("status")) == "空闲":
+                return {"seatId": seat.get("id"), "tableNo": seat.get("TableNo"),
+                        "lab": (data.get("lab") or {}).get("LabsName")}
+        return None
+
+    def submit(self, slot: LabSlot) -> Mapping[str, Any]:
+        return self._call("view/booking/doyyxkzw", {
+            "subjectId": slot.subject_id,
+            "classDate": slot.class_date,
+            "timer": f"{slot.start}:00" if len(slot.start) == 5 else slot.start,
+            "timercode": slot.timer,
+            "id": slot.seat_id,
+        })
+
+
+def plan_to_json(result: PlanResult) -> str:
+    return json.dumps(
+        {
+            "slots": [slot.to_dict() for slot in result.slots],
+            "reminders": [[left.key, right.key] for left, right in result.reminders],
+            "unresolved": result.unresolved,
+            "confirmation": plan_token(result.slots),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
