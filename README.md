@@ -21,7 +21,6 @@ HITWH（哈尔滨工业大学（威海））校园教务辅助工具集：本地
 | 选课提交（单个教学班单次提交） | `implemented` + `automated-test verified` | 真实提交流程未验收；默认不启用自动重试 |
 | 毕业进度推算 | `implemented` + `automated-test verified` | 结果仅为规划参考，必须人工核对培养方案 |
 | 实验预约 `lab-booking` | **实验性，未完成开发与真实环境验证** | 视为不可用功能，仅在小范围、可人工核对时尝试 |
-| `cas-book` / `openlab_cas_book.py` | **早期脚本，已被 `lab-booking` 取代** | 保留供开发者查阅，不建议使用 |
 | Academic Browser Observer（只读浏览器诊断） | 部分 `automated-test verified`，价值主张 `not_demonstrated` | 未在真实教务系统验证，不能替代现有 DevTools/Playwright 工具 |
 
 当前测试基线：`uv run pytest tests/` → **282 passed**。
@@ -153,7 +152,7 @@ uv run course-selection lab-booking --center dxwl --confirm <规划令牌>
 - 每门实验最多提交一次；结果不明记录为 `possibly_applied` 并立即停止，不自动重试。
 - 服务端会拒绝查询**已预约**实验的排期与空位，换时段需先自行取消。
 
-早期入口 `uv run course-selection cas-book`（等同 `uv run lab-book cas-book`）已被取代，仅为兼容保留。
+早期的 `cas-book` 命令、`lab-book` 入口与根目录 `openlab_cas_book.py` 已删除：它们面向旧版实验系统，与现系统的接口、证书与提交语义都不兼容。
 
 ### 毕业进度
 
@@ -216,10 +215,6 @@ academic_browser_begin(endpoint) → 外部操作 → academic_browser_finish()
 | `ACADEMIC_BROWSER_DEBUG_PORT` | `9222` | `dev-workbench` 的 CDP 调试端口 |
 | `ACADEMIC_WORKBENCH_DEV_DIAGNOSTICS` | `0` | 开发诊断开关 |
 | `PROGRESS_PROFILE_ROOT` | `.private/course-progress` | 教务登录与进度数据目录 |
-| `CAS_BOOK_BASE_URL` | `http://openlab.hitwh.edu.cn` | 实验系统入口 |
-| `CAS_BOOK_LOGIN_TIMEOUT` | `180` | 实验系统登录超时（秒） |
-| `CAS_BOOK_POLL_INTERVAL` | `5` | 实验监控间隔（秒） |
-| `CAS_BOOK_MAX_POLL_MINUTES` | `120` | 实验监控最长时间（分钟） |
 | `ACADEMIC_BROWSER_CDP_URL` | 空 | 观察器默认连接的 CDP 地址 |
 
 ## 本地数据目录

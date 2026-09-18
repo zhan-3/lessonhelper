@@ -38,10 +38,6 @@ PROGRESS_PROFILE_ROOT = _env_path("PROGRESS_PROFILE_ROOT", ".private/course-prog
 
 # ── Lab booking (CAS book) ───────────────────────────────────────────────────
 
-CAS_BOOK_BASE_URL = os.environ.get("CAS_BOOK_BASE_URL", "http://openlab.hitwh.edu.cn")
-CAS_BOOK_LOGIN_TIMEOUT = int(os.environ.get("CAS_BOOK_LOGIN_TIMEOUT", "180"))
-CAS_BOOK_POLL_INTERVAL = int(os.environ.get("CAS_BOOK_POLL_INTERVAL", "5"))
-CAS_BOOK_MAX_POLL_MINUTES = int(os.environ.get("CAS_BOOK_MAX_POLL_MINUTES", "120"))
 
 # ── Browser / CDP ────────────────────────────────────────────────────────────
 

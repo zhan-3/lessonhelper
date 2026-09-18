@@ -35,7 +35,6 @@
 ```text
 course-selection      = course_selection.cli:main           ← 当前唯一正式入口
 course-selection-gui  = course_selection.cli:main
-lab-book              = course_selection.cli:lab_book_main    ← 旧入口，只暴露 cas-book（待删除）
 ```
 
 CLI 子命令：
@@ -47,7 +46,6 @@ CLI 子命令：
 | `discover-timetable` / `discover-selection` / `explore-entry` / `analyze-interface` | 只读发现与契约候选分析 |
 | `lab-booking` | 实验预约：只读规划 + 单次提交（实验状态） |
 | `lab-contract` | 接口契约快照：`record` / `check` / `promote` |
-| `cas-book` | 旧实验预约实现（已与现系统不兼容，待删除） |
 
 工作台的 HTTP 面：`course_selection/workbench.py`（Flask 蓝图/工厂）+ `openapi.yaml`（契约）+ `workbench_static/`（Vite 构建产物）。
 
@@ -200,7 +198,6 @@ cd frontend; npm run build                # tsc -b && vite build → workbench_s
 ## 10. 已知不一致（待清理）
 
 - `pyproject.toml` 的 `description` 与包名 `lab-scraper` 仍是旧定位（"抢课自动化工具"），与现在的项目定位不符。
-- `cas-book` 命令、`lab-book` 旧入口与根目录 `openlab_cas_book.py` 仍在仓库中；已确认与新系统不兼容，计划删除（`.scratch/lab-booking` 议题）。
 - `lab-booking` 仍使用页面内 `fetch` 后端；`lab-contract` 已走纯 HTTP 主后端。两者共用同一传输层，接线统一尚未完成。
 - 毕业基线、实验预约的真实环境验收均未完成；Observer 的语义价值仍未证明。
 

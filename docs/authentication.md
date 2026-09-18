@@ -176,7 +176,6 @@ WebVPN 会话与客户端 IP 绑定。换网络（例如从校园网切到校外
 | 统一身份认证账号密码 | `.private/course-progress/webvpn-login.dpapi` | Windows DPAPI 加密，仅当前 Windows 用户可解密 |
 | 教务 / WebVPN 会话状态 | `.private/course-progress/webvpn-auth-state.json` | 含认证 Cookie，Git 已忽略 |
 | 教务浏览器 profile | `.private/course-progress/playwright-chromium-profile/` | Playwright 持久化 profile |
-| openlab 会话（旧 `cas-book` 路径） | `storage_state.json`（仓库根目录） | 含认证 Cookie，Git 已忽略 |
 | openlab 应用 token | 仅内存 | 进程结束后消失，从不落盘 |
 | openlab 网关 Cookie（`vcToken` / `JSESSIONID`） | 浏览器 | 本工具既不读取也不落盘；换令牌走 ⑥ 的响应，不依赖 Cookie |
 | 契约基线 | `docs/contracts/`（入仓） | 只含端点、字段名与业务码，不含个人数据 |
@@ -207,4 +206,3 @@ WebVPN 会话与客户端 IP 绑定。换网络（例如从校园网切到校外
 | 契约快照、指纹与漂移分级 | `course_selection/lab_contract.py` |
 | 两种 openlab 传输后端 | `course_selection/lab_transport.py`（`HttpLabTransport` / `BrowserLabTransport`） |
 | token hook 与借用标签页 | `course_selection/lab_transport.py`（`TOKEN_HOOK` / `acquire_token`）、`course_selection/lab_booking.py`（`BrowserLabSession.attach`） |
-| openlab CAS 手动登录与 `storage_state.json` | `course_selection/cli.py`（`_do_cas_login` / `_ensure_logged_in`） |
