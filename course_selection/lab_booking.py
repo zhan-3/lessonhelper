@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Protocol
 
+from .lab_transport import BrowserLabTransport, LabTransport
+
 # Lab "大节" numbers map onto two teaching periods each.
 LAB_PERIODS: Mapping[int, tuple[int, int]] = {
     1: (1, 2),
@@ -358,56 +360,48 @@ def load_workspace_timetable(private_root: Any) -> tuple[Mapping[str, Any], ...]
 
 
 class BrowserLabSession:
-    """LabSession backed by the app's own fetch inside an authenticated tab."""
+    """LabSession over a transport; the default keeps requests inside the app's page."""
 
-    _HOOK = """
-    () => {
-      if (window.__vctchHook) return 'already';
-      window.__vctchHook = true;
-      window.__vctch = '';
-      const grab = (list) => {
-        for (const [name, value] of list) {
-          if (String(name).toLowerCase() === 'vctchauthorization' && value) window.__vctch = value;
-        }
-      };
-      const open = XMLHttpRequest.prototype.open;
-      XMLHttpRequest.prototype.open = function (...args) { this.__h = []; return open.apply(this, args); };
-      const setHeader = XMLHttpRequest.prototype.setRequestHeader;
-      XMLHttpRequest.prototype.setRequestHeader = function (n, v) {
-        if (this.__h) this.__h.push([n, v]);
-        return setHeader.call(this, n, v);
-      };
-      const send = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.send = function (...args) { grab(this.__h || []); return send.apply(this, args); };
-      const fetchOrig = window.fetch;
-      window.fetch = function (input, init) {
-        const h = init && init.headers;
-        if (h) {
-          if (h instanceof Headers) grab([...h.entries()]);
-          else if (Array.isArray(h)) grab(h);
-          else grab(Object.entries(h));
-        }
-        return fetchOrig.apply(this, arguments);
-      };
-      return 'installed';
-    }
-    """
-
-    def __init__(self, page: Any, center: str, token: str, *, pause: float = 0.2):
+    def __init__(
+        self,
+        page: Any,
+        center: str,
+        token: str,
+        *,
+        pause: float = 0.2,
+        transport: LabTransport | None = None,
+    ):
         self.page, self.center, self.token, self.pause = page, center, token, pause
+        self._transport = transport or BrowserLabTransport(page, center, token, pause=pause)
 
     @classmethod
     def attach(cls, cdp_url: str, center: str) -> BrowserLabSession:
-        """Borrow the already-authenticated tab and read its app token in memory."""
+        """Borrow the already-authenticated tab and learn its app token in memory."""
         from playwright.sync_api import sync_playwright
+
+        from .lab_transport import TRIGGER_ROUTES, install_token_hook, page_token
 
         playwright = sync_playwright().start()
         browser = playwright.chromium.connect_over_cdp(cdp_url)
         page = next((item for item in browser.contexts[0].pages if f"/{center}/" in item.url), None)
         if page is None:
             raise RuntimeError(f"no open tab for center '{center}'; open it from the gateway first")
-        page.evaluate(cls._HOOK)
-        token = page.evaluate("() => window.__vctch || ''")
+        install_token_hook(page)
+        token = page_token(page)
+        deadline = time.monotonic() + 60
+        for route in TRIGGER_ROUTES:
+            if token:
+                break
+            page.evaluate(
+                """(route) => {
+                  const app = document.querySelector('#app') && document.querySelector('#app').__vue_app__;
+                  if (app) app.config.globalProperties.$router.push(route).catch(() => {});
+                }""",
+                route,
+            )
+            while time.monotonic() < deadline and not token:
+                time.sleep(0.7)
+                token = page_token(page)
         if not token:
             raise RuntimeError("app token not captured; interact with the app once, then retry")
         session = cls(page, center, token)
@@ -415,31 +409,13 @@ class BrowserLabSession:
         return session
 
     def close(self) -> None:
+        self._transport.close()
         playwright = getattr(self, "_playwright", None)
         if playwright is not None:
             playwright.stop()
 
     def _call(self, path: str, form: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
-        payload = self.page.evaluate(
-            """async ([path, form, token]) => {
-              try {
-                const response = await fetch(path, {
-                  method: 'POST', credentials: 'include',
-                  headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-                            vctchauthorization: token},
-                  body: new URLSearchParams(form).toString(),
-                });
-                const text = await response.text();
-                try { return {transport: 'ok', ...JSON.parse(text)}; }
-                catch (error) { return {transport: 'non_json', detail: String(response.status)}; }
-              } catch (error) {
-                return {transport: 'error', detail: String(error).slice(0, 120)};
-              }
-            }""",
-            [f"/{self.center}/StuApi/{path}", dict(form or {}), self.token],
-        )
-        time.sleep(self.pause)
-        return payload
+        return self._transport.call(path, form)
 
     def _result(self, path: str, form: Mapping[str, Any] | None = None) -> Any:
         payload = self._call(path, form)
