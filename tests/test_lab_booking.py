@@ -1,7 +1,6 @@
 import unittest
 
 from course_selection.lab_booking import (
-    BrowserLabSession,
     LabSlot,
     book_slots,
     busy_from_bookings,
@@ -11,6 +10,7 @@ from course_selection.lab_booking import (
     same_time_pairs,
     week_numbers,
 )
+from course_selection.lab_browser_session import BrowserLabSession
 
 
 def entry(weekday, start, end, weeks, label="", parity="all"):

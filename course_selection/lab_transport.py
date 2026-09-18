@@ -22,24 +22,12 @@ import json
 import time
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Protocol
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-DEFAULT_ORIGIN = "http://openlab.hitwh.edu.cn"
-TOKEN_HEADER = "vctchauthorization"
-CONTENT_TYPE = "application/x-www-form-urlencoded;charset=UTF-8"
-
-Fetch = Callable[[str, bytes, Mapping[str, str], float], tuple[int, str]]
-
-
-class LabTransport(Protocol):
-    """One authenticated channel to a single teaching-center app."""
-
-    center: str
-
-    def call(self, path: str, form: Mapping[str, Any] | None = None) -> dict[str, Any]: ...
-
-    def close(self) -> None: ...
+# The abstract seam now lives with the core; re-exported here so the existing
+# ``from .lab_transport import ...`` call sites keep working unchanged.
+from .lab_ports import CONTENT_TYPE, DEFAULT_ORIGIN, TOKEN_HEADER, Fetch, LabTransport
 
 
 def _urlopen_fetch(url: str, data: bytes, headers: Mapping[str, str], timeout: float) -> tuple[int, str]:

@@ -353,7 +353,6 @@ def lab_booking_cmd(
 ) -> None:
     """实验预约规划与单次提交（实验状态，未通过真实环境验收）。"""
     from .lab_booking import (
-        BrowserLabSession,
         LabSlot,
         OnlySubjects,
         book_slots,
@@ -364,6 +363,7 @@ def lab_booking_cmd(
         plan_to_json,
         plan_token,
     )
+    from .lab_browser_session import BrowserLabSession
 
     entries = load_workspace_timetable(private_root) if private_root.is_dir() else ()
     scheduled = busy_intervals(entries)

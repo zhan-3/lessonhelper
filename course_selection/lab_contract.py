@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from .lab_transport import DEFAULT_ORIGIN, TOKEN_HEADER, LabTransport
+from .lab_ports import DEFAULT_ORIGIN, TOKEN_HEADER, LabTransport
 
 SCHEMA_VERSION = 1
 
@@ -312,6 +312,11 @@ def _config_keys(text: str) -> tuple[str, ...]:
 
 
 def _default_get(url: str, timeout: float) -> str:
+    """Default static probe for the fixed campus origin.
+
+    Kept local so ``observe`` works without an injected dependency; a caller
+    that must avoid I/O (or target a different origin) passes ``static_get``.
+    """
     with urllib.request.urlopen(url, timeout=timeout) as response:  # fixed campus origin
         return response.read().decode("utf-8", "replace")
 
