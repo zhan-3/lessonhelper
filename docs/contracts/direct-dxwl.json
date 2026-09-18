@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "center": "dxwl",
+  "channel": "direct",
+  "origin": "http://openlab.hitwh.edu.cn",
+  "app_version": "2.8.0-1774602871364",
+  "header_required": [
+    "vctchauthorization"
+  ],
+  "static_assets": [
+    "index.655b7571.js",
+    "index.7faf3e42.css"
+  ],
+  "static_config": [
+    "VITE_GLOB_API_URL",
+    "VITE_GLOB_API_URL_PREFIX",
+    "VITE_GLOB_APP_SHORT_NAME",
+    "VITE_GLOB_APP_TITLE",
+    "VITE_GLOB_UPLOAD_URL",
+    "VITE_GLOB_WS_URL"
+  ],
+  "environment": {},
+  "endpoints": {
+    "auth/currentUserInfo": {
+      "request_fields": [],
+      "response_fields": [
+        "userId",
+        "userName",
+        "userNumber",
+        "userType"
+      ],
+      "locked": [
+        "userId"
+      ],
+      "envelope": [
+        "code",
+        "message",
+        "result",
+        "timestamp"
+      ],
+      "codes": [
+        "0"
+      ]
+    },
+    "view/booking/yyxh": {
+      "request_fields": [
+        "id"
+      ],
+      "response_fields": [
+        "count",
+        "data[].classDate",
+        "data[].dayWeek",
+        "data[].eduWeek",
+        "data[].timerList[].startTime",
+        "data[].timerList[].timer",
+        "data[].timerList[].timerName"
+      ],
+      "locked": [
+        "data[].classDate",
+        "data[].eduWeek",
+        "data[].timerList[].startTime",
+        "data[].timerList[].timer"
+      ],
+      "envelope": [
+        "code",
+        "message",
+        "result",
+        "timestamp"
+      ],
+      "codes": [
+        "0"
+      ]
+    },
+    "view/booking/yyxkzw": {
+      "request_fields": [
+        "subjectId",
+        "classDate",
+        "timer"
+      ],
+      "response_fields": [
+        "data.lab.LabsAddress",
+        "data.lab.LabsName",
+        "data.labList[].TableNo",
+        "data.labList[].TableShow",
+        "data.labList[].id",
+        "data.labList[].status",
+        "msg"
+      ],
+      "locked": [
+        "data.lab.LabsName",
+        "data.labList[].id",
+        "data.labList[].status"
+      ],
+      "envelope": [
+        "code",
+        "message",
+        "result",
+        "timestamp"
+      ],
+      "codes": [
+        "0"
+      ]
+    },
+    "view/lesson/ckkb": {
+      "request_fields": [],
+      "response_fields": [
+        "classDate",
+        "dayWeek",
+        "eduWeek",
+        "isCompute",
+        "izPass",
+        "labAddress",
+        "labName",
+        "personCount",
+        "scheduleId",
+        "startTime",
+        "studentNumber",
+        "subjectId",
+        "subjectName",
+        "subjectTime",
+        "tableCount",
+        "tableNo",
+        "zzSign"
+      ],
+      "locked": [
+        "classDate",
+        "labName",
+        "startTime",
+        "subjectId",
+        "tableNo"
+      ],
+      "envelope": [
+        "code",
+        "message",
+        "result",
+        "timestamp"
+      ],
+      "codes": [
+        "0"
+      ]
+    },
+    "view/subjects": {
+      "request_fields": [],
+      "response_fields": [
+        "claim",
+        "courseId",
+        "izCanExam",
+        "izNow",
+        "izPass",
+        "subjectBegin",
+        "subjectEnd",
+        "subjectId",
+        "subjectName"
+      ],
+      "locked": [
+        "izPass",
+        "subjectBegin",
+        "subjectEnd",
+        "subjectId"
+      ],
+      "envelope": [
+        "code",
+        "message",
+        "result",
+        "timestamp"
+      ],
+      "codes": [
+        "0"
+      ]
+    }
+  },
+  "unavailable": []
+}

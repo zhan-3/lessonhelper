@@ -133,6 +133,12 @@ class DiffTests(unittest.TestCase):
         self.assertIn((ADDITIVE, "view/subjects.code[5000]"), severities(report))
         self.assertFalse(report.blocks)
 
+    def test_endpoint_without_a_claim_on_either_side_is_not_drift(self):
+        empty = {"view/subjects": EndpointContract("view/subjects", response_fields=())}
+        report = diff(snapshot(endpoints=empty), snapshot(endpoints=empty))
+        self.assertEqual([], report.items)
+        self.assertFalse(report.blocks)
+
     def test_unreadable_endpoint_is_unavailable_rather_than_unchanged(self):
         current = snapshot(endpoints={
             "view/subjects": EndpointContract("view/subjects", response_fields=(), locked=("subjectId",))

@@ -808,5 +808,141 @@ def lab_booking_cmd(
         live.close()
 
 
+# ── lab-contract ─────────────────────────────────────────────────────────────
+
+
+def _lab_contract_transport(center: str, cdp: str, kind: str, origin: str):
+    """Build the read-only transport for a contract observation."""
+    from .lab_transport import BrowserLabTransport, HttpLabTransport, acquire_token
+
+    if kind == "browser":
+        from playwright.sync_api import sync_playwright
+
+        playwright = sync_playwright().start()
+        browser = playwright.chromium.connect_over_cdp(cdp)
+        page = next((item for item in browser.contexts[0].pages if f"/{center}/" in item.url), None)
+        if page is None:
+            playwright.stop()
+            raise click.ClickException(f"没有 {center} 的已打开标签页")
+        from .lab_transport import install_token_hook, page_token
+
+        install_token_hook(page)
+        token = page_token(page)
+        if not token:
+            playwright.stop()
+            raise click.ClickException("未读到应用令牌；请先在页面里操作一次")
+        transport = BrowserLabTransport(page, center, token)
+        transport._playwright = playwright  # keeps the borrowed page usable until close()
+        return transport
+    token, _url = acquire_token(cdp, center)
+    return HttpLabTransport(center, token, origin=origin)
+
+
+@main.command("lab-contract")
+@click.argument("action", type=click.Choice(["record", "check", "promote"]))
+@click.option("--center", default="dxwl")
+@click.option("--channel", default="direct", help="通道名；baseline 按通道分开存")
+@click.option("--origin", default="http://openlab.hitwh.edu.cn")
+@click.option("--cdp", default="http://127.0.0.1:9222")
+@click.option("--transport", "kind", type=click.Choice(["http", "browser"]), default="http")
+@click.option("--observations-dir", type=click.Path(path_type=Path), default=Path(".private/lab-contracts"))
+@click.option("--baselines-dir", type=click.Path(path_type=Path), default=Path("docs/contracts"))
+@click.option("--env", "env_pairs", multiple=True, help="额外环境项 KEY=VALUE，只写入本机观测")
+@click.option("--json", "as_json", is_flag=True, help="输出机器可读 JSON")
+def lab_contract_cmd(
+    action: str, center: str, channel: str, origin: str, cdp: str, kind: str,
+    observations_dir: Path, baselines_dir: Path, env_pairs: tuple[str, ...], as_json: bool,
+) -> None:
+    """记录、比对或提升一个中心的接口契约（只读，不调用写入端点）。"""
+    from .lab_contract import diff, observe, without_environment
+
+    name = f"{channel}-{center}"
+    baseline_path = baselines_dir / f"{name}.json"
+    observation_path = observations_dir / f"{name}.observed.json"
+
+    if action == "promote":
+        if not observation_path.is_file():
+            raise click.ClickException(f"没有观测文件 {observation_path}；先跑 record")
+        from .lab_contract import ContractSnapshot, EndpointContract
+
+        observed = ContractSnapshot.from_json(observation_path.read_text(encoding="utf-8"))
+        locked = {}
+        if baseline_path.is_file():
+            previous = ContractSnapshot.from_json(baseline_path.read_text(encoding="utf-8"))
+            locked = {endpoint: item.locked for endpoint, item in previous.endpoints.items()}
+        promoted = without_environment(observed)
+        promoted = ContractSnapshot(
+            center=promoted.center, channel=promoted.channel, origin=promoted.origin,
+            app_version=promoted.app_version, header_required=promoted.header_required,
+            static_assets=promoted.static_assets, static_config=promoted.static_config,
+            environment={},
+            endpoints={
+                endpoint: EndpointContract(
+                    endpoint=item.endpoint, request_fields=item.request_fields,
+                    response_fields=item.response_fields,
+                    locked=tuple(locked.get(endpoint, item.locked)),
+                    envelope=item.envelope, codes=item.codes,
+                )
+                for endpoint, item in promoted.endpoints.items()
+            },
+            unavailable=promoted.unavailable,
+        )
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        baseline_path.write_text(promoted.to_json(), encoding="utf-8")
+        click.echo(f"基线已更新 {baseline_path}（保留已有 locked 字段，环境块不入仓）")
+        return
+
+    environment = {"channel": channel, "transport": kind}
+    for pair in env_pairs:
+        key, _, value = pair.partition("=")
+        environment[key.strip()] = value.strip()
+
+    transport = _lab_contract_transport(center, cdp, kind, origin)
+    try:
+        observation = observe(transport, origin=origin, channel=channel, environment=environment)
+    finally:
+        transport.close()
+
+    observation_path.parent.mkdir(parents=True, exist_ok=True)
+    observation_path.write_text(observation.snapshot.to_json(), encoding="utf-8")
+
+    if observation.unavailable:
+        click.echo(f"读不到的端点: {', '.join(observation.unavailable)}")
+
+    baseline = None
+    if baseline_path.is_file():
+        from .lab_contract import ContractSnapshot
+
+        baseline = ContractSnapshot.from_json(baseline_path.read_text(encoding="utf-8"))
+    report = diff(baseline, observation.snapshot) if baseline else None
+
+    if action == "record":
+        click.echo(f"观测已写入 {observation_path}（{len(observation.snapshot.endpoints)} 个端点）")
+        if report is None:
+            click.echo(f"尚无基线 {baseline_path}；确认无误后跑 promote 建立第一份")
+            return
+        click.echo("与基线的差异：")
+        for line in report.describe():
+            click.echo(line)
+        return
+
+    if as_json:
+        payload = {"center": center, "channel": channel,
+                   "observation": str(observation_path),
+                   "baseline": str(baseline_path) if baseline else None,
+                   "unavailable": observation.unavailable,
+                   "report": report.to_dict() if report else None}
+        click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    if baseline is None:
+        click.echo(f"无法比对：基线 {baseline_path} 不存在。先跑 record 再 promote。")
+        raise SystemExit(2)
+    if not as_json:
+        click.echo(f"基线 {baseline_path}")
+        for line in report.describe():
+            click.echo(line)
+    if report.blocks:
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     main()

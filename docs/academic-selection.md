@@ -171,3 +171,17 @@ uv run course-selection lab-booking --center dxwl --confirm <规划令牌>
 - 令牌只在内存中使用，不写入磁盘；本工具不保存 Cookie 或成绩。
 - 服务端对**已预约**的实验项目会拒绝排期与空位查询（`5000 您已经预约过此实验项目`）。
   因此想更换时段必须先自行取消；取消前无法预判新时段是否仍有空位。
+
+### 接口契约检查
+
+```powershell
+uv run course-selection lab-contract record    # 只读观测，写入 .private/lab-contracts/
+uv run course-selection lab-contract check     # 与基线比对，读不到或 breaking 时退出码 1
+uv run course-selection lab-contract check --json
+uv run course-selection lab-contract promote   # 把观测提升为 docs/contracts/<通道>-<中心>.json
+```
+
+- **基线入仓**（`docs/contracts/`）——只含端点、字段名与业务码，不含个人数据；**观测只留本机**
+- 比对三样：应用版本串、端点集合、响应顶层字段名（含 `data[].classDate`、`data.labList[].id` 这类点路径）
+- `locked` 必需字段消失、端点消失、或本次读不到 → 退出码 `1`；只有新增字段或版本变化 → `0`
+- 环境块（通道、传输方式等）只在本机观测之间比较，不会因为换网络而误报

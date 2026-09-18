@@ -206,8 +206,8 @@ def diff(baseline: ContractSnapshot, current: ContractSnapshot) -> DriftReport:
     if baseline.origin != current.origin:
         report.items.append(DriftItem(REBASELINE, "origin",
                                       f"{baseline.origin} → {current.origin}：凭据按 origin 绑定"))
-    for key in sorted(set(baseline.environment) | set(current.environment)):
-        before, after = baseline.environment.get(key, ""), current.environment.get(key, "")
+    for key in sorted(set(baseline.environment) & set(current.environment)):
+        before, after = baseline.environment[key], current.environment[key]
         if before != after:
             severity = NOTICE if key in {"proxy", "dns_source"} else ADDITIVE
             report.items.append(DriftItem(severity, f"environment.{key}", f"{before or '未记录'} → {after or '未记录'}"))
@@ -243,7 +243,11 @@ def diff(baseline: ContractSnapshot, current: ContractSnapshot) -> DriftReport:
 
 def _diff_endpoint(report: DriftReport, before: EndpointContract, after: EndpointContract) -> None:
     if not after.response_fields:
-        report.items.append(DriftItem(UNAVAILABLE, after.endpoint, "本次未能读到响应字段"))
+        # An empty result (for example a student with no bookings yet) cannot
+        # prove the element shape.  That only matters if the baseline did have a
+        # claim to verify; otherwise there is nothing to compare.
+        if before.response_fields:
+            report.items.append(DriftItem(UNAVAILABLE, after.endpoint, "本次未能读到响应字段"))
         return
     locked = set(before.locked)
     before_fields, after_fields = set(before.response_fields), set(after.response_fields)
@@ -420,6 +424,22 @@ def observe(
         unavailable=tuple(sorted(unavailable)),
     )
     return Observation(snapshot=snapshot, unavailable=unavailable)
+
+
+def without_environment(snapshot: ContractSnapshot) -> ContractSnapshot:
+    """Baseline copy: the shared contract carries no machine-local environment."""
+    return ContractSnapshot(
+        center=snapshot.center,
+        channel=snapshot.channel,
+        origin=snapshot.origin,
+        app_version=snapshot.app_version,
+        header_required=snapshot.header_required,
+        static_assets=snapshot.static_assets,
+        static_config=snapshot.static_config,
+        environment={},
+        endpoints=snapshot.endpoints,
+        unavailable=snapshot.unavailable,
+    )
 
 
 def with_locked(snapshot: ContractSnapshot, locked: Mapping[str, Iterable[str]]) -> ContractSnapshot:
