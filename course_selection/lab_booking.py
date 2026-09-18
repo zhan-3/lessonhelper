@@ -235,7 +235,10 @@ class OnlySubjects:
 
 
 def plan_lab_slots(
-    session: LabSession, busy: Iterable[BusyInterval], *, probe_cap: int = 8
+    session: LabSession,
+    busy: Iterable[BusyInterval],
+    *,
+    probe_cap: int = 8,
 ) -> PlanResult:
     """Choose the earliest free seat per experiment, avoiding timetable clashes."""
     intervals = tuple(busy)
