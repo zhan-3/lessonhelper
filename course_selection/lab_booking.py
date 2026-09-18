@@ -22,6 +22,7 @@ import json
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Protocol
 
 # Lab "大节" numbers map onto two teaching periods each.
@@ -32,6 +33,16 @@ LAB_PERIODS: Mapping[int, tuple[int, int]] = {
     4: (7, 8),
     5: (9, 10),
     6: (11, 12),
+}
+
+# Published start time of each lab session, used to map a booked lab back onto periods.
+LAB_START_TIMERS: Mapping[str, int] = {
+    "07:45": 1,
+    "10:05": 2,
+    "13:45": 3,
+    "16:05": 4,
+    "18:40": 5,
+    "20:45": 6,
 }
 
 
@@ -85,6 +96,36 @@ def busy_intervals(entries: Iterable[Mapping[str, Any]]) -> tuple[BusyInterval, 
                 end_period=max(start, end),
                 weeks=week_numbers(entry),
                 label=str(entry.get("course_name") or ""),
+            )
+        )
+    return tuple(intervals)
+
+
+def busy_from_bookings(rows: Iterable[Mapping[str, Any]]) -> tuple[BusyInterval, ...]:
+    """Turn already-booked lab sessions into occupied intervals.
+
+    Lab sessions live in a different system from the personal timetable, so a
+    planner that only reads the timetable will happily schedule two labs at the
+    same moment.  Passing these intervals in keeps that from happening.
+    """
+    intervals = []
+    for row in rows:
+        try:
+            class_date = date.fromisoformat(str(row["classDate"]))
+            week = int(row["eduWeek"])
+        except (KeyError, ValueError):
+            continue
+        timer = LAB_START_TIMERS.get(str(row.get("startTime", ""))[:5])
+        periods = LAB_PERIODS.get(timer) if timer else None
+        if periods is None:
+            continue
+        intervals.append(
+            BusyInterval(
+                weekday=class_date.isoweekday(),
+                start_period=periods[0],
+                end_period=periods[1],
+                weeks=frozenset({week}),
+                label=str(row.get("subjectName") or "已约实验"),
             )
         )
     return tuple(intervals)

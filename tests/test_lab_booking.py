@@ -4,6 +4,7 @@ from course_selection.lab_booking import (
     BrowserLabSession,
     LabSlot,
     book_slots,
+    busy_from_bookings,
     busy_intervals,
     plan_lab_slots,
     plan_token,
@@ -96,6 +97,31 @@ class BusyIntervalTests(unittest.TestCase):
         self.assertTrue(interval.overlaps(2, 5, (2, 3)))
         self.assertFalse(interval.overlaps(3, 5, (3, 4)))
         self.assertFalse(interval.overlaps(2, 5, (5, 6)))
+
+
+class BookingIntervalTests(unittest.TestCase):
+    def test_booked_lab_sessions_become_occupied_intervals(self):
+        (interval,) = busy_from_bookings([
+            {"classDate": "2026-09-22", "eduWeek": 4, "startTime": "10:05:00", "subjectName": "惠斯通电桥测电阻"},
+        ])
+        self.assertEqual(2, interval.weekday)
+        self.assertEqual((3, 4), (interval.start_period, interval.end_period))
+        self.assertEqual(frozenset({4}), interval.weeks)
+        self.assertTrue(interval.overlaps(2, 4, (3, 4)))
+        self.assertFalse(interval.overlaps(2, 5, (3, 4)))
+
+    def test_rows_without_a_known_start_time_are_ignored(self):
+        self.assertEqual((), busy_from_bookings([{"classDate": "2026-09-22", "eduWeek": 4, "startTime": "11:11:00"}]))
+
+    def test_planner_avoids_slots_already_taken_by_another_course(self):
+        schedules = {3002: [row("2026-09-22", 4, "星期二", [(2, "第二大节", "10:05:00")]),
+                            row("2026-09-23", 4, "星期三", [(2, "第二大节", "10:05:00")])]}
+        session = FakeSession([SUBJECTS[1]], schedules, SEATS)
+        busy = busy_from_bookings([
+            {"classDate": "2026-09-22", "eduWeek": 4, "startTime": "10:05:00", "subjectName": "已约实验"},
+        ])
+        result = plan_lab_slots(session, busy)
+        self.assertEqual("2026-09-23", result.slots[0].class_date)
 
 
 class PlanTests(unittest.TestCase):

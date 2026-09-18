@@ -729,6 +729,7 @@ def lab_booking_cmd(
     from .lab_booking import (
         BrowserLabSession,
         book_slots,
+        busy_from_bookings,
         busy_intervals,
         load_workspace_timetable,
         plan_lab_slots,
@@ -737,11 +738,17 @@ def lab_booking_cmd(
     )
 
     entries = load_workspace_timetable(private_root) if private_root.is_dir() else ()
-    busy = busy_intervals(entries)
-    click.echo(f"课表区间 {len(busy)} 条（来自本地工作台快照）")
+    scheduled = busy_intervals(entries)
+    click.echo(f"课表区间 {len(scheduled)} 条（来自本地工作台快照）")
 
     session = BrowserLabSession.attach(cdp, center)
     try:
+        # Lab sessions live in a different system: treat the ones already booked
+        # in this center as occupied too, so planning cannot double-book a slot.
+        booked = busy_from_bookings(session.booked())
+        busy = (*scheduled, *booked)
+        if booked:
+            click.echo(f"已约实验占用 {len(booked)} 条（来自 openlab）")
         result = plan_lab_slots(session, busy, probe_cap=probe_cap)
         for slot in result.slots:
             click.echo(
