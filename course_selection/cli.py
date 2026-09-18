@@ -722,8 +722,11 @@ def _lab_book_cas_book(courses: tuple[str, ...], monitor: bool, interval: int, l
 @click.option("--probe-cap", type=int, default=8, help="每个实验最多探测的空位数量")
 @click.option("--confirm", default="", help="规划令牌；只有匹配时才提交")
 @click.option("--plan-out", type=click.Path(path_type=Path), default=None, help="把规划写入本地 JSON")
+@click.option("--avoid", type=click.Choice(["none", "timetable", "all"]), default="timetable",
+              help="避让来源：不避让 / 只避课表 / 课表加已约实验")
 def lab_booking_cmd(
-    center: str, cdp: str, private_root: Path, probe_cap: int, confirm: str, plan_out: Path | None
+    center: str, cdp: str, private_root: Path, probe_cap: int, confirm: str,
+    plan_out: Path | None, avoid: str,
 ) -> None:
     """实验预约规划与单次提交（实验状态，未通过真实环境验收）。"""
     from .lab_booking import (
@@ -746,9 +749,15 @@ def lab_booking_cmd(
         # Lab sessions live in a different system: treat the ones already booked
         # in this center as occupied too, so planning cannot double-book a slot.
         booked = busy_from_bookings(session.booked())
-        busy = (*scheduled, *booked)
-        if booked:
-            click.echo(f"已约实验占用 {len(booked)} 条（来自 openlab）")
+        if avoid == "none":
+            busy = ()
+            click.echo("避让已关闭（--avoid none）：只按空位规划")
+        elif avoid == "timetable":
+            busy = scheduled
+        else:
+            busy = (*scheduled, *booked)
+            if booked:
+                click.echo(f"已约实验占用 {len(booked)} 条（来自 openlab）")
         result = plan_lab_slots(session, busy, probe_cap=probe_cap)
         for slot in result.slots:
             click.echo(
