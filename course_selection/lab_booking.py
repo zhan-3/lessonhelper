@@ -211,6 +211,29 @@ def _collides(interval: BusyInterval, class_date_weekday: int, week: int, timer:
     return interval.overlaps(class_date_weekday, week, periods)
 
 
+class OnlySubjects:
+    """Restrict a session to a subset of experiments, for targeted replanning."""
+
+    def __init__(self, session: LabSession, subject_ids: Iterable[int]):
+        self._session = session
+        self._wanted = {int(value) for value in subject_ids}
+
+    def booked(self) -> list[Mapping[str, Any]]:
+        return self._session.booked()
+
+    def subjects(self) -> list[Mapping[str, Any]]:
+        return [row for row in self._session.subjects() if int(row["subjectId"]) in self._wanted]
+
+    def schedule(self, subject_id: int) -> list[Mapping[str, Any]]:
+        return self._session.schedule(subject_id)
+
+    def free_seat(self, subject_id: int, class_date: str, timer: int) -> Mapping[str, Any] | None:
+        return self._session.free_seat(subject_id, class_date, timer)
+
+    def submit(self, slot: LabSlot) -> Mapping[str, Any]:
+        return self._session.submit(slot)
+
+
 def plan_lab_slots(
     session: LabSession, busy: Iterable[BusyInterval], *, probe_cap: int = 8
 ) -> PlanResult:

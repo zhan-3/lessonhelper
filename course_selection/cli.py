@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import json
 import logging
 import os
 import random
@@ -722,15 +723,20 @@ def _lab_book_cas_book(courses: tuple[str, ...], monitor: bool, interval: int, l
 @click.option("--probe-cap", type=int, default=8, help="每个实验最多探测的空位数量")
 @click.option("--confirm", default="", help="规划令牌；只有匹配时才提交")
 @click.option("--plan-out", type=click.Path(path_type=Path), default=None, help="把规划写入本地 JSON")
-@click.option("--avoid", type=click.Choice(["none", "timetable", "all"]), default="timetable",
-              help="避让来源：不避让 / 只避课表 / 课表加已约实验")
+@click.option("--avoid", type=click.Choice(["none", "timetable", "labs", "all"]), default="timetable",
+              help="避让来源：不避让 / 只避课表 / 只避已约实验 / 两者都避")
+@click.option("--only", "only_ids", multiple=True, type=int, help="只规划指定 subjectId，可重复")
+@click.option("--from-plan", type=click.Path(path_type=Path), default=None,
+              help="提交时从该规划文件读取目标（与 --confirm 配套，避免重新规划）")
 def lab_booking_cmd(
     center: str, cdp: str, private_root: Path, probe_cap: int, confirm: str,
-    plan_out: Path | None, avoid: str,
+    plan_out: Path | None, avoid: str, only_ids: tuple[int, ...], from_plan: Path | None,
 ) -> None:
     """实验预约规划与单次提交（实验状态，未通过真实环境验收）。"""
     from .lab_booking import (
         BrowserLabSession,
+        LabSlot,
+        OnlySubjects,
         book_slots,
         busy_from_bookings,
         busy_intervals,
@@ -744,21 +750,27 @@ def lab_booking_cmd(
     scheduled = busy_intervals(entries)
     click.echo(f"课表区间 {len(scheduled)} 条（来自本地工作台快照）")
 
-    session = BrowserLabSession.attach(cdp, center)
+    live = BrowserLabSession.attach(cdp, center)
+    target = OnlySubjects(live, only_ids) if only_ids else live
     try:
         # Lab sessions live in a different system: treat the ones already booked
         # in this center as occupied too, so planning cannot double-book a slot.
-        booked = busy_from_bookings(session.booked())
+        booked = busy_from_bookings(live.booked())
         if avoid == "none":
             busy = ()
             click.echo("避让已关闭（--avoid none）：只按空位规划")
         elif avoid == "timetable":
             busy = scheduled
+        elif avoid == "labs":
+            busy = booked
+            click.echo(f"只避已约实验 {len(booked)} 条（忽略课表）")
         else:
             busy = (*scheduled, *booked)
             if booked:
                 click.echo(f"已约实验占用 {len(booked)} 条（来自 openlab）")
-        result = plan_lab_slots(session, busy, probe_cap=probe_cap)
+        if only_ids:
+            click.echo(f"只规划 {', '.join(str(value) for value in only_ids)}")
+        result = plan_lab_slots(target, busy, probe_cap=probe_cap)
         for slot in result.slots:
             click.echo(
                 f"  {slot.subject_id} {slot.subject_name[:18]:18} {slot.class_date} "
@@ -780,16 +792,20 @@ def lab_booking_cmd(
         if not confirm:
             click.echo("未提供 --confirm，仅做只读规划。")
             return
-        if confirm != token:
-            raise click.ClickException("确认令牌与当前规划不一致，拒绝提交。")
-        for outcome in book_slots(session, result.slots, confirmation=confirm):
+        if from_plan is None:
+            raise click.ClickException("提交必须用 --from-plan 指定保存的目标，避免提交与确认不一致。")
+        saved = json.loads(from_plan.read_text(encoding="utf-8"))
+        targets = [LabSlot.from_dict(item) for item in saved.get("slots") or []]
+        if confirm != plan_token(targets):
+            raise click.ClickException("确认令牌与规划文件不一致，拒绝提交。")
+        for outcome in book_slots(target, targets, confirmation=confirm):
             click.echo(f"  {outcome['subject_id']} {outcome['class_date']} {outcome['start']} -> "
                        f"{outcome['outcome']} {outcome.get('detail') or ''}")
             if outcome["outcome"] != "confirmed_success":
                 click.echo("存在需人工核验的结果，已停止提交。")
                 break
     finally:
-        session.close()
+        live.close()
 
 
 if __name__ == "__main__":
