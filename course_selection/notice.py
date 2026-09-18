@@ -1,15 +1,17 @@
-"""Parse and persist the user-confirmed selection window."""
+"""Parse and persist the user-confirmed selection window.
+
+This module is deliberately free of network and browser I/O so the application
+core can import it directly.  Reading a notice from a URL lives in
+:mod:`course_selection.notice_transport`.
+"""
 
 from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 from .categories import NOTICE_CATEGORY_PATTERNS
 
@@ -199,70 +201,6 @@ def parse_selection_windows(text: str) -> tuple[SelectionWindow, ...]:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-class _TextExtractor(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        value = data.strip()
-        if value:
-            self.parts.append(value)
-
-    def text(self) -> str:
-        return "\n".join(self.parts)
-
-
-def fetch_notice_text(source_url: str, *, timeout_seconds: int = 10) -> str:
-    parsed = urlparse(source_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("通知链接必须是 HTTP 或 HTTPS 地址")
-    request = Request(
-        source_url,
-        headers={"User-Agent": "academic-course-selection/0.1"},
-    )
-    with urlopen(request, timeout=timeout_seconds) as response:
-        payload = response.read()
-        charset = response.headers.get_content_charset() or "utf-8"
-    parser = _TextExtractor()
-    parser.feed(payload.decode(charset, errors="replace"))
-    return parser.text()
-
-
-def fetch_notice_text_in_browser(
-    source_url: str,
-    *,
-    profile_root: Path = Path(".private/course-progress"),
-    browser: str = "chromium",
-    login_timeout_seconds: int = 600,
-) -> str:
-    """Read a notice in the visible, persistent academic browser session."""
-    from playwright.sync_api import sync_playwright
-
-    from course_progress.session import AcademicBrowserSession
-
-    parsed = urlparse(source_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("通知链接必须是 HTTP 或 HTTPS 地址")
-    if login_timeout_seconds <= 0:
-        raise ValueError("认证等待时间必须大于 0")
-
-    with sync_playwright() as playwright, AcademicBrowserSession(
-        playwright,
-        browser_name=browser,
-        profile_root=profile_root,
-        persistent=False,
-    ) as session:
-        page = session.open_authenticated(
-            source_url, timeout_seconds=login_timeout_seconds
-        )
-        page.wait_for_timeout(500)
-        text = page.locator("body").inner_text(timeout=10_000).strip()
-        if not text:
-            raise ValueError("通知页面没有读取到正文")
-        return text
 
 
 def _first_line(text: str) -> str:

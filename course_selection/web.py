@@ -12,11 +12,10 @@ from flask import Flask, flash, redirect, render_template_string, request, url_f
 from .notice import (
     REQUIRED_FIELDS,
     confirm_notice,
-    fetch_notice_text,
-    fetch_notice_text_in_browser,
     parse_notice,
     save_notice,
 )
+from .notice_transport import fetch_notice_text, fetch_notice_text_in_browser
 from .timetable import entries_to_dict, import_timetable
 
 INDEX_TEMPLATE = """<!doctype html>

@@ -1,4 +1,8 @@
-"""Strict, immutable discovery of official selection-arrangement notices."""
+"""Strict, immutable parsing of official selection-arrangement notices.
+
+This module holds only pure parsing and validation.  Fetching the index or
+article pages lives in :mod:`course_selection.notice_transport`.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,6 @@ from difflib import unified_diff
 from html.parser import HTMLParser
 from typing import ClassVar
 from urllib.parse import urljoin, urlparse
-from urllib.request import Request, urlopen
 
 from .notice import parse_notice
 
@@ -26,26 +29,10 @@ class OfficialNoticeLink:
     url: str
 
 
-def _approved_host(url: str, official_hosts: tuple[str, ...]) -> bool:
+def approved_host(url: str, official_hosts: tuple[str, ...]) -> bool:
+    """Report whether *url* points at one of the officially approved hosts."""
     host = (urlparse(url).hostname or "").lower()
     return host in {item.lower() for item in official_hosts}
-
-
-def _download_html(
-    url: str, *, official_hosts: tuple[str, ...], timeout_seconds: int = 10
-) -> str:
-    if not _approved_host(url, official_hosts):
-        raise ValueError("notice source is not an approved official host")
-    request = Request(url, headers={"User-Agent": "academic-course-selection/0.1"})
-    with urlopen(request, timeout=timeout_seconds) as response:
-        final_url = response.geturl() if hasattr(response, "geturl") else url
-        if not _approved_host(final_url, official_hosts):
-            raise ValueError(
-                "notice download redirected outside the approved official host"
-            )
-        payload = response.read()
-        charset = response.headers.get_content_charset() or "utf-8"
-    return payload.decode(charset, errors="replace")
 
 
 class _NoticeListParser(HTMLParser):
@@ -144,42 +131,10 @@ def parse_official_notice_article(article_html: str, *, title: str) -> str:
     return f"{title}\n{body}"
 
 
-def _notice_index_pages(index_url: str) -> tuple[str, str]:
-    parsed = urlparse(index_url)
-    second_path = re.sub(r"/list(?:1)?\.htm$", "/list2.htm", parsed.path)
-    if second_path == parsed.path:
-        return index_url, index_url
-    return index_url, parsed._replace(path=second_path).geturl()
-
-
-def discover_official_notice_candidates(
-    index_url: str = DEFAULT_NOTICE_INDEX_URL,
-    *,
-    official_hosts: tuple[str, ...] = ("jwc.hitwh.edu.cn",),
-    timeout_seconds: int = 10,
-) -> list[dict]:
-    """Find the newest matching arrangement notice on the first two list pages."""
-    for page_url in _notice_index_pages(index_url):
-        index_html = _download_html(
-            page_url, official_hosts=official_hosts, timeout_seconds=timeout_seconds
-        )
-        links = parse_official_notice_links(index_html, index_url=page_url)
-        if not links:
-            continue
-        link = links[0]
-        article_html = _download_html(
-            link.url, official_hosts=official_hosts, timeout_seconds=timeout_seconds
-        )
-        text = parse_official_notice_article(article_html, title=link.title)
-        return [candidate_from_text(link.url, text, official_hosts=official_hosts)]
-    return []
-
-
 def candidate_from_text(
     source_url: str, text: str, *, official_hosts: tuple[str, ...]
 ) -> dict:
-    host = (urlparse(source_url).hostname or "").lower()
-    if host not in {item.lower() for item in official_hosts}:
+    if not approved_host(source_url, official_hosts):
         raise ValueError("notice source is not an approved official host")
     notice = parse_notice(text, source_url=source_url, source_kind="official")
     if not any(marker in notice.title for marker in ARRANGEMENT_MARKERS):

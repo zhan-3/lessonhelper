@@ -16,6 +16,7 @@ from .browser_observer import BorrowedBrowserObserver
 from .browser_observer_worker import BorrowedBrowserObserverWorker
 from .gateway import AcademicGateway, PlaywrightAcademicGateway
 from .notice_discovery import DEFAULT_NOTICE_INDEX_URL
+from .notice_transport import discover_official_notice_candidates, fetch_notice_text
 from .persistence import WorkspaceDatabase
 from .request_contracts import generate_contract_candidates, project_operation_targets
 from .tasks import ObservationService
@@ -48,10 +49,18 @@ def create_workbench_app(
     observer = BorrowedBrowserObserverWorker(
         browser_observer or BorrowedBrowserObserver(session_id="workbench")
     )
+    # Composition root: the application core receives its transports here, so
+    # ``workbench_service`` stays free of network and browser imports.
+    official_notice_hosts = ("jwc.hitwh.edu.cn",)
     core = WorkbenchService(
         database,
+        official_notice_hosts=official_notice_hosts,
         progress_report_path=resolved_login_root / "progress-report.json",
         login_root=resolved_login_root,
+        notice_fetcher=fetch_notice_text,
+        notice_discoverer=lambda index_url: discover_official_notice_candidates(
+            index_url, official_hosts=official_notice_hosts
+        ),
     )
     # The Vite config writes its production bundle here.  Keeping the bundle
     # beside the Python package makes the same Flask entry point work from a

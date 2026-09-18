@@ -2,6 +2,10 @@
 
 This module contains the decisions made by the workbench use cases.  Flask
 routes should only translate HTTP input/output and delegate here.
+
+The module never imports a transport: reading notices over HTTP or driving a
+browser is injected as ``notice_fetcher`` / ``notice_discoverer`` so that use
+cases can be exercised with plain functions instead of patched network calls.
 """
 
 from __future__ import annotations
@@ -9,6 +13,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -22,15 +27,18 @@ from course_progress.progress import (
     apply_recognized_credit_estimates,
 )
 
-from .notice import fetch_notice_text
 from .notice_discovery import (
     DEFAULT_NOTICE_INDEX_URL,
     candidate_from_text,
-    discover_official_notice_candidates,
     notice_diff,
 )
 from .persistence import WorkspaceDatabase
 from .planning import ReadOnlyPlan, build_read_only_plan
+
+# Injected transports.  ``notice_fetcher`` turns a notice URL into its visible
+# text; ``notice_discoverer`` turns an index URL into candidate payloads.
+NoticeFetcher = Callable[[str], str]
+NoticeDiscoverer = Callable[[str], list[dict[str, Any]]]
 
 _RECOGNIZED_CREDIT_CATEGORIES = frozenset({
     "innovation", "social_practice", "cultural_quality",
@@ -59,11 +67,15 @@ class WorkbenchService:
         official_notice_hosts: tuple[str, ...] = ("jwc.hitwh.edu.cn",),
         progress_report_path: Path | str | None = None,
         login_root: Path | str | None = None,
+        notice_fetcher: NoticeFetcher | None = None,
+        notice_discoverer: NoticeDiscoverer | None = None,
     ):
         self.database = database
         self.official_notice_hosts = official_notice_hosts
         self.progress_report_path = Path(progress_report_path) if progress_report_path else None
         self.login_root = Path(login_root) if login_root else database.root.parent / "course-progress"
+        self.notice_fetcher = notice_fetcher
+        self.notice_discoverer = notice_discoverer
 
     def login_configuration(self) -> dict[str, Any]:
         """Expose non-secret configuration state without decrypting the password."""
@@ -552,8 +564,10 @@ class WorkbenchService:
 
     def create_notice_candidate(self, source_url: str, text: str) -> tuple[dict[str, Any], str]:
         if not text and source_url:
+            if self.notice_fetcher is None:
+                raise NoticeReadError("no notice reader is configured for this service")
             try:
-                text = fetch_notice_text(source_url)
+                text = self.notice_fetcher(source_url)
             except (OSError, ValueError) as error:
                 raise NoticeReadError(f"unable to read notice: {error}") from error
         if not source_url or not text:
@@ -566,10 +580,10 @@ class WorkbenchService:
     def discover_notice_candidates(
         self, index_url: str = DEFAULT_NOTICE_INDEX_URL
     ) -> list[dict[str, Any]]:
+        if self.notice_discoverer is None:
+            raise NoticeReadError("no notice discoverer is configured for this service")
         try:
-            candidates = discover_official_notice_candidates(
-                index_url, official_hosts=self.official_notice_hosts
-            )
+            candidates = self.notice_discoverer(index_url)
         except (OSError, ValueError) as error:
             raise NoticeReadError(f"unable to discover official notices: {error}") from error
         return [self.database.save_notice(candidate) for candidate in candidates]

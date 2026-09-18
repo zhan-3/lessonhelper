@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 from course_selection.notice import (
     confirm_notice,
-    fetch_notice_text,
     load_notice,
     notice_selection_categories,
     notice_semester_label,
@@ -14,6 +13,7 @@ from course_selection.notice import (
     save_notice,
     update_notice,
 )
+from course_selection.notice_transport import fetch_notice_text
 
 NOTICE = """关于2026年秋季学期文化素质教育课程选课的通知
 面向2025级本科生，选课时间为2026年8月26日08:00至2026年8月28日23:00。
@@ -133,7 +133,7 @@ class SelectionNoticeTests(unittest.TestCase):
             def __exit__(self, *_):
                 return False
 
-        with patch("course_selection.notice.urlopen", return_value=Response()):
+        with patch("course_selection.notice_transport.urlopen", return_value=Response()):
             notice = parse_notice(fetch_notice_text("https://jwc.example/notice/1"))
 
         self.assertEqual(notice.title, "选课通知")

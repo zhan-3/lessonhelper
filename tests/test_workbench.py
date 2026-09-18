@@ -29,10 +29,10 @@ from course_selection.gateway import PlaywrightAcademicGateway
 from course_selection.notice_discovery import (
     OfficialNoticeLink,
     candidate_from_text,
-    discover_official_notice_candidates,
     parse_official_notice_article,
     parse_official_notice_links,
 )
+from course_selection.notice_transport import discover_official_notice_candidates
 from course_selection.persistence import WorkspaceDatabase
 from course_selection.tasks import TASK_TIMEOUT_SECONDS, ObservationService, TaskState
 from course_selection.workbench import create_workbench_app
@@ -774,7 +774,7 @@ class WorkbenchApiTests(unittest.TestCase):
             app.extensions["observation_service"].close()
             app.extensions["workspace_database"].close()
 
-    @patch("course_selection.workbench_service.discover_official_notice_candidates")
+    @patch("course_selection.workbench.discover_official_notice_candidates")
     def test_official_notice_discovery_api_saves_static_candidates(self, discover):
         discover.return_value = [candidate_from_text(
             "https://jwc.hitwh.edu.cn/2026/notice/page.htm",
@@ -1637,7 +1637,7 @@ class NoticeDiscoveryTests(unittest.TestCase):
         self.assertEqual(("2023", "2024", "2025"), tuple(candidate["windows"][0]["grades"]))
         self.assertTrue(candidate["query_eligible"])
 
-    @patch("course_selection.notice_discovery._download_html")
+    @patch("course_selection.notice_transport._download_html")
     def test_discovery_downloads_list_then_matching_static_article(self, download):
         download.side_effect = [
             f'<a href="/notice/page.htm" title="{self.TITLE}">{self.TITLE}</a>',
@@ -1651,7 +1651,7 @@ class NoticeDiscoveryTests(unittest.TestCase):
         self.assertEqual("https://jwc.hitwh.edu.cn/notice/page.htm", candidates[0]["source_url"])
         self.assertEqual(2, download.call_count)
 
-    @patch("course_selection.notice_discovery._download_html")
+    @patch("course_selection.notice_transport._download_html")
     def test_discovery_checks_second_page_when_first_has_no_matching_notice(self, download):
         download.side_effect = [
             '<a href="/other.htm" title="普通教务通知">普通通知</a>',
