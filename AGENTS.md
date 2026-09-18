@@ -26,6 +26,10 @@ Classify live-system features as `implemented`, `automated-test verified`, or `r
 
 Use `.agents/skills/academic-system-fieldwork/` when exploring authenticated campus systems, diagnosing browser targets or network contracts, publishing live academic facts, or crossing a state-changing boundary.
 
+### Security review
+
+Use `.agents/skills/security-review/` when a change touches authentication, browser sessions, credentials, student data, untrusted HTML/HTTP input, or state-changing academic-system requests. Report evidence without exposing sensitive values and stay read-only unless remediation is explicitly requested.
+
 ### Issue tracker
 
 Issues are tracked as local Markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
