@@ -48,6 +48,8 @@ CLI 子命令：
 | `lab-contract` | 接口契约快照：`record` / `check` / `promote` |
 
 工作台的 HTTP 面：`course_selection/workbench.py`（Flask 蓝图/工厂）+ `openapi.yaml`（契约）+ `workbench_static/`（Vite 构建产物）。
+入口与进程管理：`cli.py`（click 子命令）、`application.py`（waitress 托管）、
+`dev_workbench.py`（开发期热重载外壳）、`single_instance.py`（可恢复的 workspace 级单实例锁）。
 
 ---
 
@@ -63,6 +65,7 @@ CLI 子命令：
 | `workbench_service.py` | 应用服务：状态、基线选择、认定学分、课程标签、进度投影、规划；通知读取经 `notice_fetcher` / `notice_discoverer` 注入 |
 | `planning.py` | 只读规划与冲突计算（纯函数） |
 | `persistence.py` | SQLite：快照、画像、通知、计划、执行历史、契约相关表；`reset_personal_workspace` |
+| `timetable.py` | 课表导入：解析 xls/xlsx 与页面网格，规范化为冲突可用模型 |
 | `categories.py` | 课程类别映射 |
 | `notice.py` | 选课通知的领域模型、正文解析与本地读写（无 IO 传输） |
 | `notice_discovery.py` | 官方通知的纯解析、主机白名单校验、候选与差异 |
@@ -82,6 +85,10 @@ CLI 子命令：
 | `selection_query.py` / `selection_entry.py` / `selection_execution.py` | 待选课程查询、只读入口、单次提交执行（暂停使用） |
 | `current_enrollment.py` / `personal_timetable.py` | 本学期已选、个人课表快照 |
 | `discovery.py` / `deep_observation.py` / `manual_observation.py` | 只读发现与观察路径 |
+| `tasks.py` | 观察与执行任务的串行调度、状态机与崩溃恢复 |
+| `shadow_acceptance.py` | 只读影子验收的 fail-closed 报告 |
+| `student_profile.py` / `student_profile_observation.py` | 学生画像的本地事实与只读读取探测 |
+| `web.py` | 旧版选课工作台（基于本地 JSON 文件，与 `workbench.py` 并存） |
 
 ### 3.3 浏览器观察（实验性）
 
@@ -235,6 +242,7 @@ cd frontend; npm run build                # tsc -b && vite build → workbench_s
 | 文档 | 内容 |
 | --- | --- |
 | `README.md` | 功能成熟度与使用方式 |
+| `docs/reading-map.md` | 目录树、阅读优先级、交叉验证清单 |
 | `docs/authentication.md` | 认证框架、冷启动时序、会话寿命与失败分类 |
 | `docs/academic-selection.md` | 工作台、实验预约、契约检查的操作说明 |
 | `docs/course-progress-explorer.md` | 成绩与毕业进度读取 |
