@@ -202,7 +202,7 @@ WebVPN 会话与客户端 IP 绑定。换网络（例如从校园网切到校外
 | DPAPI 凭据存储 | `course_progress/credentials.py` |
 | 教务代理路径、`loginCAS`、健康检查 URL | `course_selection/gateway.py` |
 | 已核验的选课查询页 URL | `course_selection/selection_query.py` |
-| openlab 主机与 token 头 | `course_selection/lab_transport.py` |
+| openlab 主机与 token 头 | `course_selection/lab_ports.py`（`lab_transport.py` re-export） |
 | 契约快照、指纹与漂移分级 | `course_selection/lab_contract.py` |
 | 两种 openlab 传输后端 | `course_selection/lab_transport.py`（`HttpLabTransport` / `BrowserLabTransport`） |
-| token hook 与借用标签页 | `course_selection/lab_transport.py`（`TOKEN_HOOK` / `acquire_token`）、`course_selection/lab_booking.py`（`BrowserLabSession.attach`） |
+| token hook 与借用标签页 | `course_selection/lab_transport.py`（`TOKEN_HOOK` / `acquire_token`）、`course_selection/lab_browser_session.py`（`BrowserLabSession.attach`） |

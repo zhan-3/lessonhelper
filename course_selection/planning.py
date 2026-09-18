@@ -115,8 +115,9 @@ def _overlap(left: tuple[int, int, int, tuple[int, ...], str], right: tuple[int,
     day_b, start_b, end_b, weeks_b, parity_b = right
     if day_a != day_b or max(start_a, start_b) > min(end_a, end_b):
         return False
-    # End periods are represented by a second tuple item when supplied; the
-    # normalized planner accepts the conservative start-period comparison.
+    # Both ends are always present: _parse_time falls back to the start period
+    # when the payload carries no explicit end.  Compare the real ranges, so
+    # periods 1-2 and 2-3 on the same weekday do overlap at period 2.
     if weeks_a and weeks_b and not set(weeks_a).intersection(weeks_b):
         return False
     return parity_a == "all" or parity_b == "all" or parity_a == parity_b

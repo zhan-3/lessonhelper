@@ -53,27 +53,34 @@ CLI 子命令：
 
 ## 3. 模块地图
 
-### 3.1 应用核心（与 Flask 无关，ADR-0003）
+### 3.1 应用核心（无 Flask、无传输实现）
+
+核心模块不 import 具体传输实现。需要外部世界的用例通过构造参数接收依赖，
+因此可以直接用普通函数或假对象测试。
 
 | 模块 | 职责 |
 | --- | --- |
-| `workbench_service.py` | 应用服务：状态、基线选择、认定学分、课程标签、进度投影、规划 |
+| `workbench_service.py` | 应用服务：状态、基线选择、认定学分、课程标签、进度投影、规划；通知读取经 `notice_fetcher` / `notice_discoverer` 注入 |
+| `planning.py` | 只读规划与冲突计算（纯函数） |
 | `persistence.py` | SQLite：快照、画像、通知、计划、执行历史、契约相关表；`reset_personal_workspace` |
-| `planning.py` | 只读规划与冲突计算 |
 | `categories.py` | 课程类别映射 |
-| `lab_booking.py` | 实验预约域：占用区间、互斥规划、单次提交护栏 |
+| `notice.py` | 选课通知的领域模型、正文解析与本地读写（无 IO 传输） |
+| `notice_discovery.py` | 官方通知的纯解析、主机白名单校验、候选与差异 |
+| `lab_booking.py` | 实验预约域：占用区间、互斥规划、单次提交护栏；`LabSession` Protocol |
 | `lab_contract.py` | 接口契约：快照、指纹、分级 diff、只读探针 |
-| `lab_transport.py` | 传输层：纯 HTTP 主后端 / 页面内 fetch 回退 / 令牌获取 |
+| `lab_ports.py` | 实验侧抽象接缝：`LabTransport` Protocol 与端点常量；实现见 3.2 |
 | `config.py` | 环境变量与路径 |
 
-### 3.2 教务读取适配器
+### 3.2 外部适配器（具体 IO）
 
 | 模块 | 职责 |
 | --- | --- |
 | `gateway.py` | Playwright 网关：WebVPN 代理路径、课表/待选读取、CAS 会话自愈 |
+| `notice_transport.py` | 通知读取 IO：公开页面 HTTP 抓取、已登录浏览器读取、官方索引发现 |
+| `lab_transport.py` | 实验侧传输：纯 HTTP 主后端 / 页面内 fetch 回退 / 令牌获取；re-export `lab_ports` 的名字 |
+| `lab_browser_session.py` | `BrowserLabSession`：在 `LabTransport` 之上实现核心的 `LabSession`，借用已登录标签页 |
 | `selection_query.py` / `selection_entry.py` / `selection_execution.py` | 待选课程查询、只读入口、单次提交执行（暂停使用） |
 | `current_enrollment.py` / `personal_timetable.py` | 本学期已选、个人课表快照 |
-| `notice.py` / `notice_discovery.py` | 选课通知的抓取、确认与差异 |
 | `discovery.py` / `deep_observation.py` / `manual_observation.py` | 只读发现与观察路径 |
 
 ### 3.3 浏览器观察（实验性）
@@ -116,11 +123,31 @@ frontend/src/
                 ┌──────────────▼──────┐   ┌────────▼─────────────────┐
                 │ 存储 SQLite          │   │ 外部适配器                │
                 │ persistence.py       │   │ gateway.py（教务，浏览器）│
-                │ .private/（Git 忽略）│   │ lab_transport.py（实验）  │
-                └─────────────────────┘   └──────────────────────────┘
+                │ .private/（Git 忽略）│   │ notice_transport.py（通知）│
+                └─────────────────────┘   │ lab_transport.py（实验）  │
+                                          │ lab_browser_session.py    │
+                                          └──────────────────────────┘
 ```
 
-依赖规则：**核心不 import Flask**；外部世界（浏览器、HTTP、磁盘）通过适配器注入，因此核心可以直接用假对象做单元测试。
+依赖规则：
+
+1. **核心不 import Flask**，也不 import 具体传输实现（`gateway`、`lab_transport`、
+   `lab_browser_session`、`notice_transport`）。
+2. 外部世界（浏览器、HTTP、磁盘）通过构造参数或端口注入，因此核心可以直接用假对象做单元测试。
+3. 抽象与实现分离：`LabTransport`（`lab_ports`）与 `LabSession`（`lab_booking`）
+   定义在核心，`lab_transport` / `lab_browser_session` 指向它们。
+
+层间依赖方向（AST 全量扫描，无循环）：
+
+| 方向 | 数量 |
+| --- | --- |
+| core → adapter | 0 |
+| core → http | 0 |
+| adapter → http | 0 |
+| adapter → core | 允许（实现依赖抽象） |
+
+例外：`lab_contract._default_get` 用标准库 `urllib` 提供只读探针的默认实现，
+便于 `observe` 在无注入时也能工作；需要避免 IO 的调用方传入 `static_get`。
 
 ---
 
@@ -197,7 +224,7 @@ cd frontend; npm run build                # tsc -b && vite build → workbench_s
 
 ## 10. 已知不一致（待清理）
 
-- `pyproject.toml` 的 `description` 与包名 `lab-scraper` 仍是旧定位（"抢课自动化工具"），与现在的项目定位不符。
+- `pyproject.toml` 的包名仍是 `lab-scraper`，与现在的项目定位不符（`description` 已更新）。
 - `lab-booking` 仍使用页面内 `fetch` 后端；`lab-contract` 已走纯 HTTP 主后端。两者共用同一传输层，接线统一尚未完成。
 - 毕业基线、实验预约的真实环境验收均未完成；Observer 的语义价值仍未证明。
 

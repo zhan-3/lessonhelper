@@ -553,7 +553,31 @@ def apply_projected_course_estimates(
     labels: Iterable[Mapping[str, object]],
     selected_track: str,
 ) -> list[dict[str, object]]:
-    """Unify local projected sources with confirmed > enrolled > queue priority."""
+    """Fold local projected sources into each requirement's estimated totals.
+
+    ``progress_items`` is the confirmed baseline projection; this function adds
+    the not-yet-confirmed sources without letting them masquerade as confirmed
+    evidence.  A course is counted at most once, in strict priority order:
+
+    1. confirmed records already present in ``progress_items``
+    2. ``enrolled_courses`` (this term's registration)
+    3. ``queued_courses`` (this cycle's selection targets)
+
+    A declaration that links to one of those courses stops contributing and is
+    relabelled ``linked_confirmed_course`` / ``linked_enrolled_course`` /
+    ``linked_queued_course``; only links that stay unresolvable
+    (``unverified_overlap``, ``linked_identity_not_confirmed``) surface as
+    ``declaration_overlap`` in ``pending_verification``.
+
+    ``labels`` supply the sub-constraint facts a category mapping alone cannot
+    prove (D-category, four-histories, outside-major track), and
+    ``selected_track`` gates the outside-major requirement.
+
+    Every returned item gains the per-source amounts plus ``estimated_amount``
+    and ``estimated_gap``.  ``estimated_condition_status`` is downgraded to
+    ``unknown`` when any required sub-constraint stays unverified, and
+    ``pending_verification`` lists the reasons a human still has to check.
+    """
     def course_fact(course: Mapping[str, object]) -> dict[str, object]:
         code = str(course.get("code") or course.get("course_code") or "").strip()
         name = str(course.get("name") or course.get("course_name") or "").strip()
