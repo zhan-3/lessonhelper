@@ -146,9 +146,27 @@
 
 下面两个检查可在仓库根直接执行。
 
-### 3.1 应用核心不得依赖具体传输
+### 3.1 已固化为命令的三条检查
 
-对应 `architecture.md` 第 4 节的第 1 条规则。期望输出 `OK`。
+```bash
+uv run python tools/check_project.py    # 退出码 0 = 通过，1 = 有失败
+```
+
+覆盖三条**不需要人工判断**的客观规则：
+
+| 检查 | 失败时会看到 |
+| --- | --- |
+| 内部依赖不成环 | `course_selection: categories -> notice -> categories` |
+| 模块已在架构文档中登记 | `course_progress: 未登记 capture` |
+| 敏感文件未入仓 | `被跟踪的敏感文件: probe.xlsx` |
+
+该脚本已接入 `architecture.md` §8 的质量门。
+
+### 3.2 应用核心不得依赖具体传输（未固化）
+
+对应 `architecture.md` 第 4 节的第 1 条规则。它需要「哪条边界算架构规则」的
+判断——例如 `urllib.parse` 是否算 IO、`lab_contract._default_get` 这类已知例外
+如何记账——因此暂未并入 `tools/check_project.py`。期望输出 `OK: core imports no transport`。
 
 ```bash
 python - <<'EOF'
@@ -170,56 +188,7 @@ print("\n".join(bad) if bad else "OK: core imports no transport")
 EOF
 ```
 
-### 3.2 新增模块必须在架构文档中登记
-
-防止 `architecture.md` 的模块表随代码演进而失效。期望输出 `无`。
-
-```bash
-python - <<'EOF'
-import os
-doc = open("docs/architecture.md", encoding="utf-8").read()
-actual = {f[:-3] for f in os.listdir("course_selection")
-          if f.endswith(".py") and f not in ("__init__.py", "__main__.py")}
-missing = sorted(m for m in actual if f"`{m}.py`" not in doc)
-print("未登记:", missing if missing else "无")
-EOF
-```
-
-### 3.3 内部依赖不得成环
-
-期望输出 `0`。
-
-```bash
-python - <<'EOF'
-import ast, os
-for pkg in ("course_selection", "course_progress"):
-    names = {f[:-3] for f in os.listdir(pkg) if f.endswith(".py")}
-    graph = {}
-    for name in names:
-        deps = set()
-        src = open(f"{pkg}/{name}.py", encoding="utf-8").read()
-        for n in ast.walk(ast.parse(src)):
-            if not isinstance(n, ast.ImportFrom):
-                continue
-            if n.level and n.module:                      # 包内相对 import
-                deps.add(n.module.split(".")[0])
-            elif n.module and n.module.startswith(pkg + "."):
-                deps.add(n.module.split(".")[1])
-        graph[name] = deps & names
-    cycles = set()
-    def walk(node, path):
-        for nxt in sorted(graph[node]):
-            if nxt in path:
-                cycles.add(tuple(path[path.index(nxt):] + [nxt]))
-            else:
-                walk(nxt, path + [nxt])
-    for name in sorted(names):
-        walk(name, [name])
-    print(f"{pkg}: {len(cycles)} 个循环")
-EOF
-```
-
-### 3.4 人工检查点
+### 3.3 人工检查点
 
 自动化查不到的部分，改动相关代码时顺手确认：
 

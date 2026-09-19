@@ -96,7 +96,7 @@ CLI 子命令：
 
 ### 3.4 `course_progress`（成绩与毕业进度）
 
-`academic_client.py`（教务成绩读取）、`collector.py`（采集与快照组装）、`progress.py`（进度计算）、`baselines.py`（不可变要求基线）、`credentials.py`（DPAPI）、`session.py`（CAS/WebVPN 会话状态机）、`explorer.py`（门户导航）、`sanitizer.py`（脱敏）。
+`academic_client.py`（教务成绩读取）、`collector.py`（采集与快照组装）、`progress.py`（进度计算）、`baselines.py`（不可变要求基线）、`credentials.py`（DPAPI）、`session.py`（CAS/WebVPN 会话状态机）、`explorer.py`（门户导航）、`sanitizer.py`（脱敏）、`capture.py`（网络交换存档与候选排序）、`cli.py`（`python -m course_progress` 入口）。
 
 ### 3.5 前端
 
@@ -205,6 +205,7 @@ lab-contract promote  观测提升为 docs/contracts/ 基线（保留人工 lock
 uv sync                                   # 后端依赖
 uv run pytest tests/                      # 295 个测试
 uv run ruff check .                       # 静态检查
+uv run python tools/check_project.py      # 结构自检：无环 / 模块登记 / 敏感文件
 cd frontend; npm run generate:api         # 由 openapi.yaml 生成类型
 cd frontend; npm test                     # 23 个界面测试
 cd frontend; npm run build                # tsc -b && vite build → workbench_static/
