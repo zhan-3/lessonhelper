@@ -71,6 +71,7 @@ CLI 子命令：
 | `notice_discovery.py` | 官方通知的纯解析、主机白名单校验、候选与差异 |
 | `lab_booking.py` | 实验预约域：占用区间、互斥规划、单次提交护栏；`LabSession` Protocol |
 | `lab_contract.py` | 接口契约：快照、指纹、分级 diff、只读探针 |
+| `lab_exam.py` | 实验预考核域：状态/题目解析、答案校验、单次提交护栏；**不读服务端随题下发的答案字段** |
 | `lab_ports.py` | 实验侧抽象接缝：`LabTransport` Protocol 与端点常量；实现见 3.2 |
 | `config.py` | 环境变量与路径 |
 
@@ -82,6 +83,7 @@ CLI 子命令：
 | `notice_transport.py` | 通知读取 IO：公开页面 HTTP 抓取、已登录浏览器读取、官方索引发现 |
 | `lab_transport.py` | 实验侧传输：纯 HTTP 主后端 / 页面内 fetch 回退 / 令牌获取；re-export `lab_ports` 的名字 |
 | `lab_browser_session.py` | `BrowserLabSession`：在 `LabTransport` 之上实现核心的 `LabSession`，借用已登录标签页 |
+| `lab_exam_transport.py` | `TransportLabExam`：在 `LabTransport` 之上实现核心的 `LabExamSession`（纯传输，无需浏览器对象） |
 | `selection_query.py` / `selection_entry.py` / `selection_execution.py` | 待选课程查询、只读入口、单次提交执行（暂停使用） |
 | `current_enrollment.py` / `personal_timetable.py` | 本学期已选、个人课表快照 |
 | `discovery.py` / `deep_observation.py` / `manual_observation.py` | 只读发现与观察路径 |
@@ -253,7 +255,7 @@ lock 与 pyproject 不一致会直接失败。
 ## 10. 已知不一致（待清理）
 
 - `lab-booking` 仍使用页面内 `fetch` 后端；`lab-contract` 已走纯 HTTP 主后端。两者共用同一传输层，接线统一尚未完成。
-- 毕业基线、实验预约的真实环境验收均未完成；Observer 的语义价值仍未证明。
+- 毕业基线、实验预约、实验预考核的真实环境验收均未完成；Observer 的语义价值仍未证明。
 - `docs/` 下两个 `.docx` 原件（共 15.5 MB，含文档作者元数据）已移出仓库至 `.private/reference/`；**但 Git 历史中仍保留副本，仓库体积尚未真正瘦身**，参见本文第 5 节与 `reading-map.md`。
 
 ---

@@ -563,5 +563,112 @@ def lab_contract_cmd(
         raise SystemExit(1)
 
 
+# ── lab-exam ────────────────────────────────────────────────────────────────
+
+
+@main.command("lab-exam")
+@click.option("--center", default="dxwl", help="教学中心代码")
+@click.option("--subject-id", type=int, required=True, help="考核科目 ID")
+@click.option("--cdp", default="http://127.0.0.1:9222", help="已登录浏览器的 CDP 端点")
+@click.option("--transport", "kind", type=click.Choice(["http", "browser"]), default="browser")
+@click.option("--origin", default="http://openlab.hitwh.edu.cn")
+@click.option("--answers", type=click.Path(exists=True, path_type=Path), default=None,
+              help="答案文件（JSON：{题目ID: [选项...]}）；不提供则只读")
+@click.option("--confirm", default="", help="确认令牌；不提供则只做干跑校验")
+@click.option("--json", "as_json", is_flag=True, help="输出机器可读 JSON")
+def lab_exam_cmd(center: str, subject_id: int, cdp: str, kind: str, origin: str,
+                 answers: Path | None, confirm: str, as_json: bool) -> None:
+    """实验预考核：读取状态与题目（只读）；提交需显式确认，单次且不重试。
+
+    答案由使用者提供。本命令不读取、不推测服务端随题目下发的答案字段。
+    """
+    from .lab_exam import (
+        GROUP_SINGLE,
+        exam_token,
+        parse_answer_mapping,
+        submit_exam,
+        validate_answers,
+    )
+    from .lab_exam_transport import TransportLabExam
+
+    try:
+        transport = _lab_contract_transport(center, cdp, kind, origin)
+    except click.ClickException:
+        raise
+    except Exception as error:                      # Playwright 异常类型随版本变化
+        raise click.ClickException(
+            f"无法连接 {cdp}：{error}\n"
+            "请先用 --remote-debugging-port=9222 启动浏览器、登录 openlab，"
+            "并打开目标中心的页面后再执行。"
+        ) from error
+
+    try:
+        exam = TransportLabExam(transport)
+        status = exam.exam_status(subject_id)
+        sheet = exam.exam_sheet(subject_id)
+
+        if as_json and answers is None:
+            click.echo(json.dumps(
+                {"status": status.to_dict(), "sheet": sheet.to_dict()},
+                ensure_ascii=False, indent=2,
+            ))
+            return
+
+        if not as_json:
+            if status.allowed:
+                detail = f"（{status.message}）" if status.message else ""
+                click.echo(f"状态：可参加{detail}")
+            else:
+                click.echo(f"状态：不可参加（{status.message_code} {status.message}）")
+            click.echo(f"科目 {sheet.subject_id} {sheet.subject_name}，共 {len(sheet.questions)} 题")
+            for index, question in enumerate(sheet.questions, start=1):
+                label = "单选" if question.group == GROUP_SINGLE else "多选"
+                click.echo(f"\n[{index}/{len(sheet.questions)}] ({label}) {question.text}")
+                for option_label, option_text in question.options:
+                    click.echo(f"    {option_label}. {option_text}")
+
+        if answers is None:
+            click.echo("\n（未提供 --answers：仅读取，未提交）")
+            return
+
+        try:
+            raw = json.loads(answers.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise click.ClickException(f"答案文件无法读取：{error}") from error
+        if not isinstance(raw, dict):
+            raise click.ClickException('答案文件必须是 JSON 对象，形如 {"<题目ID>": ["A"]}')
+        try:
+            targets = parse_answer_mapping(raw, sheet)
+        except ValueError as error:
+            raise click.ClickException(str(error)) from error
+
+        token = exam_token(subject_id, targets)
+        if not confirm:
+            problems = validate_answers(sheet, targets)
+            click.echo(f"\n干跑完成，未提交。确认令牌：{token}")
+            if problems:
+                click.echo("答案校验未通过：")
+                for problem in problems:
+                    click.echo(f"  - {problem}")
+            else:
+                click.echo("答案校验通过。")
+                click.echo(f"确认后重新执行并加 --confirm {token} 提交（仅一次，不会重试）。")
+            return
+
+        outcome = submit_exam(exam, subject_id, targets, confirmation=confirm)
+    finally:
+        transport.close()
+
+    if as_json:
+        click.echo(json.dumps(outcome, ensure_ascii=False, indent=2))
+    else:
+        suffix = f" — {outcome['detail']}" if outcome.get("detail") else ""
+        click.echo(f"\n结果：{outcome['outcome']}{suffix}")
+        if outcome.get("verdict"):
+            click.echo(f"判定：{outcome['verdict']}")
+    if outcome["outcome"] != "confirmed_success":
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     main()
