@@ -146,49 +146,30 @@
 
 下面两个检查可在仓库根直接执行。
 
-### 3.1 已固化为命令的三条检查
+### 3.1 已固化为命令的检查
 
 ```bash
-uv run python tools/check_project.py    # 退出码 0 = 通过，1 = 有失败
+uv run lint-imports                     # 分层契约 + 循环依赖
+uv run python tools/check_project.py    # 模块登记 + 敏感文件
 ```
 
-覆盖三条**不需要人工判断**的客观规则：
+两者都已接入提交钩子（`.pre-commit-config.yaml`），提交时自动运行，无需手动执行。
 
-| 检查 | 失败时会看到 |
-| --- | --- |
-| 内部依赖不成环 | `course_selection: categories -> notice -> categories` |
-| 模块已在架构文档中登记 | `course_progress: 未登记 capture` |
-| 敏感文件未入仓 | `被跟踪的敏感文件: probe.xlsx` |
+| 检查 | 工具 | 失败时会看到 |
+| --- | --- | --- |
+| 核心不得依赖适配器 / HTTP / Flask | import-linter | 含**间接依赖链**：`workbench_service -> planning -> notice_transport (l.208)` |
+| 内部依赖不成环 | import-linter | `It could be made acyclic by removing 1 dependency: .notice -> .categories` |
+| 模块已在架构文档中登记 | check_project.py | `course_progress: 未登记 capture` |
+| 敏感文件未入仓 | check_project.py | `被跟踪的敏感文件: probe.xlsx` |
 
-该脚本已接入 `architecture.md` §8 的质量门。
+契约定义在 `pyproject.toml` 的 `[tool.importlinter]`。
 
-### 3.2 应用核心不得依赖具体传输（未固化）
+**为什么依赖方向不手写脚本**：import-linter 会追出间接依赖链并给出打破环的
+建议；手写 AST 扫描只看得到直接 import。（本节早期版本是内联脚本，已由该
+契约取代。）核心与适配器的划分仍需人工判断，但它现在是**声明式**的，写在
+配置里，而不是埋在一段脚本的逻辑中。
 
-对应 `architecture.md` 第 4 节的第 1 条规则。它需要「哪条边界算架构规则」的
-判断——例如 `urllib.parse` 是否算 IO、`lab_contract._default_get` 这类已知例外
-如何记账——因此暂未并入 `tools/check_project.py`。期望输出 `OK: core imports no transport`。
-
-```bash
-python - <<'EOF'
-import ast, os
-CORE = {"workbench_service","planning","lab_booking","lab_contract","categories",
-        "persistence","config","timetable","lab_ports","notice","notice_discovery"}
-TRANSPORTS = {"gateway","lab_transport","lab_browser_session","notice_transport",
-              "discovery","tasks","selection_entry","selection_query"}
-bad = []
-for f in sorted(os.listdir("course_selection")):
-    if not f.endswith(".py") or f[:-3] not in CORE:
-        continue
-    tree = ast.parse(open(f"course_selection/{f}", encoding="utf-8").read())
-    for node in ast.walk(tree):
-        mod = node.module if isinstance(node, ast.ImportFrom) else None
-        if mod and mod.split(".")[-1] in TRANSPORTS:
-            bad.append(f"  {f}:{node.lineno} -> {mod}")
-print("\n".join(bad) if bad else "OK: core imports no transport")
-EOF
-```
-
-### 3.3 人工检查点
+### 3.2 人工检查点
 
 自动化查不到的部分，改动相关代码时顺手确认：
 

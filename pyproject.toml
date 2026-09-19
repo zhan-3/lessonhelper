@@ -25,6 +25,7 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
+    "import-linter>=2.15",
     "mypy>=1.13",
     "pre-commit>=4.0",
     "pytest>=8.0",
@@ -79,3 +80,65 @@ ignore = ["BLE001"]
 
 [tool.setuptools.packages.find]
 include = ["course_selection*", "course_progress*"]
+
+
+[tool.importlinter]
+root_packages = ["course_selection", "course_progress"]
+include_external_packages = true
+
+# 应用核心不得依赖具体传输实现、HTTP 适配器或浏览器观察层。
+# 核心模块表见 docs/architecture.md §3.1；此契约取代了早期手写的 AST 脚本。
+[[tool.importlinter.contracts]]
+name = "应用核心不得依赖外部适配器与 HTTP 层"
+type = "forbidden"
+source_modules = [
+    "course_selection.workbench_service",
+    "course_selection.planning",
+    "course_selection.lab_booking",
+    "course_selection.lab_contract",
+    "course_selection.categories",
+    "course_selection.persistence",
+    "course_selection.config",
+    "course_selection.timetable",
+    "course_selection.lab_ports",
+    "course_selection.notice",
+    "course_selection.notice_discovery",
+]
+forbidden_modules = [
+    # 外部适配器
+    "course_selection.gateway",
+    "course_selection.lab_transport",
+    "course_selection.lab_browser_session",
+    "course_selection.notice_transport",
+    "course_selection.discovery",
+    "course_selection.tasks",
+    "course_selection.selection_entry",
+    "course_selection.selection_query",
+    "course_selection.selection_execution",
+    "course_selection.current_enrollment",
+    "course_selection.personal_timetable",
+    "course_selection.deep_observation",
+    "course_selection.manual_observation",
+    "course_selection.student_profile",
+    "course_selection.student_profile_observation",
+    "course_selection.shadow_acceptance",
+    # 浏览器观察
+    "course_selection.browser_observer",
+    "course_selection.browser_observer_worker",
+    "course_selection.browser_redaction",
+    "course_selection.request_contracts",
+    "course_selection.observer_evals",
+    # HTTP 适配器
+    "course_selection.workbench",
+    "course_selection.web",
+    "course_selection.application",
+    "course_selection.dev_workbench",
+    # 框架
+    "flask",
+]
+
+# 包内依赖不成环
+[[tool.importlinter.contracts]]
+name = "内部依赖不成环"
+type = "acyclic_siblings"
+ancestors = ["course_selection", "course_progress"]

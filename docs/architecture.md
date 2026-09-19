@@ -144,7 +144,7 @@ frontend/src/
 3. 抽象与实现分离：`LabTransport`（`lab_ports`）与 `LabSession`（`lab_booking`）
    定义在核心，`lab_transport` / `lab_browser_session` 指向它们。
 
-层间依赖方向（AST 全量扫描，无循环）：
+层间依赖方向由 **import-linter 契约**强制（`pyproject.toml` 的 `[tool.importlinter]`）：
 
 | 方向 | 数量 |
 | --- | --- |
@@ -206,11 +206,12 @@ uv sync                                   # 后端依赖
 uv run pre-commit install                 # 一次性：装提交钩子
 
 # 提交时自动运行（配置见 .pre-commit-config.yaml）：
-#   文件卫生（含大文件拦截）/ ruff check --fix / mypy / 结构自检
+#   文件卫生（含大文件拦截）/ ruff check --fix / mypy / import-linter / 结构自检
 uv run pre-commit run --all-files         # 手动全量跑一遍钩子
 
 uv run pytest tests/                      # 295 个测试（约 23 秒，未进钩子）
-uv run mypy                               # 类型检查，配置见 pyproject.toml
+uv run mypy                               # 类型检查，排除清单见 pyproject.toml
+uv run lint-imports                       # 分层契约与循环依赖，契约见 pyproject.toml
 
 cd frontend; npm run generate:api         # 由 openapi.yaml 生成类型
 cd frontend; npm test                     # 23 个界面测试

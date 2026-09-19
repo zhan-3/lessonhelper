@@ -1,18 +1,21 @@
-"""项目结构自检：只包含不需要人工判断的客观规则。
+"""项目结构自检：只包含不需要人工判断、且 import-linter 不覆盖的客观规则。
 
 用法：
     uv run python tools/check_project.py
 
-退出码：0 = 全部通过，1 = 有检查失败。可直接接进提交前流程或 CI。
+退出码：0 = 全部通过，1 = 有检查失败。
 
-这里只放三类「客观事实」检查——环就是环、登记了就是登记了、跟踪了就
-是跟踪了——因此结论没有解释空间。需要架构判断的规则（例如「核心层不
-得 import 具体传输」）不放在这里，除非它们的定义已被明确写进文档。
+依赖方向与循环依赖**不在这里**——它们由 ``uv run lint-imports`` 负责
+（契约见 pyproject.toml 的 ``[tool.importlinter]``）。import-linter 会追出
+间接依赖链并给出打破环的建议，比手写 AST 扫描准确，因此不再重复实现。
+
+这里只留两项：
+  * 每个模块是否已在 docs/architecture.md 中登记
+  * 敏感文件是否被误跟踪（AGENTS.md 的安全边界）
 """
 
 from __future__ import annotations
 
-import ast
 import re
 import subprocess
 import sys
@@ -52,53 +55,6 @@ def _modules(package: str) -> list[str]:
     )
 
 
-def _internal_graph(package: str) -> dict[str, set[str]]:
-    """Map each module to the same-package modules it imports."""
-    names = set(_modules(package))
-    graph: dict[str, set[str]] = {}
-    for name in sorted(names):
-        source = (ROOT / package / f"{name}.py").read_text(encoding="utf-8")
-        deps: set[str] = set()
-        for node in ast.walk(ast.parse(source)):
-            if not isinstance(node, ast.ImportFrom) or not node.module:
-                continue
-            if node.level:                                   # from .x import y
-                deps.add(node.module.split(".")[0])
-            elif node.module.startswith(package + "."):      # from pkg.x import y
-                deps.add(node.module.split(".")[1])
-        graph[name] = deps & names
-    return graph
-
-
-def _find_cycles(graph: dict[str, set[str]]) -> set[tuple[str, ...]]:
-    """Return every import cycle in *graph* as a tuple of module names."""
-    cycles: set[tuple[str, ...]] = set()
-
-    def walk(node: str, path: list[str]) -> None:
-        for nxt in sorted(graph.get(node, ())):
-            if nxt in path:
-                cycles.add(tuple(path[path.index(nxt):] + [nxt]))
-            else:
-                walk(nxt, path + [nxt])
-
-    for name in sorted(graph):
-        walk(name, [name])
-    return cycles
-
-
-def check_no_import_cycles() -> list[str]:
-    """Internal imports must not form a cycle."""
-    problems: list[str] = []
-    for package in PACKAGES:
-        cycles = _find_cycles(_internal_graph(package))
-        if cycles:
-            for cycle in sorted(cycles):
-                problems.append(f"{package}: " + " -> ".join(cycle))
-        else:
-            print(f"      ok   {package}: 0 个环")
-    return problems
-
-
 def _sections(doc: str) -> dict[str, str]:
     """Split the architecture doc into '### x.y' sections keyed by their number."""
     sections: dict[str, str] = {}
@@ -134,11 +90,11 @@ def check_no_sensitive_tracked() -> list[str]:
         ["git", "ls-files"],
         cwd=ROOT, capture_output=True, text=True, check=True,
     ).stdout.splitlines()
-    hits: list[str] = []
-    for path in tracked:
-        name = Path(path).name
-        if name in SENSITIVE_EXACT or any(p in path or path.endswith(p) for p in SENSITIVE_PATTERNS):
-            hits.append(path)
+    hits = [
+        path for path in tracked
+        if Path(path).name in SENSITIVE_EXACT
+        or any(p in path or path.endswith(p) for p in SENSITIVE_PATTERNS)
+    ]
     if hits:
         return [f"被跟踪的敏感文件: {', '.join(sorted(hits))}"]
     print(f"      ok   {len(tracked)} 个跟踪文件中未发现敏感文件")
@@ -146,7 +102,6 @@ def check_no_sensitive_tracked() -> list[str]:
 
 
 CHECKS = (
-    ("内部依赖不成环", check_no_import_cycles),
     ("模块已在架构文档中登记", check_modules_documented),
     ("敏感文件未入仓", check_no_sensitive_tracked),
 )

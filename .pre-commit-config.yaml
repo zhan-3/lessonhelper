@@ -45,8 +45,14 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: import-linter
+        name: 分层契约与循环依赖（import-linter；契约见 pyproject.toml）
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false
+
       - id: project-structure
-        name: 项目结构自检（无环 / 模块登记 / 敏感文件）
+        name: 项目结构自检（模块登记 / 敏感文件）
         entry: uv run python tools/check_project.py
         language: system
         pass_filenames: false
