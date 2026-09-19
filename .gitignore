@@ -25,6 +25,10 @@ storage_state.json
 # User schedule data (personal info)
 *.xls
 
+# Original reference documents (kept locally under .private/reference/)
+docs/*.docx
+docs/*.doc
+
 # Windows redirect artifacts
 nul
 

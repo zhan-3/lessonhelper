@@ -165,6 +165,7 @@ frontend/src/
 | 工作台数据库（画像、快照、计划、执行历史、申报、标签） | `.private/academic-selection/workbench.sqlite3` | 否 |
 | 教务凭据（DPAPI）与会话状态 | `.private/course-progress/` | 否 |
 | 契约观测 | `.private/lab-contracts/*.observed.json` | 否 |
+| 学校原始参考资料（培养方案 / 生活指南 `.docx`，含文档作者元数据） | `.private/reference/` | 否（`.gitignore`：`docs/*.docx`） |
 | **接口契约基线** | `docs/contracts/<channel>-<center>.json` | **是**（无个人数据） |
 | 前端构建产物 | `course_selection/workbench_static/` | 是 |
 | 浏览器快照（`storage_state.json`、`*.har`）、课表表格（`*.xls*`） | 仓库根或桌面 | 否（`.gitignore`：`.private/`、`.env`、`storage_state.json`、`*.har`、`*.xls*`） |
@@ -233,7 +234,7 @@ cd frontend; npm run build                # tsc -b && vite build → workbench_s
 
 - `lab-booking` 仍使用页面内 `fetch` 后端；`lab-contract` 已走纯 HTTP 主后端。两者共用同一传输层，接线统一尚未完成。
 - 毕业基线、实验预约的真实环境验收均未完成；Observer 的语义价值仍未证明。
-- `docs/` 下的两个 `.docx` 原件（共 15.5 MB，占仓库体积约 86%）仍在入仓状态，参见 `reading-map.md` 的目录评估。
+- `docs/` 下两个 `.docx` 原件（共 15.5 MB，含文档作者元数据）已移出仓库至 `.private/reference/`；**但 Git 历史中仍保留副本，仓库体积尚未真正瘦身**，参见本文第 5 节与 `reading-map.md`。
 
 ---
 
