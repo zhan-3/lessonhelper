@@ -167,6 +167,9 @@ uv run course-selection lab-exam --center dxwl --list-subjects
 # 只读：显示考核状态与题目
 uv run course-selection lab-exam --center dxwl --subject-id <ID>
 
+# 导出题目为纯文本（题干 + 选项，便于复制检索）
+uv run course-selection lab-exam --center dxwl --subject-id <ID> --plain > questions.txt
+
 # 干跑：校验答案并给出确认令牌（不提交）
 uv run course-selection lab-exam --center dxwl --subject-id <ID> --answers answers.json
 
@@ -178,7 +181,7 @@ uv run course-selection lab-exam --center dxwl --subject-id <ID> --answers answe
 登录状态跨次保留，因此不需要手动启动浏览器，也不需要调试端口。`--transport browser`
 可改为借用带 CDP 端口的浏览器，`--transport http` 走纯 HTTP + 令牌。
 
-答案文件是 `{题目ID: [选项...]}` 形式的 JSON。题目**每次读取顺序随机**，所以必须用
+答案文件是 `{题目ID: [选项...]}` 形式的 JSON（`questionId` 用 `--json` 取）。题目**每次读取顺序随机**，所以必须用
 `questionId` 而不是序号。关键约束：
 
 - 默认只读：不传 `--answers` 时只显示状态与题目，不产生任何写操作。

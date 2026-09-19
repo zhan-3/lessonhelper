@@ -587,9 +587,10 @@ def lab_contract_cmd(
 @click.option("--answers", type=click.Path(exists=True, path_type=Path), default=None,
               help="答案文件（JSON：{题目ID: [选项...]}）；不提供则只读")
 @click.option("--confirm", default="", help="确认令牌；不提供则只做干跑校验")
-@click.option("--json", "as_json", is_flag=True, help="输出机器可读 JSON")
+@click.option("--plain", is_flag=True, help="只输出题干与选项的纯文本块，便于复制到别处检索")
+@click.option("--json", "as_json", is_flag=True, help="输出机器可读 JSON（含 questionId，供答案文件使用）")
 def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, cdp: str, kind: str, origin: str,
-                 answers: Path | None, confirm: str, as_json: bool) -> None:
+                 answers: Path | None, confirm: str, plain: bool, as_json: bool) -> None:
     """实验预考核：读取状态与题目（只读）；提交需显式确认，单次且不重试。
 
     答案由使用者提供。本命令不读取、不推测服务端随题目下发的答案字段。
@@ -636,6 +637,16 @@ def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, cdp: 
         status = exam.exam_status(subject_id)
         sheet = exam.exam_sheet(subject_id)
 
+        if plain and answers is None:
+            # 每题一段，题干 + 选项，不带序号与题型标注，便于整块复制检索。
+            # 要 questionId 请用 --json。
+            for question in sheet.questions:
+                click.echo(question.text)
+                for option_label, option_text in question.options:
+                    click.echo(f"{option_label}. {option_text}")
+                click.echo()
+            return
+
         if as_json and answers is None:
             click.echo(json.dumps(
                 {"status": status.to_dict(), "sheet": sheet.to_dict()},
@@ -643,7 +654,7 @@ def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, cdp: 
             ))
             return
 
-        if not as_json:
+        if not as_json and not plain:
             if status.allowed:
                 detail = f"（{status.message}）" if status.message else ""
                 click.echo(f"状态：可参加{detail}")
