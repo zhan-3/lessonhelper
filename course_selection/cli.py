@@ -638,12 +638,14 @@ def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, cdp: 
         sheet = exam.exam_sheet(subject_id)
 
         if plain and answers is None:
-            # 每题一段，带题号（方便你按序号回答案），不带题型标注。
-            # questionId 请用 --json 取；提交时按 ID 匹配，与这里的序号无关。
+            # 每题一段，带题号便于回答案；末行 #qid 是提交时的匹配依据。
+            # 服务端每次返回的题目顺序不同，所以题号只在“本文件内”有效——
+            # 回答案时对这份文件就行，转换时用的是这里的 qid。
             for index, question in enumerate(sheet.questions, start=1):
                 click.echo(f"[{index}] {question.text}")
                 for option_label, option_text in question.options:
                     click.echo(f"{option_label}. {option_text}")
+                click.echo(f"#qid {question.question_id}")
                 click.echo()
             return
 
