@@ -638,10 +638,10 @@ def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, cdp: 
         sheet = exam.exam_sheet(subject_id)
 
         if plain and answers is None:
-            # 每题一段，题干 + 选项，不带序号与题型标注，便于整块复制检索。
-            # 要 questionId 请用 --json。
-            for question in sheet.questions:
-                click.echo(question.text)
+            # 每题一段，带题号（方便你按序号回答案），不带题型标注。
+            # questionId 请用 --json 取；提交时按 ID 匹配，与这里的序号无关。
+            for index, question in enumerate(sheet.questions, start=1):
+                click.echo(f"[{index}] {question.text}")
                 for option_label, option_text in question.options:
                     click.echo(f"{option_label}. {option_text}")
                 click.echo()
