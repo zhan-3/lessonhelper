@@ -266,6 +266,26 @@ class PastedAnswerTests(unittest.TestCase):
         self.assertEqual({"q1": ["A"], "q2": ["C"], "q3": ["A", "C"]}, raw)
         self.assertEqual((), validate_answers(sheet(), parse_answer_mapping(raw, sheet())))
 
+    def test_rule_comments_are_ignored_by_both_parsers(self):
+        """导出的规则注释不能被当成答案或 qid。"""
+        text = (
+            "# 填写规则\n"
+            "#   1. 在每题末尾的『答: 』后面填选项字母，例如：答: B\n"
+            "#   2. 『#qid』行是提交时匹配题目用的，请不要改动\n"
+            "#\n"
+            "# 科目 3002  示例科目　共 1 题\n"
+            "\n"
+            "[1] 题干\n"
+            "A. 甲\n"
+            "B. 乙\n"
+            "#qid q1\n"
+            "答: \n"
+        )
+        self.assertEqual({}, parse_answer_sheet(text))              # 未填 = 无答案
+        self.assertEqual({1: "q1"}, parse_sheet_question_ids(text))  # 注释未干扰
+        filled = text.replace("答: \n", "答: A\n")
+        self.assertEqual({"q1": ["A"]}, parse_answer_sheet(filled))
+
 
 class EncodingTests(unittest.TestCase):
     def test_single_choice_encodes_as_value_and_multi_as_list(self):

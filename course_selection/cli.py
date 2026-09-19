@@ -576,6 +576,32 @@ def lab_contract_cmd(
 # ── lab-exam ────────────────────────────────────────────────────────────────
 
 
+def _exam_sheet_header(center: str, sheet, answers_dir: Path) -> str:
+    """Header written above an exported sheet: how to fill it in and submit.
+
+    Every line starts with ``#`` (never ``#qid``), so the parsers skip it —
+    ``parse_answer_sheet`` only looks at ``答:`` lines and
+    ``parse_sheet_question_ids`` only at ``#qid`` lines.
+    """
+    return "\n".join([
+        "# 填写规则",
+        "#   1. 在每题末尾的『答: 』后面填选项字母，例如：答: B",
+        "#   2. 多选题写多个字母，例如：答: A,C",
+        "#   3. 填完保存，然后提交（不加 --confirm all 就是干跑：只校验、不提交）：",
+        (
+            f"#      uv run course-selection lab-exam --center {center} "
+            f"--all-subjects --answers-dir {answers_dir}"
+        ),
+        "#   4. 逐科确认无误后，在命令末尾加上 --confirm all 才真正提交",
+        "#   5. 『#qid』行是提交时匹配题目用的，请不要改动",
+        "#   6. 题号只在本文件内有意义：服务端每次返回的题目顺序不同",
+        "#",
+        f"# 科目 {sheet.subject_id}  {sheet.subject_name}　共 {len(sheet.questions)} 题",
+        "",
+        "",
+    ])
+
+
 def _report_or_submit(exam, ready: list[tuple[int, str, tuple]], *, dry_run: bool) -> None:
     """Shared tail: print tokens for a dry run, otherwise submit one by one.
 
@@ -754,7 +780,8 @@ def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, all_s
                         click.echo(f"  {sid}  无题目，跳过")
                         continue
                     (out_dir / f"{sid}.txt").write_text(
-                        render_sheet_plain(sheet), encoding="utf-8")
+                        _exam_sheet_header(center, sheet, out_dir) + render_sheet_plain(sheet),
+                        encoding="utf-8")
                     click.echo(f"  {sid}  {sheet.subject_name}  {len(sheet.questions)} 题")
                     written += 1
                 click.echo(f"\n  已写出 {written} 个文件到 {out_dir}")
