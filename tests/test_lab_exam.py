@@ -13,8 +13,10 @@ from course_selection.lab_exam import (
     encode_answers,
     exam_token,
     parse_answer_mapping,
+    parse_answer_sheet,
     parse_exam_sheet,
     parse_exam_status,
+    render_sheet_plain,
     submit_exam,
     validate_answers,
 )
@@ -195,6 +197,40 @@ class AnswerMappingTests(unittest.TestCase):
     def test_incomplete_mapping_surfaces_through_validation(self):
         problems = validate_answers(sheet(), parse_answer_mapping({"q1": ["A"]}, sheet()))
         self.assertTrue(any("未作答: q2" in problem for problem in problems))
+
+
+class PlainSheetTests(unittest.TestCase):
+    """The offline template: render, fill in ``答:``, read back."""
+
+    def test_untouched_template_yields_no_answers(self):
+        self.assertEqual({}, parse_answer_sheet(render_sheet_plain(sheet())))
+
+    def test_filled_template_binds_to_the_right_question(self):
+        rendered = render_sheet_plain(sheet())
+        filled = rendered.replace("答: \n", "答: A\n", 1)   # 只填第一题
+        parsed = parse_answer_sheet(filled)
+        self.assertEqual(["A"], parsed[sheet().questions[0].question_id])
+        self.assertEqual(1, len(parsed))
+
+    def test_multi_select_line_is_split(self):
+        self.assertEqual({"q9": ["A", "C"]}, parse_answer_sheet("#qid q9\n答: A,C\n"))
+        self.assertEqual({"q9": ["A", "C"]}, parse_answer_sheet("#qid q9\n答: AC\n"))
+
+    def test_answer_before_any_qid_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "之前"):
+            parse_answer_sheet("答: A\n#qid q1\n")
+
+    def test_template_carries_every_question_id(self):
+        rendered = render_sheet_plain(sheet())
+        for question in sheet().questions:
+            self.assertIn(f"#qid {question.question_id}", rendered)
+            self.assertIn(question.text, rendered)
+
+    def test_empty_template_cannot_pass_validation(self):
+        parsed = parse_answer_mapping(parse_answer_sheet(render_sheet_plain(sheet())), sheet())
+        self.assertEqual((), parsed)
+        problems = validate_answers(sheet(), parsed)
+        self.assertEqual(3, len([p for p in problems if "未作答" in p]))
 
 
 class EncodingTests(unittest.TestCase):

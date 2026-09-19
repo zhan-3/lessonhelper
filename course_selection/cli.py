@@ -576,10 +576,74 @@ def lab_contract_cmd(
 # ── lab-exam ────────────────────────────────────────────────────────────────
 
 
+def _submit_exam_batch(exam, subject_ids: list[int], answers_dir: Path, *, dry_run: bool) -> None:
+    """Check — and optionally submit — every subject with a filled-in answer file.
+
+    Guardrails mirror ``book_slots``: one submission per subject, each with its
+    own token, and the run stops at the first outcome that is not a confirmed
+    success.  An unclear result is never followed by more writes.  Subjects with
+    no answer file, or with incomplete answers, are skipped rather than counted
+    as failures — that is the ordinary "not done yet" case.
+    """
+    from .lab_exam import (
+        exam_token,
+        parse_answer_mapping,
+        parse_answer_sheet,
+        submit_exam,
+        validate_answers,
+    )
+
+    ready: list[tuple[int, str, tuple]] = []
+    for subject_id in subject_ids:
+        path = answers_dir / f"{subject_id}.txt"
+        if not path.is_file():
+            continue
+        try:
+            raw = parse_answer_sheet(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            click.echo(f"  {subject_id}  跳过（{error}）")
+            continue
+        sheet = exam.exam_sheet(subject_id)
+        answers = parse_answer_mapping(raw, sheet) if raw else ()
+        problems = validate_answers(sheet, answers)
+        if problems:
+            click.echo(f"  {subject_id}  {sheet.subject_name}  未就绪：{'; '.join(problems)}")
+            continue
+        ready.append((subject_id, sheet.subject_name, answers))
+        if dry_run:
+            click.echo(f"  {subject_id}  {sheet.subject_name}  校验通过  "
+                       f"令牌={exam_token(subject_id, answers)}")
+
+    if dry_run:
+        click.echo(f"\n  就绪 {len(ready)} 个科目，未提交。确认后加 --confirm all")
+        return
+
+    submitted = 0
+    for index, (subject_id, name, answers) in enumerate(ready):
+        outcome = submit_exam(exam, subject_id, answers,
+                              confirmation=exam_token(subject_id, answers))
+        result = str(outcome["outcome"])
+        detail = outcome.get("verdict") or outcome.get("detail") or ""
+        click.echo(f"  {subject_id}  {name}  {result}  {detail}")
+        if result != "confirmed_success":
+            remaining = [str(item[0]) for item in ready[index + 1:]]
+            click.echo(f"\n  → 停在 {result}；未提交: {', '.join(remaining) or '无'}")
+            click.echo("  结果不明时请先到页面核实，不要直接重跑。")
+            raise SystemExit(1)
+        submitted += 1
+    click.echo(f"\n  成功提交 {submitted} 个科目")
+
+
 @main.command("lab-exam")
 @click.option("--center", default="dxwl", help="教学中心代码")
 @click.option("--subject-id", type=int, default=None, help="考核科目 ID；用 --list-subjects 查看")
 @click.option("--list-subjects", "list_subjects", is_flag=True, help="列出可选考核科目及其状态后退出")
+@click.option("--all-subjects", "all_subjects", is_flag=True,
+              help="对全部可选科目执行（配 --out-dir 导出题目，或配 --answers-dir 提交）")
+@click.option("--out-dir", type=click.Path(path_type=Path), default=None,
+              help="批量导出题目到此目录：每科目一个 <ID>.txt（含 #qid 与『答:』行）")
+@click.option("--answers-dir", type=click.Path(path_type=Path), default=None,
+              help="批量提交：读该目录下 <ID>.txt 里的『答: X』；不加 --confirm all 则只干跑")
 @click.option("--cdp", default="http://127.0.0.1:9222", help="已登录浏览器的 CDP 端点（仅 --transport browser）")
 @click.option("--transport", "kind", type=click.Choice(["profile", "browser", "http"]), default="profile",
               help="profile=项目持久化 Chromium（推荐，无需手动开浏览器）；browser=借用 CDP 标签页")
@@ -589,7 +653,9 @@ def lab_contract_cmd(
 @click.option("--confirm", default="", help="确认令牌；不提供则只做干跑校验")
 @click.option("--plain", is_flag=True, help="只输出题干与选项的纯文本块，便于复制到别处检索")
 @click.option("--json", "as_json", is_flag=True, help="输出机器可读 JSON（含 questionId，供答案文件使用）")
-def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, cdp: str, kind: str, origin: str,
+def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, all_subjects: bool,
+                 out_dir: Path | None, answers_dir: Path | None,
+                 cdp: str, kind: str, origin: str,
                  answers: Path | None, confirm: str, plain: bool, as_json: bool) -> None:
     """实验预考核：读取状态与题目（只读）；提交需显式确认，单次且不重试。
 
@@ -618,18 +684,46 @@ def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, cdp: 
     try:
         exam = TransportLabExam(transport)
 
-        if list_subjects:
+        if all_subjects or list_subjects:
             payload = transport.call("view/subjects")
             rows = payload.get("result") if payload.get("code") == 0 else None
             if not isinstance(rows, list):
                 raise click.ClickException(
                     f"读取科目失败：{payload.get('code')} {payload.get('message')}"
                 )
-            for row in rows:
-                name = str(row.get("subjectName") or "")
-                passed = "已通过" if row.get("izPass") else "未通过"
-                click.echo(f"  {row.get('subjectId'):>6}  {name:22s} {row.get('claim') or '':6s} {passed}")
-            return
+            if list_subjects:
+                for row in rows:
+                    name = str(row.get("subjectName") or "")
+                    passed = "已通过" if row.get("izPass") else "未通过"
+                    click.echo(f"  {row.get('subjectId'):>6}  {name:22s} {row.get('claim') or '':6s} {passed}")
+                return
+
+            subject_ids = [int(row["subjectId"]) for row in rows]
+            if out_dir is not None:
+                from .lab_exam import render_sheet_plain
+
+                out_dir.mkdir(parents=True, exist_ok=True)
+                written = 0
+                for sid in subject_ids:
+                    sheet = exam.exam_sheet(sid)
+                    if not sheet.questions:
+                        click.echo(f"  {sid}  无题目，跳过")
+                        continue
+                    (out_dir / f"{sid}.txt").write_text(
+                        render_sheet_plain(sheet), encoding="utf-8")
+                    click.echo(f"  {sid}  {sheet.subject_name}  {len(sheet.questions)} 题")
+                    written += 1
+                click.echo(f"\n  已写出 {written} 个文件到 {out_dir}")
+                click.echo("  在每个文件里填写『答: X』，然后用 --answers-dir 提交。")
+                return
+
+            if answers_dir is not None:
+                _submit_exam_batch(exam, subject_ids, answers_dir, dry_run=confirm != "all")
+                return
+
+            raise click.ClickException(
+                "--all-subjects 需要配 --out-dir（导出题目）或 --answers-dir（提交）"
+            )
 
         if subject_id is None:
             raise click.ClickException("需要 --subject-id（或用 --list-subjects 查看可选科目）")

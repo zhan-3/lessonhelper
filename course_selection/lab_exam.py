@@ -225,6 +225,49 @@ def validate_answers(sheet: ExamSheet, answers: Sequence[ExamAnswer]) -> tuple[s
     return tuple(problems)
 
 
+ANSWER_LINE = re.compile(r"^答\s*[:：]\s*([A-Za-z](?:\s*[,、]?\s*[A-Za-z])*)?\s*$")
+_QID_LINE = re.compile(r"^#qid (\S+)")
+
+
+def render_sheet_plain(sheet: ExamSheet) -> str:
+    """Render a sheet for offline work: numbered questions plus a blank answer line.
+
+    ``#qid`` and ``答:`` are emitted per question so a filled-in copy can be fed
+    straight back via :func:`parse_answer_sheet` — the id is never transcribed
+    by hand, so it cannot drift from the question it belongs to.
+    """
+    lines: list[str] = []
+    for index, question in enumerate(sheet.questions, start=1):
+        lines.append(f"[{index}] {question.text}")
+        for label, text in question.options:
+            lines.append(f"{label}. {text}")
+        lines.append(f"#qid {question.question_id}")
+        lines.append("答: ")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def parse_answer_sheet(text: str) -> dict[str, list[str]]:
+    """Read ``答: X`` lines back, keyed by the ``#qid`` that precedes them.
+
+    Unanswered questions are simply absent, which :func:`validate_answers`
+    then reports as ``未作答`` — an untouched template never submits silently.
+    """
+    answers: dict[str, list[str]] = {}
+    question_id: str | None = None
+    for line in text.splitlines():
+        if match := _QID_LINE.match(line.strip()):
+            question_id = match.group(1)
+            continue
+        if match := ANSWER_LINE.match(line.strip()):
+            if question_id is None:
+                raise ValueError("答案行出现在任何 #qid 之前")
+            chosen = [letter.upper() for letter in re.findall(r"[A-Za-z]", match.group(1) or "")]
+            if chosen:
+                answers[question_id] = chosen
+    return answers
+
+
 def parse_answer_mapping(data: Mapping[str, Any], sheet: ExamSheet) -> tuple[ExamAnswer, ...]:
     """Build answers from a user-supplied ``{question_id: [option, ...]}`` mapping.
 

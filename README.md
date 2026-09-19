@@ -167,13 +167,21 @@ uv run course-selection lab-exam --center dxwl --list-subjects
 # 只读：显示考核状态与题目
 uv run course-selection lab-exam --center dxwl --subject-id <ID>
 
-# 导出题目为纯文本（题干 + 选项，便于复制检索）
+# 批量：导出全部科目到目录（每科目一个 <ID>.txt，含 #qid 与『答:』行）
+uv run course-selection lab-exam --center dxwl --all-subjects --out-dir .private\exam
+
+# 在文件里填『答: X』（多选写 `答: A,C`）后，先干跑校验（不提交）
+uv run course-selection lab-exam --center dxwl --all-subjects --answers-dir .private\exam
+
+# 批量提交
+uv run course-selection lab-exam --center dxwl --all-subjects --answers-dir .private\exam --confirm all
+```
+
+单科目也可以单独跑：
+
+```powershell
 uv run course-selection lab-exam --center dxwl --subject-id <ID> --plain > questions.txt
-
-# 干跑：校验答案并给出确认令牌（不提交）
 uv run course-selection lab-exam --center dxwl --subject-id <ID> --answers answers.json
-
-# 提交：显式确认后执行一次
 uv run course-selection lab-exam --center dxwl --subject-id <ID> --answers answers.json --confirm <令牌>
 ```
 
@@ -181,14 +189,15 @@ uv run course-selection lab-exam --center dxwl --subject-id <ID> --answers answe
 登录状态跨次保留，因此不需要手动启动浏览器，也不需要调试端口。`--transport browser`
 可改为借用带 CDP 端口的浏览器，`--transport http` 走纯 HTTP + 令牌。
 
-答案文件是 `{题目ID: [选项...]}` 形式的 JSON（`questionId` 用 `--json` 取）。题目**每次读取顺序随机**，所以必须用
-`questionId` 而不是序号。关键约束：
+批量模式直接用 `--out-dir` 导出的文本文件作答：答案填在每题后面的『答: 』行，`#qid` 就紧邻题目。
+题号**只在单个文件内有意义**（服务端每次返回顺序不同），`#qid` 才是提交时的匹配依据。
+单科目也可用 `{题目ID: [选项...]}` 的 JSON（`questionId` 用 `--json` 取）。关键约束：
 
-- 默认只读：不传 `--answers` 时只显示状态与题目，不产生任何写操作。
-- 提交前会**重新读取**状态与题目：`msgCode` 为 `Y`/`N` 时直接拒发，答案按最新题目重新校验。
-- 确认令牌绑定科目与整份答案，不匹配即拒绝。
-- 单次提交；结果不明记为 `possibly_applied` 并停止，不自动重试。
-- 工具**不读取也不转发**服务端随题目下发的答案字段：答案由使用者提供。
+- 默认只读：不传 `--answers` / `--answers-dir` 时只显示状态与题目，不产生任何写操作。
+- 提交前会**重新读取**状态与题目：`msgCode` 为 `Y`/`N` 时直接拒发（已通过的科目返回 `blocked_by_status`），答案按最新题目重新校验。
+- 确认令牌绑定科目与整份答案；批量模式需 `--confirm all`，但每个科目仍各自持一个令牌。
+- 单次提交；结果不明记为 `possibly_applied` 并停止，不自动重试。**批量模式下任一科目未确认成功就立即停下**，不碰后面的科目。
+- 工具**不读取也不转发**服务端随题目下发的答案字段（该字段实测为空）：答案由使用者提供。
 
 ### 毕业进度
 
