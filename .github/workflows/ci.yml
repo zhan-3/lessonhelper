@@ -33,6 +33,21 @@ jobs:
       - name: 安装依赖
         run: uv sync --locked
 
+      # tests/test_browser_observer.py 会真的启动一个 headless Chromium 来验证
+      # 借用标签页的观测链路；缺少浏览器时 playwright 返回不存在的可执行文件
+      # 路径，Popen 抛 FileNotFoundError。
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: 安装 Playwright Chromium
+        # 用 `python -m` 而非 `uv run playwright`：后者的 uv trampoline 在本项目
+        # 环境里无法解析脚本路径（`uv trampoline failed to canonicalize script
+        # path`），而 playwright 自带 __main__，走 `-m` 更稳。
+        run: uv run python -m playwright install chromium
+
       - name: 缓存 pre-commit 环境
         uses: actions/cache@v4
         with:
