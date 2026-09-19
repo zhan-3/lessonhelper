@@ -175,6 +175,12 @@ uv run course-selection lab-exam --center dxwl --all-subjects --answers-dir .pri
 
 # 批量提交
 uv run course-selection lab-exam --center dxwl --all-subjects --answers-dir .private\exam --confirm all
+
+# 或者：直接把答案粘贴进来（不必编辑文件；Ctrl+Z 回车结束输入）
+uv run course-selection lab-exam --center dxwl --all-subjects --answers-dir .private\exam --submit-stdin
+#   3002: 1=B 2=B 3=A 4=A 5=B 6=B 7=A 8=D 9=D 10=C
+#   3003: 1=A 2=C 3=C 4=C 5=C 6=A 7=B 8=B 9=B 10=B
+# 不加 --confirm all 就是干跑；确认后加上它提交
 ```
 
 单科目也可以单独跑：
@@ -190,6 +196,7 @@ uv run course-selection lab-exam --center dxwl --subject-id <ID> --answers answe
 可改为借用带 CDP 端口的浏览器，`--transport http` 走纯 HTTP + 令牌。
 
 批量模式直接用 `--out-dir` 导出的文本文件作答：答案填在每题后面的『答: 』行，`#qid` 就紧邻题目。
+也可以不碰文件，用 `--submit-stdin` 直接粘贴（`题号` 会按 `--answers-dir` 里的导出发文件解析成 `#qid`）。
 题号**只在单个文件内有意义**（服务端每次返回顺序不同），`#qid` 才是提交时的匹配依据。
 单科目也可用 `{题目ID: [选项...]}` 的 JSON（`questionId` 用 `--json` 取）。关键约束：
 

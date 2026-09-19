@@ -268,6 +268,56 @@ def parse_answer_sheet(text: str) -> dict[str, list[str]]:
     return answers
 
 
+_SUBJECT_LINE = re.compile(r"^(\d+)\s*[:：]\s*(.+)$")
+_ANSWER_PAIR = re.compile(r"(\d+)\s*[=:：]\s*([A-Za-z](?:\s*[,、]?\s*[A-Za-z])*)")
+
+
+def parse_sheet_question_ids(text: str) -> dict[int, str]:
+    """Map the printed question numbers back to their ids from an exported sheet.
+
+    This is what lets a pasted answer like ``1=B 2=C`` be resolved without ever
+    transcribing a 19-digit id by hand.
+    """
+    mapping: dict[int, str] = {}
+    current: int | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if match := re.match(r"^\[(\d+)\]", stripped):
+            current = int(match.group(1))
+        elif (qid := _QID_LINE.match(stripped)) and current is not None:
+            mapping[current] = qid.group(1)
+    return mapping
+
+
+def parse_pasted_answers(text: str) -> dict[int, dict[int, list[str]]]:
+    """Parse pasted lines into ``{subject_id: {question_number: [option, ...]}}``.
+
+    Accepts the shape a human naturally pastes, e.g.::
+
+        3002: 1=B 2=B 3=A 4=A
+        3003[:：] 1=A 2=C 3=C
+
+    Question numbers are resolved against an exported sheet later, so nothing
+    long has to be typed and the mapping cannot drift.
+    """
+    parsed: dict[int, dict[int, list[str]]] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = _SUBJECT_LINE.match(stripped)
+        if not match:
+            continue
+        pairs: dict[int, list[str]] = {}
+        for number, letters in _ANSWER_PAIR.findall(match.group(2)):
+            chosen = [letter.upper() for letter in re.findall(r"[A-Za-z]", letters)]
+            if chosen:
+                pairs[int(number)] = chosen
+        if pairs:
+            parsed[int(match.group(1))] = pairs
+    return parsed
+
+
 def parse_answer_mapping(data: Mapping[str, Any], sheet: ExamSheet) -> tuple[ExamAnswer, ...]:
     """Build answers from a user-supplied ``{question_id: [option, ...]}`` mapping.
 

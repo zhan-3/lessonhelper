@@ -16,6 +16,8 @@ from course_selection.lab_exam import (
     parse_answer_sheet,
     parse_exam_sheet,
     parse_exam_status,
+    parse_pasted_answers,
+    parse_sheet_question_ids,
     render_sheet_plain,
     submit_exam,
     validate_answers,
@@ -231,6 +233,38 @@ class PlainSheetTests(unittest.TestCase):
         self.assertEqual((), parsed)
         problems = validate_answers(sheet(), parsed)
         self.assertEqual(3, len([p for p in problems if "未作答" in p]))
+
+
+class PastedAnswerTests(unittest.TestCase):
+    """The paste path: ``3002: 1=B 2=B`` resolved against an exported sheet."""
+
+    def test_subject_lines_are_parsed(self):
+        parsed = parse_pasted_answers("3002: 1=B 2=B 3=A\n3003: 1=A 2=C\n")
+        self.assertEqual({1: ["B"], 2: ["B"], 3: ["A"]}, parsed[3002])
+        self.assertEqual({1: ["A"], 2: ["C"]}, parsed[3003])
+
+    def test_full_width_colon_and_separators(self):
+        parsed = parse_pasted_answers("3002：1=B, 2=B、3=A")
+        self.assertEqual({1: ["B"], 2: ["B"], 3: ["A"]}, parsed[3002])
+
+    def test_multi_select_letters_are_split(self):
+        self.assertEqual({1: ["A", "C"]}, parse_pasted_answers("3002: 1=AC")[3002])
+        self.assertEqual({1: ["A", "C"]}, parse_pasted_answers("3002: 1=A,C")[3002])
+
+    def test_blank_and_comment_lines_are_ignored(self):
+        self.assertEqual({}, parse_pasted_answers("\n# 注释\n\n"))
+        self.assertEqual({}, parse_pasted_answers("随便一句话"))
+
+    def test_sheet_numbers_map_back_to_ids(self):
+        mapping = parse_sheet_question_ids(render_sheet_plain(sheet()))
+        self.assertEqual({1: "q1", 2: "q2", 3: "q3"}, mapping)
+
+    def test_pasted_answers_resolve_to_real_ids(self):
+        mapping = parse_sheet_question_ids(render_sheet_plain(sheet()))
+        pasted = parse_pasted_answers("4242: 1=A 2=C 3=A,C")[4242]
+        raw = {mapping[n]: opts for n, opts in pasted.items()}
+        self.assertEqual({"q1": ["A"], "q2": ["C"], "q3": ["A", "C"]}, raw)
+        self.assertEqual((), validate_answers(sheet(), parse_answer_mapping(raw, sheet())))
 
 
 class EncodingTests(unittest.TestCase):

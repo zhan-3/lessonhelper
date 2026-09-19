@@ -576,45 +576,18 @@ def lab_contract_cmd(
 # ── lab-exam ────────────────────────────────────────────────────────────────
 
 
-def _submit_exam_batch(exam, subject_ids: list[int], answers_dir: Path, *, dry_run: bool) -> None:
-    """Check — and optionally submit — every subject with a filled-in answer file.
+def _report_or_submit(exam, ready: list[tuple[int, str, tuple]], *, dry_run: bool) -> None:
+    """Shared tail: print tokens for a dry run, otherwise submit one by one.
 
     Guardrails mirror ``book_slots``: one submission per subject, each with its
     own token, and the run stops at the first outcome that is not a confirmed
-    success.  An unclear result is never followed by more writes.  Subjects with
-    no answer file, or with incomplete answers, are skipped rather than counted
-    as failures — that is the ordinary "not done yet" case.
+    success.  An unclear result is never followed by more writes.
     """
-    from .lab_exam import (
-        exam_token,
-        parse_answer_mapping,
-        parse_answer_sheet,
-        submit_exam,
-        validate_answers,
-    )
-
-    ready: list[tuple[int, str, tuple]] = []
-    for subject_id in subject_ids:
-        path = answers_dir / f"{subject_id}.txt"
-        if not path.is_file():
-            continue
-        try:
-            raw = parse_answer_sheet(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:
-            click.echo(f"  {subject_id}  跳过（{error}）")
-            continue
-        sheet = exam.exam_sheet(subject_id)
-        answers = parse_answer_mapping(raw, sheet) if raw else ()
-        problems = validate_answers(sheet, answers)
-        if problems:
-            click.echo(f"  {subject_id}  {sheet.subject_name}  未就绪：{'; '.join(problems)}")
-            continue
-        ready.append((subject_id, sheet.subject_name, answers))
-        if dry_run:
-            click.echo(f"  {subject_id}  {sheet.subject_name}  校验通过  "
-                       f"令牌={exam_token(subject_id, answers)}")
+    from .lab_exam import exam_token, submit_exam
 
     if dry_run:
+        for subject_id, name, answers in ready:
+            click.echo(f"  {subject_id}  {name}  校验通过  令牌={exam_token(subject_id, answers)}")
         click.echo(f"\n  就绪 {len(ready)} 个科目，未提交。确认后加 --confirm all")
         return
 
@@ -634,6 +607,75 @@ def _submit_exam_batch(exam, subject_ids: list[int], answers_dir: Path, *, dry_r
     click.echo(f"\n  成功提交 {submitted} 个科目")
 
 
+def _collect_from_answer_files(exam, subject_ids: list[int], answers_dir: Path) -> list[tuple[int, str, tuple]]:
+    """Build the ready list from ``答: X`` lines in exported sheets.
+
+    Subjects with no file, or with incomplete answers, are skipped rather than
+    counted as failures — that is the ordinary "not done yet" case.
+    """
+    from .lab_exam import parse_answer_mapping, parse_answer_sheet, validate_answers
+
+    ready: list[tuple[int, str, tuple]] = []
+    for subject_id in subject_ids:
+        path = answers_dir / f"{subject_id}.txt"
+        if not path.is_file():
+            continue
+        try:
+            raw = parse_answer_sheet(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            click.echo(f"  {subject_id}  跳过（{error}）")
+            continue
+        sheet = exam.exam_sheet(subject_id)
+        answers = parse_answer_mapping(raw, sheet) if raw else ()
+        problems = validate_answers(sheet, answers)
+        if problems:
+            click.echo(f"  {subject_id}  {sheet.subject_name}  未就绪：{'; '.join(problems)}")
+            continue
+        ready.append((subject_id, sheet.subject_name, answers))
+    return ready
+
+
+def _collect_from_paste(exam, pasted: str, sheets_dir: Path) -> list[tuple[int, str, tuple]]:
+    """Build the ready list from pasted ``3002: 1=A 2=B`` answers.
+
+    Question numbers are resolved against the exported sheets in *sheets_dir*,
+    so a paste never has to carry 19-digit ids.
+    """
+    from .lab_exam import (
+        parse_answer_mapping,
+        parse_pasted_answers,
+        parse_sheet_question_ids,
+        validate_answers,
+    )
+
+    parsed = parse_pasted_answers(pasted)
+    if not parsed:
+        raise click.ClickException(
+            "标准输入里没有解析到答案（格式：3002: 1=B 2=B 3=A ...）"
+        )
+
+    ready: list[tuple[int, str, tuple]] = []
+    for subject_id in sorted(parsed):
+        path = sheets_dir / f"{subject_id}.txt"
+        if not path.is_file():
+            click.echo(f"  {subject_id}  跳过（找不到 {path}，无法把题号对应到题目）")
+            continue
+        mapping = parse_sheet_question_ids(path.read_text(encoding="utf-8"))
+        unknown = sorted(number for number in parsed[subject_id] if number not in mapping)
+        if unknown:
+            click.echo(f"  {subject_id}  跳过（题号不在导出文件里: {unknown}）")
+            continue
+        raw = {mapping[number]: options for number, options in parsed[subject_id].items()}
+        sheet = exam.exam_sheet(subject_id)
+        answers = parse_answer_mapping(raw, sheet)
+        problems = validate_answers(sheet, answers)
+        if problems:
+            click.echo(f"  {subject_id}  {sheet.subject_name}  未就绪：{'; '.join(problems)}")
+            continue
+        ready.append((subject_id, sheet.subject_name, answers))
+    return ready
+
+
 @main.command("lab-exam")
 @click.option("--center", default="dxwl", help="教学中心代码")
 @click.option("--subject-id", type=int, default=None, help="考核科目 ID；用 --list-subjects 查看")
@@ -644,6 +686,8 @@ def _submit_exam_batch(exam, subject_ids: list[int], answers_dir: Path, *, dry_r
               help="批量导出题目到此目录：每科目一个 <ID>.txt（含 #qid 与『答:』行）")
 @click.option("--answers-dir", type=click.Path(path_type=Path), default=None,
               help="批量提交：读该目录下 <ID>.txt 里的『答: X』；不加 --confirm all 则只干跑")
+@click.option("--submit-stdin", "submit_stdin", is_flag=True,
+              help="从标准输入读粘贴的答案（<科目ID>: 1=A 2=B ...），配 --answers-dir 取题号映射")
 @click.option("--cdp", default="http://127.0.0.1:9222", help="已登录浏览器的 CDP 端点（仅 --transport browser）")
 @click.option("--transport", "kind", type=click.Choice(["profile", "browser", "http"]), default="profile",
               help="profile=项目持久化 Chromium（推荐，无需手动开浏览器）；browser=借用 CDP 标签页")
@@ -654,7 +698,7 @@ def _submit_exam_batch(exam, subject_ids: list[int], answers_dir: Path, *, dry_r
 @click.option("--plain", is_flag=True, help="只输出题干与选项的纯文本块，便于复制到别处检索")
 @click.option("--json", "as_json", is_flag=True, help="输出机器可读 JSON（含 questionId，供答案文件使用）")
 def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, all_subjects: bool,
-                 out_dir: Path | None, answers_dir: Path | None,
+                 out_dir: Path | None, answers_dir: Path | None, submit_stdin: bool,
                  cdp: str, kind: str, origin: str,
                  answers: Path | None, confirm: str, plain: bool, as_json: bool) -> None:
     """实验预考核：读取状态与题目（只读）；提交需显式确认，单次且不重试。
@@ -718,8 +762,19 @@ def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, all_s
                 return
 
             if answers_dir is not None:
-                _submit_exam_batch(exam, subject_ids, answers_dir, dry_run=confirm != "all")
+                dry_run = confirm != "all"
+                if submit_stdin:
+                    pasted = click.get_text_stream("stdin").read()
+                    ready = _collect_from_paste(exam, pasted, answers_dir)
+                else:
+                    ready = _collect_from_answer_files(exam, subject_ids, answers_dir)
+                _report_or_submit(exam, ready, dry_run=dry_run)
                 return
+
+            if submit_stdin:
+                raise click.ClickException(
+                    "--submit-stdin 需要配合 --answers-dir（那个目录提供题号→题目的映射）"
+                )
 
             raise click.ClickException(
                 "--all-subjects 需要配 --out-dir（导出题目）或 --answers-dir（提交）"
