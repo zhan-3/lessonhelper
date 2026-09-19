@@ -1,0 +1,52 @@
+# Python 标准 pre-commit 配置。文档：https://pre-commit.com
+#
+# 安装（一次性）： uv run pre-commit install
+# 手动全量运行：   uv run pre-commit run --all-files
+# 升级 hook 版本： uv run pre-commit autoupdate
+#
+# 刻意不启用 ruff-format：对既有代码全量格式化会产生巨大 diff，与本仓库
+# 「先建立机制、再逐步收紧」的节奏不符。
+
+# 生成产物不参与格式类 hook：它们会被下次构建覆盖，改它们只制造噪音。
+exclude: |
+  (?x)^(
+      course_selection/workbench_static/.*
+    | frontend/src/api\.generated\.ts
+  )$
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # 防止再次误提交大型二进制资料（本仓库曾发生：两个 15 MB 的 .docx）
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+        exclude: ^frontend/tsconfig.*\.json$      # tsconfig 是 JSONC，含注释
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.5
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy（类型检查；排除清单见 pyproject.toml）
+        entry: uv run mypy
+        language: system
+        pass_filenames: false
+
+      - id: project-structure
+        name: 项目结构自检（无环 / 模块登记 / 敏感文件）
+        entry: uv run python tools/check_project.py
+        language: system
+        pass_filenames: false

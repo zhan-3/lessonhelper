@@ -38,6 +38,9 @@ class BrowserLabSession:
     ):
         self.page, self.center, self.token, self.pause = page, center, token, pause
         self._transport = transport or BrowserLabTransport(page, center, token, pause=pause)
+        # Only ``attach`` sets this; declared here so the attribute is typed and
+        # ``close`` does not need a ``getattr`` fallback.
+        self._playwright: Any = None
 
     @classmethod
     def attach(cls, cdp_url: str, center: str) -> BrowserLabSession:
@@ -73,9 +76,8 @@ class BrowserLabSession:
 
     def close(self) -> None:
         self._transport.close()
-        playwright = getattr(self, "_playwright", None)
-        if playwright is not None:
-            playwright.stop()
+        if self._playwright is not None:
+            self._playwright.stop()
 
     def _call(self, path: str, form: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
         return self._transport.call(path, form)

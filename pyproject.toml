@@ -24,13 +24,52 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.8", "watchfiles>=1.0"]
+dev = [
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+    "pytest>=8.0",
+    "ruff>=0.8",
+    "watchfiles>=1.0",
+]
 
 [tool.uv]
 package = true
 
 [tool.ruff]
 target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+files = ["course_selection", "course_progress"]
+ignore_missing_imports = true
+show_error_codes = true
+warn_unused_ignores = true
+
+# 渐进式类型化：下列 15 个模块仍有已知类型错误（多数源于用
+# dict[str, object] 承载结构化数据，需要重构成 TypedDict 才能根治），
+# 先排除以便其余 37 个模块和新增代码受类型保护。
+#
+# 修复一个模块就从这里删掉一行。
+# 基线：114 个错误 / 15 个模块，2026-09-19 测量。
+[[tool.mypy.overrides]]
+module = [
+    "course_progress.progress",
+    "course_progress.session",
+    "course_selection.browser_observer",
+    "course_selection.cli",
+    "course_selection.deep_observation",
+    "course_selection.gateway",
+    "course_selection.lab_contract",
+    "course_selection.manual_observation",
+    "course_selection.notice",
+    "course_selection.personal_timetable",
+    "course_selection.planning",
+    "course_selection.request_contracts",
+    "course_selection.selection_entry",
+    "course_selection.tasks",
+    "course_selection.timetable",
+]
+ignore_errors = true
 
 [tool.ruff.lint]
 # BLE001: 有意的防御性降级。Playwright 异常类型随运行时版本变化，

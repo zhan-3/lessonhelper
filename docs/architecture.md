@@ -203,13 +203,25 @@ lab-contract promote  观测提升为 docs/contracts/ 基线（保留人工 lock
 
 ```powershell
 uv sync                                   # 后端依赖
-uv run pytest tests/                      # 295 个测试
-uv run ruff check .                       # 静态检查
-uv run python tools/check_project.py      # 结构自检：无环 / 模块登记 / 敏感文件
+uv run pre-commit install                 # 一次性：装提交钩子
+
+# 提交时自动运行（配置见 .pre-commit-config.yaml）：
+#   文件卫生（含大文件拦截）/ ruff check --fix / mypy / 结构自检
+uv run pre-commit run --all-files         # 手动全量跑一遍钩子
+
+uv run pytest tests/                      # 295 个测试（约 23 秒，未进钩子）
+uv run mypy                               # 类型检查，配置见 pyproject.toml
+
 cd frontend; npm run generate:api         # 由 openapi.yaml 生成类型
 cd frontend; npm test                     # 23 个界面测试
 cd frontend; npm run build                # tsc -b && vite build → workbench_static/
 ```
+
+`pytest` 不放进提交钩子（约 23 秒太慢）；它的自然位置是 CI，而本仓库尚未配置。
+
+`mypy` 采用渐进式类型化：`pyproject.toml` 的 `ignore_errors` 列出了 15 个仍有
+已知类型错误的模块（共 114 个错误，多数源于 `dict[str, object]` 承载结构化数据）。
+其余 37 个模块与新增代码受类型保护；修复一个模块就从清单里删掉一行。
 
 前端构建产物是**提交进仓库的**，因此改前端后必须重新 build，否则界面与源码不一致。
 

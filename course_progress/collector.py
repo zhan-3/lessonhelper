@@ -338,4 +338,3 @@ class FixedGradeReader:
             is_cancelled=is_cancelled,
             checkpoint=checkpoint,
         )
-
