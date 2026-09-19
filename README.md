@@ -240,7 +240,7 @@ uv run pre-commit install     # 一次性：装提交钩子（之后的提交会
 uv run pytest tests/          # Python 测试（295 个）
 uv run ruff check .           # Lint
 uv run mypy                   # 类型检查（渐进式，排除清单见 pyproject.toml）
-uv run lint-imports           # 分层契约与循环依赖
+uv run python tools/lint_imports.py   # 分层契约与循环依赖
 uv run python tools/check_project.py   # 结构自检：模块登记 / 敏感文件
 
 cd frontend

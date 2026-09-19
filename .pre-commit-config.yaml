@@ -47,7 +47,10 @@ repos:
 
       - id: import-linter
         name: 分层契约与循环依赖（import-linter；契约见 pyproject.toml）
-        entry: uv run lint-imports
+        # 经 wrapper 调用：在重定向的 stdout 下强制 UTF-8，否则 rich 的
+        # legacy Windows 渲染器会用 cp1252 输出框线符号而崩溃。
+        # 原因与实测对照见 tools/lint_imports.py。
+        entry: uv run python tools/lint_imports.py
         language: system
         pass_filenames: false
 

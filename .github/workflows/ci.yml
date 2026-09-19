@@ -17,6 +17,11 @@ jobs:
     # Windows DPAPI（course_progress/credentials.py 在非 Windows 上按设计抛错）。
     runs-on: windows-latest
     timeout-minutes: 20
+    env:
+      # Runner 的 stdout 被重定向，Python 回退到 cp1252；含中文或框线符号的
+      # 输出（import-linter / 结构自检）会抛 UnicodeEncodeError。
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
 

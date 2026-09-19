@@ -149,7 +149,7 @@
 ### 3.1 已固化为命令的检查
 
 ```bash
-uv run lint-imports                     # 分层契约 + 循环依赖
+uv run python tools/lint_imports.py     # 分层契约 + 循环依赖
 uv run python tools/check_project.py    # 模块登记 + 敏感文件
 ```
 

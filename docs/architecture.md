@@ -211,7 +211,7 @@ uv run pre-commit run --all-files         # 手动全量跑一遍钩子
 
 uv run pytest tests/                      # 295 个测试（约 23 秒，未进钩子）
 uv run mypy                               # 类型检查，排除清单见 pyproject.toml
-uv run lint-imports                       # 分层契约与循环依赖，契约见 pyproject.toml
+uv run python tools/lint_imports.py       # 分层契约与循环依赖（UTF-8 wrapper，原因见脚本注释）
 
 cd frontend; npm run generate:api         # 由 openapi.yaml 生成类型
 cd frontend; npm test                     # 23 个界面测试
