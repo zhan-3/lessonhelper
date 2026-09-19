@@ -1,5 +1,7 @@
 # LessonHelper
 
+[![CI](https://github.com/zhan-3/lessonhelper/actions/workflows/ci.yml/badge.svg)](https://github.com/zhan-3/lessonhelper/actions/workflows/ci.yml)
+
 HITWH（哈尔滨工业大学（威海））校园教务辅助工具集：本地优先的选课规划、毕业进度推算，以及实验预约的探索性实现。
 
 > **这是开发快照，不是稳定发布版，也不是可依赖的抢课/选课服务。**
@@ -233,16 +235,26 @@ academic_browser_begin(endpoint) → 外部操作 → academic_browser_finish()
 
 ```powershell
 uv sync
-uv run pytest tests/          # Python 测试
+uv run pre-commit install     # 一次性：装提交钩子（之后的提交会自动检查）
+
+uv run pytest tests/          # Python 测试（295 个）
 uv run ruff check .           # Lint
+uv run mypy                   # 类型检查（渐进式，排除清单见 pyproject.toml）
+uv run lint-imports           # 分层契约与循环依赖
+uv run python tools/check_project.py   # 结构自检：模块登记 / 敏感文件
 
 cd frontend
 npm install
-npm test                      # 前端测试
+npm test                      # 前端测试（23 个）
+
 npm run build                 # 构建到 course_selection/workbench_static/
 ```
 
 前端源码位于 `frontend/`（React + Vite + TypeScript），构建产物位于 `course_selection/workbench_static/`。
+
+提交钩子与 CI（`.github/workflows/ci.yml`）使用同一套配置，避免「本地过、CI 挂」。
+`pytest` 只在 CI 运行（本地钩子里约 23 秒太慢）。质量门的完整说明见
+[`docs/architecture.md`](docs/architecture.md) 第 8 节。
 
 ## 文档索引
 
@@ -254,6 +266,7 @@ npm run build                 # 构建到 course_selection/workbench_static/
 | [`docs/course-progress-explorer.md`](docs/course-progress-explorer.md) | 毕业进度探索器与基线规则 |
 | [`docs/academic-browser-observer.md`](docs/academic-browser-observer.md) | 只读浏览器观察器与证据等级 |
 | [`docs/DEVLOG.md`](docs/DEVLOG.md) | 开发日志 |
+| [`docs/reading-map.md`](docs/reading-map.md) | 代码阅读地图：目录树、阅读优先级、交叉验证清单 |
 | [`docs/adr/`](docs/adr/) | 架构决策记录 |
 | [`AGENTS.md`](AGENTS.md) | 贡献者与 Agent 协作约定 |
 

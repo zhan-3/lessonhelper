@@ -218,7 +218,13 @@ cd frontend; npm test                     # 23 个界面测试
 cd frontend; npm run build                # tsc -b && vite build → workbench_static/
 ```
 
-`pytest` 不放进提交钩子（约 23 秒太慢）；它的自然位置是 CI，而本仓库尚未配置。
+`pytest` 不放进提交钩子（约 23 秒太慢），只在 CI 运行。
+
+质量门在两个地方执行**同一套配置**：本地提交钩子（`.pre-commit-config.yaml`）与
+GitHub Actions（`.github/workflows/ci.yml`）。CI 的后端 job 用 `windows-latest`
+——`tests/test_workbench.py` 的登录配置测试会调用真实的 Windows DPAPI，非 Windows
+平台按设计抛错；前端 job 在 ubuntu 上跑 Vitest。依赖安装用 `uv sync --locked`，
+lock 与 pyproject 不一致会直接失败。
 
 `mypy` 采用渐进式类型化：`pyproject.toml` 的 `ignore_errors` 列出了 15 个仍有
 已知类型错误的模块（共 114 个错误，多数源于 `dict[str, object]` 承载结构化数据）。
