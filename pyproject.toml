@@ -1,5 +1,5 @@
 [project]
-name = "lab-scraper"
+name = "lesson-helper"
 version = "0.1.0"
 description = "HITWH 校园教务辅助工具集：本地优先的选课规划、毕业进度推算与实验预约（实验性）"
 readme = "README.md"

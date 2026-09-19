@@ -60,7 +60,7 @@ def _setup_logging(verbose: bool = False) -> None:
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, help="启用调试日志")
 def main(verbose: bool = False) -> None:
-    """选课工作台 CLI — 实验室抢课、选课规划、接口发现等工具集。"""
+    """选课工作台 CLI — 选课规划、毕业进度、实验预约与接口契约检查。"""
     _setup_logging(verbose)
 
 

@@ -231,9 +231,9 @@ cd frontend; npm run build                # tsc -b && vite build → workbench_s
 
 ## 10. 已知不一致（待清理）
 
-- `pyproject.toml` 的包名仍是 `lab-scraper`，与现在的项目定位不符（`description` 已更新）。
 - `lab-booking` 仍使用页面内 `fetch` 后端；`lab-contract` 已走纯 HTTP 主后端。两者共用同一传输层，接线统一尚未完成。
 - 毕业基线、实验预约的真实环境验收均未完成；Observer 的语义价值仍未证明。
+- `docs/` 下的两个 `.docx` 原件（共 15.5 MB，占仓库体积约 86%）仍在入仓状态，参见 `reading-map.md` 的目录评估。
 
 ---
 
