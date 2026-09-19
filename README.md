@@ -183,6 +183,11 @@ uv run course-selection lab-exam --center dxwl --all-subjects --answers-dir .pri
 # 不加 --confirm all 就是干跑；确认后加上它提交
 ```
 
+也可以在 Windows 上直接双击脚本（无需敲命令）：
+
+- `tools\lab-exam-export.cmd` —— 导出全部题目到 `.private\exam\`
+- `tools\lab-exam-submit.cmd` —— 先干跑校验，确认后才提交
+
 单科目也可以单独跑：
 
 ```powershell
