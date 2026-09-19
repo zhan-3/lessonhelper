@@ -23,7 +23,8 @@ HITWH（哈尔滨工业大学（威海））校园教务辅助工具集：本地
 | 选课提交（单个教学班单次提交） | `implemented` + `automated-test verified` | 真实提交流程未验收；默认不启用自动重试 |
 | 毕业进度推算 | `implemented` + `automated-test verified` | 结果仅为规划参考，必须人工核对培养方案 |
 | 实验预约 `lab-booking` | **实验性，未完成开发与真实环境验证** | 视为不可用功能，仅在小范围、可人工核对时尝试 |
-| 实验预考核 `lab-exam` | `implemented` + `automated-test verified` | 状态/题目读取与提交护栏有测试覆盖，未在真实考核上验收；答案由使用者提供 |
+| 实验预考核 `lab-exam`（读取） | `implemented` + `automated-test verified` + **`real-environment verified`** | 2026-09-19 在 `dxwl` 真实读取 15 个科目与 10 道题目成功（`view/exam/view` + `view/exam/list`） |
+| 实验预考核 `lab-exam`（提交） | `implemented` + `automated-test verified` | 提交流程未在真实考核上验收 |
 | Academic Browser Observer（只读浏览器诊断） | 部分 `automated-test verified`，价值主张 `not_demonstrated` | 未在真实教务系统验证，不能替代现有 DevTools/Playwright 工具 |
 
 当前测试基线：`uv run pytest tests/` → **322 passed**。
@@ -160,6 +161,9 @@ uv run course-selection lab-booking --center dxwl --confirm <规划令牌>
 ### 实验预考核
 
 ```powershell
+# 列出可选考核科目及其状态
+uv run course-selection lab-exam --center dxwl --list-subjects
+
 # 只读：显示考核状态与题目
 uv run course-selection lab-exam --center dxwl --subject-id <ID>
 
@@ -170,7 +174,12 @@ uv run course-selection lab-exam --center dxwl --subject-id <ID> --answers answe
 uv run course-selection lab-exam --center dxwl --subject-id <ID> --answers answers.json --confirm <令牌>
 ```
 
-答案文件是 `{题目ID: [选项...]}` 形式的 JSON。关键约束：
+默认 `--transport profile`：启动**项目自己的持久化 Chromium**（`.private/course-progress/`），
+登录状态跨次保留，因此不需要手动启动浏览器，也不需要调试端口。`--transport browser`
+可改为借用带 CDP 端口的浏览器，`--transport http` 走纯 HTTP + 令牌。
+
+答案文件是 `{题目ID: [选项...]}` 形式的 JSON。题目**每次读取顺序随机**，所以必须用
+`questionId` 而不是序号。关键约束：
 
 - 默认只读：不传 `--answers` 时只显示状态与题目，不产生任何写操作。
 - 提交前会**重新读取**状态与题目：`msgCode` 为 `Y`/`N` 时直接拒发，答案按最新题目重新校验。

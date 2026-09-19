@@ -5,6 +5,14 @@
 free of browser and network imports; only the CLI and other composition roots
 reach for this adapter.
 
+Two ways to obtain a session, differing only in who owns the browser:
+
+* :meth:`attach` borrows a tab from a browser you started with a CDP port;
+* :meth:`from_profile` launches the project's own persistent Chromium, whose
+  profile already carries the openlab sign-in — no manual browser, no port.
+  The profile is shared with ``course_progress``, so a sign-in survives across
+  runs.
+
 The app token is a credential: it is learned in memory and never persisted.
 """
 
@@ -12,16 +20,58 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from .lab_booking import LabSlot
-from .lab_ports import LabTransport
+from .lab_ports import DEFAULT_ORIGIN, LabTransport
 from .lab_transport import (
     TRIGGER_ROUTES,
     BrowserLabTransport,
     install_token_hook,
     page_token,
 )
+
+# The centre apps are Vue SPAs and the token only appears once a protected
+# route is visited, so nudge the router through each candidate until the
+# installed hook captures it.
+_ROUTE_PUSH_JS = """(route) => {
+  const app = document.querySelector('#app') && document.querySelector('#app').__vue_app__;
+  if (app) app.config.globalProperties.$router.push(route).catch(() => {});
+}"""
+
+TOKEN_CAPTURE_SECONDS = 60.0
+
+
+def capture_app_token(page: Any, *, timeout_seconds: float = TOKEN_CAPTURE_SECONDS) -> str:
+    """Drive the SPA until the app token appears, then return it (memory only)."""
+    install_token_hook(page)
+    token = page_token(page)
+    deadline = time.monotonic() + timeout_seconds
+    for route in TRIGGER_ROUTES:
+        if token:
+            break
+        page.evaluate(_ROUTE_PUSH_JS, route)
+        while time.monotonic() < deadline and not token:
+            time.sleep(0.7)
+            token = page_token(page)
+    if not token:
+        raise RuntimeError(
+            "app token not captured; sign in to openlab and interact with the page once, then retry"
+        )
+    return token
+
+
+def _page_for_center(context: Any, center: str, *, open_if_missing: bool) -> Any:
+    """Pick the tab already on ``/<center>/``, optionally opening one."""
+    page = next((item for item in context.pages if f"/{center}/" in item.url), None)
+    if page is not None:
+        return page
+    if not open_if_missing:
+        raise RuntimeError(f"no open tab for center '{center}'; open it from the gateway first")
+    page = context.new_page()
+    page.goto(f"{DEFAULT_ORIGIN}/{center}/booking/", wait_until="domcontentloaded", timeout=60_000)
+    return page
 
 
 class BrowserLabSession:
@@ -38,41 +88,69 @@ class BrowserLabSession:
     ):
         self.page, self.center, self.token, self.pause = page, center, token, pause
         self._transport = transport or BrowserLabTransport(page, center, token, pause=pause)
-        # Only ``attach`` sets this; declared here so the attribute is typed and
-        # ``close`` does not need a ``getattr`` fallback.
+        # Set by ``attach`` / ``from_profile``; declared here so the attribute is
+        # typed and ``close`` needs no ``getattr`` fallback.
         self._playwright: Any = None
 
     @classmethod
     def attach(cls, cdp_url: str, center: str) -> BrowserLabSession:
-        """Borrow the already-authenticated tab and learn its app token in memory."""
+        """Borrow an already-authenticated tab from a CDP-attached browser."""
         from playwright.sync_api import sync_playwright
 
         playwright = sync_playwright().start()
-        browser = playwright.chromium.connect_over_cdp(cdp_url)
-        page = next((item for item in browser.contexts[0].pages if f"/{center}/" in item.url), None)
-        if page is None:
-            raise RuntimeError(f"no open tab for center '{center}'; open it from the gateway first")
-        install_token_hook(page)
-        token = page_token(page)
-        deadline = time.monotonic() + 60
-        for route in TRIGGER_ROUTES:
-            if token:
-                break
-            page.evaluate(
-                """(route) => {
-                  const app = document.querySelector('#app') && document.querySelector('#app').__vue_app__;
-                  if (app) app.config.globalProperties.$router.push(route).catch(() => {});
-                }""",
-                route,
+        try:
+            browser = playwright.chromium.connect_over_cdp(cdp_url)
+            if not browser.contexts:
+                raise RuntimeError("CDP browser has no persistent context")
+            page = _page_for_center(browser.contexts[0], center, open_if_missing=False)
+            token = capture_app_token(page)
+        except Exception:
+            playwright.stop()
+            raise
+        return cls._bound(page, center, token, playwright)
+
+    @classmethod
+    def from_profile(cls, profile_root: Path | str, center: str) -> BrowserLabSession:
+        """Launch the project's persistent Chromium and reuse its openlab sign-in.
+
+        No externally started browser and no CDP port are needed.  If the centre
+        page is not already open it is opened, which is also what surfaces the
+        sign-in window the first time the stored session has expired.
+        """
+        from playwright.sync_api import sync_playwright
+
+        from course_progress.explorer import launch_browser_context, resolve_profile_dir
+
+        playwright = sync_playwright().start()
+        try:
+            context = launch_browser_context(
+                playwright, "chromium", resolve_profile_dir(Path(profile_root))
             )
-            while time.monotonic() < deadline and not token:
-                time.sleep(0.7)
-                token = page_token(page)
-        if not token:
-            raise RuntimeError("app token not captured; interact with the app once, then retry")
+            page = _page_for_center(context, center, open_if_missing=True)
+            token = capture_app_token(page)
+        except Exception:
+            playwright.stop()
+            raise
+        return cls._bound(page, center, token, playwright)
+
+    @classmethod
+    def _bound(cls, page: Any, center: str, token: str, playwright: Any) -> BrowserLabSession:
         session = cls(page, center, token)
         session._playwright = playwright
         return session
+
+    def as_transport(self) -> LabTransport:
+        """Expose the transport, transferring ownership of the browser session.
+
+        The returned transport's ``close`` then releases the Playwright
+        instance, so a caller that only needs reads can keep using the existing
+        ``try/finally: transport.close()`` shape.
+        """
+        transport = self._transport
+        if isinstance(transport, BrowserLabTransport):
+            transport._playwright = self._playwright
+            self._playwright = None
+        return transport
 
     def close(self) -> None:
         self._transport.close()

@@ -431,8 +431,18 @@ def lab_booking_cmd(
 
 
 def _lab_contract_transport(center: str, cdp: str, kind: str, origin: str):
-    """Build the read-only transport for a contract observation."""
+    """Build the transport for one center, by profile, by CDP borrow, or plain HTTP."""
     from .lab_transport import BrowserLabTransport, HttpLabTransport, acquire_token
+
+    if kind == "profile":
+        # Launch the project's own persistent Chromium.  Its profile already
+        # carries the openlab sign-in, so neither a manually started browser
+        # nor a CDP port is needed.  ``as_transport`` hands over the Playwright
+        # instance, and the caller's ``transport.close()`` releases it.
+        from .lab_browser_session import BrowserLabSession
+
+        session = BrowserLabSession.from_profile(config.PROGRESS_PROFILE_ROOT, center)
+        return session.as_transport()
 
     if kind == "browser":
         from playwright.sync_api import sync_playwright
@@ -463,7 +473,7 @@ def _lab_contract_transport(center: str, cdp: str, kind: str, origin: str):
 @click.option("--channel", default="direct", help="通道名；baseline 按通道分开存")
 @click.option("--origin", default="http://openlab.hitwh.edu.cn")
 @click.option("--cdp", default="http://127.0.0.1:9222")
-@click.option("--transport", "kind", type=click.Choice(["http", "browser"]), default="http")
+@click.option("--transport", "kind", type=click.Choice(["http", "browser", "profile"]), default="http")
 @click.option("--observations-dir", type=click.Path(path_type=Path), default=Path(".private/lab-contracts"))
 @click.option("--baselines-dir", type=click.Path(path_type=Path), default=Path("docs/contracts"))
 @click.option("--env", "env_pairs", multiple=True, help="额外环境项 KEY=VALUE，只写入本机观测")
@@ -568,15 +578,17 @@ def lab_contract_cmd(
 
 @main.command("lab-exam")
 @click.option("--center", default="dxwl", help="教学中心代码")
-@click.option("--subject-id", type=int, required=True, help="考核科目 ID")
-@click.option("--cdp", default="http://127.0.0.1:9222", help="已登录浏览器的 CDP 端点")
-@click.option("--transport", "kind", type=click.Choice(["http", "browser"]), default="browser")
+@click.option("--subject-id", type=int, default=None, help="考核科目 ID；用 --list-subjects 查看")
+@click.option("--list-subjects", "list_subjects", is_flag=True, help="列出可选考核科目及其状态后退出")
+@click.option("--cdp", default="http://127.0.0.1:9222", help="已登录浏览器的 CDP 端点（仅 --transport browser）")
+@click.option("--transport", "kind", type=click.Choice(["profile", "browser", "http"]), default="profile",
+              help="profile=项目持久化 Chromium（推荐，无需手动开浏览器）；browser=借用 CDP 标签页")
 @click.option("--origin", default="http://openlab.hitwh.edu.cn")
 @click.option("--answers", type=click.Path(exists=True, path_type=Path), default=None,
               help="答案文件（JSON：{题目ID: [选项...]}）；不提供则只读")
 @click.option("--confirm", default="", help="确认令牌；不提供则只做干跑校验")
 @click.option("--json", "as_json", is_flag=True, help="输出机器可读 JSON")
-def lab_exam_cmd(center: str, subject_id: int, cdp: str, kind: str, origin: str,
+def lab_exam_cmd(center: str, subject_id: int | None, list_subjects: bool, cdp: str, kind: str, origin: str,
                  answers: Path | None, confirm: str, as_json: bool) -> None:
     """实验预考核：读取状态与题目（只读）；提交需显式确认，单次且不重试。
 
@@ -604,6 +616,23 @@ def lab_exam_cmd(center: str, subject_id: int, cdp: str, kind: str, origin: str,
 
     try:
         exam = TransportLabExam(transport)
+
+        if list_subjects:
+            payload = transport.call("view/subjects")
+            rows = payload.get("result") if payload.get("code") == 0 else None
+            if not isinstance(rows, list):
+                raise click.ClickException(
+                    f"读取科目失败：{payload.get('code')} {payload.get('message')}"
+                )
+            for row in rows:
+                name = str(row.get("subjectName") or "")
+                passed = "已通过" if row.get("izPass") else "未通过"
+                click.echo(f"  {row.get('subjectId'):>6}  {name:22s} {row.get('claim') or '':6s} {passed}")
+            return
+
+        if subject_id is None:
+            raise click.ClickException("需要 --subject-id（或用 --list-subjects 查看可选科目）")
+
         status = exam.exam_status(subject_id)
         sheet = exam.exam_sheet(subject_id)
 

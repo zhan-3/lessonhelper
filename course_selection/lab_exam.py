@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -139,6 +140,18 @@ def _as_int(value: Any) -> int:
         return 0
 
 
+_HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def _plain_text(value: Any) -> str:
+    """Strip the inline HTML the API embeds in question and option text.
+
+    The observed payloads wrap every stem and option in ``<p>`` (and use
+    ``<br/>`` for line breaks); the terminal has no use for them.
+    """
+    return " ".join(_HTML_TAG.sub(" ", str(value or "")).split())
+
+
 def parse_exam_status(payload: Mapping[str, Any], *, subject_id: int) -> ExamStatus:
     """Build a status from the ``{msg, msgCode}`` result envelope."""
     return ExamStatus(
@@ -161,16 +174,16 @@ def parse_exam_sheet(payload: Mapping[str, Any]) -> ExamSheet:
             question_id = str(raw.get("questionId") or "").strip()
             if not question_id:
                 continue
-            options = tuple(
-                (label, str(raw.get(f"answer{label}") or "").strip())
-                for label in OPTION_LABELS
-                if str(raw.get(f"answer{label}") or "").strip()
-            )
+            options: list[tuple[str, str]] = []
+            for label in OPTION_LABELS:
+                text = _plain_text(raw.get(f"answer{label}"))
+                if text:
+                    options.append((label, text))
             questions.append(ExamQuestion(
                 question_id=question_id,
                 group=group,
-                text=str(raw.get("questionTxt") or "").strip(),
-                options=options,
+                text=_plain_text(raw.get("questionTxt")),
+                options=tuple(options),
             ))
     return ExamSheet(
         subject_id=_as_int(payload.get("subjectId")),

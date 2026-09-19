@@ -173,9 +173,17 @@ class BrowserLabTransport:
 
     def __init__(self, page: Any, center: str, token: str, *, pause: float = 0.2):
         self.page, self.center, self.token, self.pause = page, center, token, pause
+        # Set by the composition root when this transport owns the Playwright
+        # instance that produced ``page``.  ``close`` then releases it; for a
+        # borrowed CDP session that only disconnects, it never closes the
+        # user's browser.
+        self._playwright: Any = None
 
     def close(self) -> None:
-        """Nothing to release; the borrowed page belongs to the user."""
+        """Release the Playwright instance, if this transport owns one."""
+        playwright, self._playwright = self._playwright, None
+        if playwright is not None:
+            playwright.stop()
 
     def call(self, path: str, form: Mapping[str, Any] | None = None) -> dict[str, Any]:
         payload = self.page.evaluate(

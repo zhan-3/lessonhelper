@@ -114,6 +114,20 @@ class ParsingTests(unittest.TestCase):
         self.assertEqual(("A", "B", "C", "D"),
                          tuple(label for label, _ in parsed.questions[1].options))
 
+    def test_inline_html_is_stripped(self):
+        """The API wraps stems and options in ``<p>`` / ``<br/>``."""
+        payload = {
+            "subjectId": 1, "subjectName": "s",
+            "kg1s": [{
+                "questionId": "q", "questionTxt": "<p>题干<br/>换行</p>",
+                "answerA": "<p>选项  A</p>", "answerB": "", "answerC": "", "answerD": "",
+                "answerResult": "A",
+            }],
+        }
+        question = parse_exam_sheet(payload).questions[0]
+        self.assertEqual("题干 换行", question.text)
+        self.assertEqual((("A", "选项 A"),), question.options)
+
     def test_parser_ignores_the_server_answer_key(self):
         """The core must not read, expose, or forward ``answerResult``.
 
