@@ -24,7 +24,7 @@ HITWH（哈尔滨工业大学（威海））校园教务辅助工具集：本地
 | 毕业进度推算 | `implemented` + `automated-test verified` | 结果仅为规划参考，必须人工核对培养方案 |
 | 实验预约 `lab-booking` | **实验性，未完成开发与真实环境验证** | 视为不可用功能，仅在小范围、可人工核对时尝试 |
 | 实验预考核 `lab-exam`（读取） | `implemented` + `automated-test verified` + **`real-environment verified`** | 2026-09-19 在 `dxwl` 真实读取 15 个科目与 10 道题目成功（`view/exam/view` + `view/exam/list`） |
-| 实验预考核 `lab-exam`（提交） | `implemented` + `automated-test verified` | 提交流程未在真实考核上验收 |
+| 实验预考核 `lab-exam`（提交） | `implemented` + `automated-test verified` + **`real-environment verified`** | 2026-09-19 在 `dxwl/3001` 真实提交一次，服务端返回“通过”；并以独立的 `view/subjects` 查询确认 `izPass` 已变为已通过 |
 | Academic Browser Observer（只读浏览器诊断） | 部分 `automated-test verified`，价值主张 `not_demonstrated` | 未在真实教务系统验证，不能替代现有 DevTools/Playwright 工具 |
 
 当前测试基线：`uv run pytest tests/` → **322 passed**。
